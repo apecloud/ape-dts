@@ -43,7 +43,7 @@ impl RedisStatisticTestRunner {
             let mut src_conn = RedisUtil::create_redis_conn(&url, &connection_auth)
                 .await
                 .unwrap();
-            let redis_util = RedisTestUtil::new(vec![('"', '"')]);
+            let redis_util = RedisTestUtil::new_default();
             redis_util.execute_cmds(&mut src_conn, &self.base.src_prepare_sqls.clone());
             redis_util.execute_cmds(&mut src_conn, &self.base.src_test_sqls.clone());
         };

@@ -106,6 +106,9 @@ appenders:
       - kind: size_limit
         path: "CHECK_LOG_DIR_PLACEHOLDER/miss.log"
         limit: CHECK_LOG_FILE_SIZE_PLACEHOLDER
+      - kind: row_limit
+        path: "CHECK_LOG_DIR_PLACEHOLDER/miss.log"
+        limit: CHECK_LOG_MAX_ROWS_PLACEHOLDER
     encoder:
       pattern: "{m}{n}"
 
@@ -117,6 +120,9 @@ appenders:
       - kind: size_limit
         path: "CHECK_LOG_DIR_PLACEHOLDER/diff.log"
         limit: CHECK_LOG_FILE_SIZE_PLACEHOLDER
+      - kind: row_limit
+        path: "CHECK_LOG_DIR_PLACEHOLDER/diff.log"
+        limit: CHECK_LOG_MAX_ROWS_PLACEHOLDER
     encoder:
       pattern: "{m}{n}"
 

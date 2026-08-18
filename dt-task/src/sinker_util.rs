@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 use dt_common::{
     config::{config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig},
-    error::{DtError, DtResultExt, ErrorCode},
+    error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
     meta::{
         avro::avro_converter::AvroConverter,
         mongo::mongo_shard::{is_mongos, list_shard_collections},
@@ -68,12 +68,17 @@ macro_rules! create_filter {
 impl SinkerUtil {
     fn parse_http_endpoint(value: &str) -> anyhow::Result<(Url, String, String)> {
         let url = Url::parse(value).code(ErrorCode::InvalidConfig)?;
-        let host = url.host_str().map(str::to_string).ok_or_else(|| {
-            DtError::invalid_config("the destination HTTP URL must include a host")
-        })?;
-        let port = url.port_or_known_default().ok_or_else(|| {
-            DtError::invalid_config("the destination HTTP URL must include a port")
-        })?;
+        let host = url
+            .host_str()
+            .map(str::to_string)
+            .or_dt_error(DtError::invalid_config(
+                "the destination HTTP URL must include a host",
+            ))?;
+        let port = url
+            .port_or_known_default()
+            .or_dt_error(DtError::invalid_config(
+                "the destination HTTP URL must include a port",
+            ))?;
         Ok((url, host, port.to_string()))
     }
 
@@ -89,11 +94,9 @@ impl SinkerUtil {
     async fn require_extractor_meta_manager(config: &TaskConfig) -> anyhow::Result<RdbMetaManager> {
         Ok(ExtractorUtil::get_extractor_meta_manager(config)
             .await?
-            .ok_or_else(|| {
-                DtError::InvalidConfig(
-                    "the selected sinker requires relational source metadata".to_string(),
-                )
-            })?)
+            .or_dt_error(DtError::InvalidConfig(
+                "the selected sinker requires relational source metadata".to_string(),
+            ))?)
     }
 
     fn push_checkable_sinker<S: CheckableSink + Send + 'static>(

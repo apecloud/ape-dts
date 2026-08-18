@@ -24,7 +24,7 @@ use dt_common::meta::struct_meta::{
 };
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
-    error::DtError,
+    error::{DtError, DtOptionExt},
     log_error, log_info, log_warn,
     utils::sql_util::SqlUtil,
 };
@@ -38,6 +38,7 @@ pub struct PgStructFetcher {
     pub conn_pool: Pool<Postgres>,
     pub schemas: HashSet<String>,
     pub filter: RdbStructFilter,
+    pub allow_missing_schemas: bool,
 }
 
 enum ColType {
@@ -196,7 +197,7 @@ impl PgStructFetcher {
             .filter(|&s| !schemas.contains(s))
             .cloned()
             .collect();
-        if !filtered_schemas.is_empty() {
+        if !self.allow_missing_schemas && !filtered_schemas.is_empty() {
             bail! {DtError::DatabaseObjectNotFound(DbType::Pg, format!(
                 "schemas: {} not found",
                 filtered_schemas.join(",")
@@ -544,15 +545,13 @@ impl PgStructFetcher {
             for column in table.columns.iter_mut() {
                 column.column_type = column_types
                     .get(&column.column_name)
-                    .ok_or_else(|| {
-                        DtError::DatabaseUnsupportedTableStructure(
-                            DbType::Pg,
-                            format!(
-                                "column type is missing for {table_schema}.{table_name}.{}",
-                                column.column_name
-                            ),
-                        )
-                    })?
+                    .or_dt_error(DtError::DatabaseUnsupportedTableStructure(
+                        DbType::Pg,
+                        format!(
+                            "column type is missing for {table_schema}.{table_name}.{}",
+                            column.column_name
+                        ),
+                    ))?
                     .to_owned();
             }
         }

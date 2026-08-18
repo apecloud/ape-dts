@@ -60,6 +60,7 @@ impl MysqlStructExtractor {
             dbs,
             filter: RdbStructFilter::for_source(self.filter.to_owned()),
             meta_manager,
+            allow_missing_databases: false,
         };
 
         // database

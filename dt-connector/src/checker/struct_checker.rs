@@ -1,6 +1,8 @@
-use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{bail, Context};
 use async_mutex::Mutex;
@@ -193,6 +195,7 @@ impl StructCheckerHandle {
                     dbs: dbs.clone(),
                     filter: target_filter,
                     meta_manager,
+                    allow_missing_databases: true,
                 };
                 for stmt in fetcher.get_create_database_statements("").await? {
                     dst_map.extend(stmt.to_sqls(&self.filter)?);
@@ -211,6 +214,7 @@ impl StructCheckerHandle {
                     conn_pool,
                     schemas: dbs.clone(),
                     filter: target_filter,
+                    allow_missing_schemas: true,
                 };
                 if !self.filter.filter_structure(&StructureType::Udt) {
                     for stmt in fetcher.get_udt_statements().await? {
@@ -467,5 +471,36 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_target_database_and_table_are_reported_as_miss() {
+        let src_sql_map = BTreeMap::from([
+            (
+                "database.test_db".to_string(),
+                "CREATE DATABASE IF NOT EXISTS `test_db`".to_string(),
+            ),
+            (
+                "table.test_db.test_tb".to_string(),
+                "CREATE TABLE IF NOT EXISTS `test_db`.`test_tb` (`id` int)".to_string(),
+            ),
+        ]);
+
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &src_sql_map,
+            BTreeMap::new(),
+            "start",
+            false,
+            false,
+        );
+
+        assert!(!summary.is_consistent);
+        assert_eq!(summary.checked_count, 2);
+        assert_eq!(summary.miss_count, 2);
+        assert_eq!(summary.diff_count, 0);
+        assert_eq!(summary.tables.len(), 1);
+        assert_eq!(summary.tables[0].schema, "test_db");
+        assert_eq!(summary.tables[0].tb, "test_tb");
+        assert_eq!(summary.tables[0].miss_count, 1);
     }
 }

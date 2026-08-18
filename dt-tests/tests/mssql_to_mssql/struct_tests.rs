@@ -24,7 +24,6 @@ mod test {
             .await
             .unwrap();
         TestBase::run_check_test("mssql_to_mssql/struct/filter_test_1/check").await;
-        runner.base.execute_clean_sqls().await.unwrap();
         runner.close().await.unwrap();
     }
 
@@ -49,7 +48,6 @@ mod test {
             .unwrap();
         runner.run_mssql_struct_test().await.unwrap();
         TestBase::run_check_test("mssql_to_mssql/struct/route_test/check").await;
-        runner.base.execute_clean_sqls().await.unwrap();
         runner.close().await.unwrap();
     }
 

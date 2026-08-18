@@ -80,7 +80,7 @@ server setup require a CA certificate.
 | batch_size                     | records written per batch; must be greater than `0`                                                                            | 200                      | 200                                                                     |
 | max_rps                        | optional target-side rate limit in records per second; `0` disables the limit                                                  | 1000                     | 0                                                                       |
 | max_mbps                       | optional target-side rate limit in MiB per second; `0` disables the limit                                                      | 100                      | 0                                                                       |
-| replace                        | replace an existing row on insert conflict; supports MySQL/PostgreSQL snapshot and CDC tasks, and SQL Server snapshot tasks    | false                    | true                                                                    |
+| replace                        | replace an existing row on insert conflict, for MySQL/PostgreSQL snapshot and CDC tasks                                        | false                    | true                                                                    |
 | disable_foreign_key_checks     | disable foreign-key checks while writing MySQL/PostgreSQL                                                                      | true                     | true                                                                    |
 | transaction_isolation          | MySQL/TiDB target transaction isolation: `default`, `read_uncommitted`, `read_committed`, `repeatable_read`, or `serializable` | read_committed           | default                                                                 |
 | conflict_policy                | structure migration conflict policy: `interrupt` or `ignore`                                                                   | interrupt                | interrupt                                                               |
@@ -182,7 +182,7 @@ under `runtime.log_dir/check`.
 | revise_match_full_row| use the complete row in generated repair predicates                 | false         | false   |
 | check_log_dir        | local check-log directory                                           | /tmp/check    | empty (use `runtime.log_dir/check`) |
 | check_log_file_size  | per-file size limit for `diff.log`, `miss.log`, and `sql.log` | 100mb         | 100mb   |
-| check_log_max_rows   | maximum rows in CDC `diff.log`/`miss.log` snapshots             | 1000          | 1000    |
+| check_log_max_rows   | maximum rows in `diff.log`/`miss.log`                            | 1000          | 1000    |
 | s3_bucket            | S3 bucket; required for `output_type=s3`                           | my-bucket     | -       |
 | s3_access_key_id     | S3 access key                                                       | AKIA...       | empty   |
 | s3_secret_access_key | S3 secret key                                                       | ****          | empty   |

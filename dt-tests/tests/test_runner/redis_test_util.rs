@@ -3,13 +3,17 @@ use std::collections::HashMap;
 use dt_common::config::config_token_parser::TokenEscapePair;
 use dt_common::meta::redis::command::cmd_encoder::CmdEncoder;
 use dt_common::meta::redis::redis_object::RedisCmd;
-use dt_common::{config::config_token_parser::ConfigTokenParser, utils::sql_util::SqlUtil};
+use dt_common::{
+    config::config_token_parser::ConfigTokenParser,
+    utils::sql_util::{CharEscapePair, InnerEscapeMode, SqlUtil},
+};
 use redis::{Connection, ConnectionLike, Value};
 
 use super::redis_cluster_connection::RedisClusterConnection;
 
 const DELIMITERS: [char; 1] = [' '];
-const DEFAULT_ESCAPE_PAIRS: [(char, char); 1] = [('"', '"')];
+const DEFAULT_ESCAPE_PAIRS: [CharEscapePair; 1] =
+    [CharEscapePair::new('"', '"', InnerEscapeMode::None)];
 const SYSTEM_KEYS: [&str; 5] = [
     "backup1",
     "backup2",
@@ -19,7 +23,7 @@ const SYSTEM_KEYS: [&str; 5] = [
 ];
 
 pub struct RedisTestUtil {
-    escape_pairs: Vec<(char, char)>,
+    escape_pairs: Vec<CharEscapePair>,
 }
 
 impl RedisTestUtil {
@@ -27,7 +31,7 @@ impl RedisTestUtil {
         Self::new(DEFAULT_ESCAPE_PAIRS.to_vec())
     }
 
-    pub fn new(escape_pairs: Vec<(char, char)>) -> Self {
+    pub fn new(escape_pairs: Vec<CharEscapePair>) -> Self {
         Self { escape_pairs }
     }
 
@@ -106,7 +110,7 @@ impl RedisTestUtil {
     pub fn escape_key(&self, key: &str) -> String {
         format!(
             "{}{}{}",
-            self.escape_pairs[0].0, key, self.escape_pairs[0].1
+            self.escape_pairs[0].left, key, self.escape_pairs[0].right
         )
     }
 
@@ -164,10 +168,10 @@ impl RedisTestUtil {
             &TokenEscapePair::from_char_pairs(self.escape_pairs.clone()),
         ) {
             let mut arg = arg.clone();
-            for (left, right) in &self.escape_pairs {
+            for escape_pair in &self.escape_pairs {
                 arg = arg
-                    .trim_start_matches(*left)
-                    .trim_end_matches(*right)
+                    .trim_start_matches(escape_pair.left)
+                    .trim_end_matches(escape_pair.right)
                     .to_string();
             }
             redis_cmd.add_str_arg(&arg);

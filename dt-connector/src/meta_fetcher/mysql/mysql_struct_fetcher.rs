@@ -36,6 +36,7 @@ pub struct MysqlStructFetcher {
     pub dbs: HashSet<String>,
     pub filter: RdbStructFilter,
     pub meta_manager: MysqlMetaManager,
+    pub allow_missing_databases: bool,
 }
 
 impl MysqlStructFetcher {
@@ -124,7 +125,7 @@ impl MysqlStructFetcher {
             .filter(|&s| !dbs.contains_key(s))
             .cloned()
             .collect();
-        if !filtered_dbs.is_empty() {
+        if !self.allow_missing_databases && !filtered_dbs.is_empty() {
             bail! {DtError::DatabaseNotFound(DbType::Mysql, format!(
                 "dbs: {} not found",
                 filtered_dbs.join(",")

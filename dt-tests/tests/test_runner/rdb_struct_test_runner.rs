@@ -209,18 +209,18 @@ impl RdbStructTestRunner {
         let src_check_fetcher = MssqlStructCheckFetcher {
             connection_pool: self
                 .base
-                .src_client_mssql
+                .src_mssql_endpoint
                 .as_ref()
-                .expect("MSSQL source test client is required")
+                .expect("MSSQL source test endpoint is required")
                 .create_pool()
                 .await?,
         };
         let dst_check_fetcher = MssqlStructCheckFetcher {
             connection_pool: self
                 .base
-                .dst_client_mssql
+                .dst_mssql_endpoint
                 .as_ref()
-                .expect("MSSQL destination test client is required")
+                .expect("MSSQL destination test endpoint is required")
                 .create_pool()
                 .await?,
         };

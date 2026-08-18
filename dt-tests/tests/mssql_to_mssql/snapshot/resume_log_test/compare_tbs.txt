@@ -1,8 +1,0 @@
-resume_log_test.resume_rows
-resume_log_test.config_rows
-resume_log_test.composite_rows
-resume_log_test.binary_key_rows
-[resume_log_test].[resume table.*]
-resume_log_test.fresh_rows
-resume_log_test.finished_config_rows
-resume_log_test.finished_log_rows

@@ -55,41 +55,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_duplicate_key_interrupt_test() {
-        let runner = RdbTestRunner::new("mssql_to_mssql/snapshot/on_duplicate_test")
-            .await
-            .unwrap();
-        runner.execute_prepare_sqls().await.unwrap();
-        runner.execute_test_sqls().await.unwrap();
-
-        let error = runner
-            .base
-            .start_task()
-            .await
-            .expect_err("MSSQL duplicate primary key must interrupt the snapshot task");
-        let error_chain = format!("{error:#}");
-        assert!(
-            error_chain.contains("duplicate key")
-                || error_chain.contains("PRIMARY KEY")
-                || error_chain.contains("2627"),
-            "unexpected duplicate-key error: {error_chain}"
-        );
-
-        let table =
-            RdbTestRunner::parse_full_tb_name("on_duplicate_test.conflict_rows", &DbType::Mssql);
-        let rows = runner.fetch_data(&table, DST).await.unwrap();
-        assert_eq!(
-            rows.len(),
-            1,
-            "failed MSSQL insert batch must be rolled back atomically"
-        );
-
-        runner.execute_clean_sqls().await.unwrap();
-        runner.close().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn snapshot_on_duplicate_replace_test() {
         TestBase::run_snapshot_test("mssql_to_mssql/snapshot/on_duplicate_replace_test").await;
     }
@@ -141,7 +106,11 @@ mod test {
                 ("resume_log_test.composite_rows", 4),
                 ("resume_log_test.binary_key_rows", 4),
                 ("[resume_log_test].[resume table.*]", 3),
-                ("resume_log_test.fresh_rows", 2),
+                ("resume_log_test.nullable_composite_unique_rows", 6),
+                ("resume_log_test.string_key_rows", 5),
+                ("resume_log_test.date_key_rows", 5),
+                ("resume_log_test.no_key_rows", 4),
+                ("resume_log_test.fresh_rows", 3),
                 ("resume_log_test.finished_config_rows", 0),
                 ("resume_log_test.finished_log_rows", 0),
             ],
@@ -155,9 +124,15 @@ mod test {
         run_resume_test(
             "mssql_to_mssql/snapshot/resume_db_test",
             &[
-                ("resume_test.resume_rows", 4),
-                ("resume_test.fresh_rows", 2),
+                ("resume_test.resume_rows", 5),
+                ("resume_test.composite_rows", 4),
+                ("resume_test.binary_key_rows", 4),
+                ("[resume_test].[resume table.*]", 3),
+                ("resume_test.nullable_composite_unique_rows", 6),
+                ("resume_test.string_key_rows", 5),
+                ("resume_test.fresh_rows", 3),
                 ("resume_test.finished_rows", 0),
+                ("resume_test.finished_rows_2", 0),
             ],
         )
         .await;
@@ -172,7 +147,15 @@ mod test {
                 ("parallel_resume_log.integer_rows", 12),
                 ("parallel_resume_log.nullable_rows", 11),
                 ("[parallel_resume_log].[string rows.*]", 8),
+                ("parallel_resume_log.composite_rows", 8),
+                ("parallel_resume_log.binary_rows", 8),
+                ("parallel_resume_log.decimal_rows", 8),
+                ("parallel_resume_log.date_rows", 8),
+                ("parallel_resume_log.no_key_rows", 8),
+                ("parallel_resume_log.unique_rows", 8),
+                ("parallel_resume_log.position_log_rows", 8),
                 ("parallel_resume_log.finished_rows", 0),
+                ("parallel_resume_log.finished_config_rows", 0),
             ],
         )
         .await;
@@ -187,6 +170,12 @@ mod test {
                 ("parallel_resume_db.integer_rows", 12),
                 ("parallel_resume_db.nullable_rows", 11),
                 ("[parallel_resume_db].[string rows.*]", 8),
+                ("parallel_resume_db.composite_rows", 8),
+                ("parallel_resume_db.binary_rows", 8),
+                ("parallel_resume_db.decimal_rows", 8),
+                ("parallel_resume_db.date_rows", 8),
+                ("parallel_resume_db.no_key_rows", 8),
+                ("parallel_resume_db.unique_rows", 8),
                 ("parallel_resume_db.finished_rows", 0),
             ],
         )

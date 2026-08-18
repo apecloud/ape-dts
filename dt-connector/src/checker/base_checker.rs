@@ -32,7 +32,7 @@ use crate::{
     sinker::mongo::mongo_cmd,
 };
 use dt_common::{
-    error::{DtError, DtErrorContextExt, Stage},
+    error::{DtError, DtOptionExt, DtResultExt, Stage},
     log_error, log_info, log_summary, log_warn,
     meta::{
         col_value::ColValue,
@@ -706,10 +706,10 @@ impl RecheckKey {
                     .get(col)
                     .cloned()
                     .map(|value| (col.clone(), value))
-                    .ok_or_else(|| {
-                        DtError::StatementFailed(format!("missing ID column value: {col}"))
-                            .stage(Stage::Checker)
-                    })
+                    .or_dt_error(DtError::StatementFailed(format!(
+                        "missing ID column value: {col}"
+                    )))
+                    .stage(Stage::Checker)
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         Ok(Self {

@@ -9,7 +9,7 @@ use url::Url;
 use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::DtError,
+    error::{DtError, DtOptionExt},
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
 };
 
@@ -32,12 +32,12 @@ impl RedisClient {
             DbType::Redis,
             "source Redis URL is invalid".to_string(),
         ))?;
-        let host = url_info.host_str().ok_or_else(|| {
-            DtError::DatabaseInvalidConfig(
+        let host = url_info
+            .host_str()
+            .or_dt_error(DtError::DatabaseInvalidConfig(
                 DbType::Redis,
                 "the source Redis URL must include a host".to_string(),
-            )
-        })?;
+            ))?;
         let port = url_info.port().unwrap_or(6379);
 
         let username = Self::extract_username(connection_auth, &url_info)?;

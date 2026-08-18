@@ -39,7 +39,7 @@ use dt_common::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         connection_auth_config::ConnectionAuthConfig,
     },
-    error::{DtError, DtErrorContextExt, ErrorObject},
+    error::{DtError, DtOptionExt, DtResultExt, ErrorObject},
     log_error, log_info, log_warn,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -329,20 +329,18 @@ impl PgCdcExtractor {
                 .type_registry
                 .oid_to_type
                 .get(&column.type_id())
-                .ok_or_else(|| {
-                    DtError::DatabaseUnsupportedTableStructure(
-                        DbType::Pg,
-                        format!(
-                            "PostgreSQL type OID {} is not supported for column {col_name}",
-                            column.type_id()
-                        ),
-                    )
-                    .object(ErrorObject {
-                        schema: Some(schema.to_string()),
-                        table: Some(tb.to_string()),
-                        column: Some(col_name.to_string()),
-                        ..Default::default()
-                    })
+                .or_dt_error(DtError::DatabaseUnsupportedTableStructure(
+                    DbType::Pg,
+                    format!(
+                        "PostgreSQL type OID {} is not supported for column {col_name}",
+                        column.type_id()
+                    ),
+                ))
+                .object(ErrorObject {
+                    schema: Some(schema.to_string()),
+                    table: Some(tb.to_string()),
+                    column: Some(col_name.to_string()),
+                    ..Default::default()
                 })?;
             // update meta
             tb_meta
@@ -416,24 +414,27 @@ impl PgCdcExtractor {
         } else if !basic.id_cols.is_empty() {
             let mut col_values_tmp = HashMap::new();
             for col in basic.id_cols.iter() {
-                let value = col_values_after.get(col).cloned().ok_or_else(|| {
-                    let detail = format!(
-                        "PostgreSQL update does not contain key column {col}; check replica identity"
-                    );
-                    DtError::DatabaseUnsupportedTableStructure(DbType::Pg, detail.clone())
-                        .message(
-                            "PostgreSQL update events do not contain the columns needed to identify rows",
-                        )
-                        .hint(
-                            "Configure a primary key or REPLICA IDENTITY FULL for the source table, then restart the task.",
-                        )
-                        .object(ErrorObject {
-                            schema: Some(basic.schema.clone()),
-                            table: Some(basic.tb.clone()),
-                            column: Some(col.to_string()),
-                            ..Default::default()
-                        })
-                })?;
+                let value = col_values_after
+                    .get(col)
+                    .cloned()
+                    .or_dt_error(DtError::DatabaseUnsupportedTableStructure(
+                        DbType::Pg,
+                        format!(
+                            "PostgreSQL update does not contain key column {col}; check replica identity"
+                        ),
+                    ))
+                    .message(
+                        "PostgreSQL update events do not contain the columns needed to identify rows",
+                    )
+                    .hint(
+                        "Configure a primary key or REPLICA IDENTITY FULL for the source table, then restart the task.",
+                    )
+                    .object(ErrorObject {
+                        schema: Some(basic.schema.clone()),
+                        table: Some(basic.tb.clone()),
+                        column: Some(col.to_string()),
+                        ..Default::default()
+                    })?;
                 col_values_tmp.insert(col.to_string(), value);
             }
             col_values_tmp

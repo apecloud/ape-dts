@@ -10,7 +10,7 @@ use dt_connector::rdb_query_builder::RdbQueryBuilder;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Postgres};
 
-use super::mssql_test_client::MssqlTestClient;
+use super::mssql_test_endpoint::MssqlTestEndpoint;
 
 pub struct RdbUtil {}
 
@@ -83,19 +83,21 @@ impl RdbUtil {
     }
 
     pub async fn fetch_data_mssql(
-        client: &MssqlTestClient,
-        _ignore_cols: Option<&HashSet<String>>,
+        endpoint: &MssqlTestEndpoint,
+        ignore_cols: Option<&HashSet<String>>,
         db_tb: &(String, String),
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        client.fetch_table(&db_tb.0, &db_tb.1, where_sql).await
+        endpoint
+            .fetch_table(&db_tb.0, &db_tb.1, ignore_cols, where_sql)
+            .await
     }
 
     pub async fn get_tb_cols_mssql(
-        client: &MssqlTestClient,
+        endpoint: &MssqlTestEndpoint,
         db_tb: &(String, String),
     ) -> anyhow::Result<Vec<String>> {
-        client.get_table_columns(&db_tb.0, &db_tb.1).await
+        endpoint.get_table_columns(&db_tb.0, &db_tb.1).await
     }
 
     pub async fn get_tb_meta_mysql(

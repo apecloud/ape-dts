@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context};
 
-use crate::{config::config_enums::DbType, error::DtError};
+use crate::{
+    config::config_enums::DbType,
+    error::{DtError, DtOptionExt},
+};
 
 use super::{cmd_constants::CmdConstants, cmd_meta::CmdMeta};
 
@@ -43,12 +46,12 @@ impl KeyParser {
         // refer: https://github.com/tair-opensource/RedisShake/blob/v4/internal/commands/keys.go
         let mut cmd_name = argv
             .first()
-            .ok_or_else(|| DtError::RedisCmdError("empty Redis command".to_string()))?
+            .or_dt_error(DtError::RedisCmdError("empty Redis command".to_string()))?
             .to_uppercase();
         if self.container_cmds.contains(&cmd_name) {
-            let subcommand = argv.get(1).ok_or_else(|| {
-                DtError::RedisCmdError(format!("missing subcommand for command: {cmd_name}"))
-            })?;
+            let subcommand = argv.get(1).or_dt_error(DtError::RedisCmdError(format!(
+                "missing subcommand for command: {cmd_name}"
+            )))?;
             cmd_name = format!("{}-{}", cmd_name, subcommand.to_uppercase());
         }
 
@@ -130,11 +133,11 @@ impl KeyParser {
                     // keystep: the number of arguments that should be skipped,
                     // after finding a key, to find the next one.
                     for idx in (begin..=last_key_idx).step_by(spec.find_keys_range_key_step) {
-                        let key = argv.get(idx as usize).ok_or_else(|| {
-                            DtError::RedisCmdError(format!(
-                                "key index {idx} is out of range for command: {cmd_name}"
-                            ))
-                        })?;
+                        let key =
+                            argv.get(idx as usize)
+                                .or_dt_error(DtError::RedisCmdError(format!(
+                                    "key index {idx} is out of range for command: {cmd_name}"
+                                )))?;
                         keys.push(key.clone());
                         keys_indexes.push(idx as usize + 1);
                         limit_count -= 1;
@@ -163,11 +166,11 @@ impl KeyParser {
                         .step_by(spec.find_keys_keynum_key_step)
                         .take(key_count)
                     {
-                        let key = argv.get(idx as usize).ok_or_else(|| {
-                            DtError::RedisCmdError(format!(
-                                "key index {idx} is out of range for command: {cmd_name}"
-                            ))
-                        })?;
+                        let key =
+                            argv.get(idx as usize)
+                                .or_dt_error(DtError::RedisCmdError(format!(
+                                    "key index {idx} is out of range for command: {cmd_name}"
+                                )))?;
                         keys.push(key.clone());
                         keys_indexes.push(idx as usize + 1);
                     }

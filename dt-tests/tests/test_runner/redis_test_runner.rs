@@ -9,7 +9,11 @@ use dt_common::{
     },
     error::{DtError, DtErrorContextExt, Stage},
     rdb_filter::RdbFilter,
-    utils::{redis_util::RedisUtil, sql_util::SqlUtil, time_util::TimeUtil},
+    utils::{
+        redis_util::RedisUtil,
+        sql_util::{CharEscapePair, InnerEscapeMode, SqlUtil},
+        time_util::TimeUtil,
+    },
 };
 use dt_connector::rdb_router::RdbRouter;
 
@@ -32,12 +36,16 @@ pub struct RedisTestRunner {
 
 impl RedisTestRunner {
     pub async fn new_default(relative_test_dir: &str) -> anyhow::Result<Self> {
-        Self::new(relative_test_dir, vec![('"', '"')]).await
+        Self::new(
+            relative_test_dir,
+            vec![CharEscapePair::new('"', '"', InnerEscapeMode::None)],
+        )
+        .await
     }
 
     pub async fn new(
         relative_test_dir: &str,
-        escape_pairs: Vec<(char, char)>,
+        escape_pairs: Vec<CharEscapePair>,
     ) -> anyhow::Result<Self> {
         let base =
             BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::Line)

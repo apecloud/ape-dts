@@ -1,6 +1,12 @@
 DROP TABLE IF EXISTS parallel_resume_db.integer_rows;
 DROP TABLE IF EXISTS parallel_resume_db.nullable_rows;
 DROP TABLE IF EXISTS parallel_resume_db.[string rows.*];
+DROP TABLE IF EXISTS parallel_resume_db.composite_rows;
+DROP TABLE IF EXISTS parallel_resume_db.binary_rows;
+DROP TABLE IF EXISTS parallel_resume_db.decimal_rows;
+DROP TABLE IF EXISTS parallel_resume_db.date_rows;
+DROP TABLE IF EXISTS parallel_resume_db.no_key_rows;
+DROP TABLE IF EXISTS parallel_resume_db.unique_rows;
 DROP TABLE IF EXISTS parallel_resume_db.finished_rows;
 DROP TABLE IF EXISTS ape_dts_parallel_resume.positions;
 IF SCHEMA_ID(N'parallel_resume_db') IS NULL EXEC(N'CREATE SCHEMA parallel_resume_db');
@@ -18,6 +24,23 @@ CREATE TABLE parallel_resume_db.[string rows.*] (
     code nvarchar(30) NOT NULL PRIMARY KEY,
     value varbinary(20) NULL
 );
+CREATE TABLE parallel_resume_db.composite_rows (
+    tenant_id int NOT NULL, row_id int NOT NULL, value nvarchar(30) NULL,
+    PRIMARY KEY (tenant_id, row_id)
+);
+CREATE TABLE parallel_resume_db.binary_rows (
+    binary_id varbinary(16) NOT NULL PRIMARY KEY, value nvarchar(30) NULL
+);
+CREATE TABLE parallel_resume_db.decimal_rows (
+    decimal_id decimal(20, 4) NOT NULL PRIMARY KEY, value nvarchar(30) NULL
+);
+CREATE TABLE parallel_resume_db.date_rows (
+    event_date date NOT NULL PRIMARY KEY, value nvarchar(30) NULL
+);
+CREATE TABLE parallel_resume_db.no_key_rows (id int NOT NULL, value nvarchar(30) NULL);
+CREATE TABLE parallel_resume_db.unique_rows (
+    row_id int NOT NULL, code int NOT NULL UNIQUE, value nvarchar(30) NULL
+);
 CREATE TABLE parallel_resume_db.finished_rows (
     id int NOT NULL PRIMARY KEY,
     value nvarchar(30) NOT NULL
@@ -28,6 +51,14 @@ INSERT INTO parallel_resume_db.nullable_rows VALUES
     (1, 1, N'v1'), (2, 2, N'v2'), (3, 3, N'v3');
 INSERT INTO parallel_resume_db.[string rows.*] VALUES
     (N'a', 0x01), (N'b', 0x02), (N'c', 0x03);
+INSERT INTO parallel_resume_db.composite_rows VALUES
+    (1, 1, N'one-one'), (1, 2, N'one-two');
+INSERT INTO parallel_resume_db.binary_rows VALUES
+    (0x0001, N'binary-one'), (0x0002, N'binary-two');
+INSERT INTO parallel_resume_db.decimal_rows VALUES
+    (-999999999999.9999, N'decimal-min'), (-10.5000, N'decimal-negative');
+INSERT INTO parallel_resume_db.date_rows VALUES
+    ('0001-01-01', N'date-min'), ('2024-01-01', N'date-one');
 
 CREATE TABLE ape_dts_parallel_resume.positions (
     id bigint IDENTITY(1, 1) PRIMARY KEY,
@@ -47,5 +78,13 @@ INSERT INTO ape_dts_parallel_resume.positions
      N'{"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_db","tb":"nullable_rows","order_key":{"single":["split_key","3"]}}'),
     (N'mssql_parallel_resume_db_test', N'SnapshotDoing', N'parallel_resume_db-string rows.*',
      N'{"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_db","tb":"string rows.*","order_key":{"single":["code","c"]}}'),
+    (N'mssql_parallel_resume_db_test', N'SnapshotDoing', N'parallel_resume_db-composite_rows',
+     N'{"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_db","tb":"composite_rows","order_key":{"single":["tenant_id","1"]}}'),
+    (N'mssql_parallel_resume_db_test', N'SnapshotDoing', N'parallel_resume_db-binary_rows',
+     N'{"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_db","tb":"binary_rows","order_key":{"single":["binary_id","0002"]}}'),
+    (N'mssql_parallel_resume_db_test', N'SnapshotDoing', N'parallel_resume_db-decimal_rows',
+     N'{"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_db","tb":"decimal_rows","order_key":{"single":["decimal_id","-10.5000"]}}'),
+    (N'mssql_parallel_resume_db_test', N'SnapshotDoing', N'parallel_resume_db-date_rows',
+     N'{"type":"RdbSnapshot","db_type":"mssql","schema":"parallel_resume_db","tb":"date_rows","order_key":{"single":["event_date","2024-01-01"]}}'),
     (N'mssql_parallel_resume_db_test', N'SnapshotFinished', N'parallel_resume_db-finished_rows', NULL);
 GO

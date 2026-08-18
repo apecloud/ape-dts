@@ -78,7 +78,7 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | max_connections                | 目标端连接池最大连接数                                                                                            | 10                       | 10                                                          |
 | max_rps                        | 目标端每秒最大记录数，`0` 表示不限制                                                                              | 1000                     | 0                                                           |
 | max_mbps                       | 目标端每秒最大 MiB，`0` 表示不限制                                                                                | 100                      | 0                                                           |
-| replace                        | 插入冲突时是否替换已有行，适用于 MySQL/PostgreSQL 全量及增量任务和 SQL Server 全量任务                             | false                    | true                                                        |
+| replace                        | 插入冲突时是否替换已有行，适用于 MySQL/PostgreSQL 全量及增量任务                                                  | false                    | true                                                        |
 | disable_foreign_key_checks     | 写入 MySQL/PostgreSQL 时是否禁用外键检查                                                                          | true                     | true                                                        |
 | transaction_isolation          | MySQL/TiDB 目标端事务隔离级别：`default`、`read_uncommitted`、`read_committed`、`repeatable_read`、`serializable` | read_committed           | default                                                     |
 | conflict_policy                | 结构迁移冲突策略：`interrupt` 或 `ignore`                                                                         | interrupt                | interrupt                                                   |
@@ -173,7 +173,7 @@ recheck_queue_memory_mb=256
 | revise_match_full_row| 生成修复语句时是否用完整行作为匹配条件                       | false         | false |
 | check_log_dir        | 本地校验日志目录                                             | /tmp/check    | 空（使用 `runtime.log_dir/check`） |
 | check_log_file_size  | `diff.log`、`miss.log`、`sql.log` 单文件大小上限       | 100mb         | 100mb |
-| check_log_max_rows   | CDC `diff.log`/`miss.log` 快照最大行数                   | 1000          | 1000 |
+| check_log_max_rows   | `diff.log`/`miss.log` 最大行数                           | 1000          | 1000 |
 | s3_bucket            | S3 bucket，`output_type=s3` 时必填                          | my-bucket     | - |
 | s3_access_key_id     | S3 access key                                                | AKIA...       | 空 |
 | s3_secret_access_key | S3 secret key                                                | ****          | 空 |

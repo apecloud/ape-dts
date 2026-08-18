@@ -1,4 +1,4 @@
-use std::{borrow::Cow, str::FromStr};
+use std::str::FromStr;
 
 use anyhow::{bail, Context};
 use tiberius::{
@@ -15,30 +15,79 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MssqlBindKind {
+enum MssqlColValueKind {
     Bool,
-    U8,
-    I16,
-    I32,
-    I64,
-    F32,
-    F64,
-    Money,
+    UnsignedTiny,
+    Short,
+    Long,
+    LongLong,
+    Float,
+    Double,
     Decimal,
-    Text,
-    Binary,
-    Uuid,
-    Xml,
+    String,
+    Blob,
     Date,
     Time,
-    NaiveDateTime,
-    DateTimeOffset,
+    DateTime,
+    Timestamp,
+}
+
+impl MssqlColValueKind {
+    fn type_name(self) -> &'static str {
+        match self {
+            Self::Bool => "Bool",
+            Self::UnsignedTiny => "UnsignedTiny",
+            Self::Short => "Short",
+            Self::Long => "Long",
+            Self::LongLong => "LongLong",
+            Self::Float => "Float",
+            Self::Double => "Double",
+            Self::Decimal => "Decimal",
+            Self::String => "String",
+            Self::Blob => "Blob",
+            Self::Date => "Date",
+            Self::Time => "Time",
+            Self::DateTime => "DateTime",
+            Self::Timestamp => "Timestamp",
+        }
+    }
+
+    fn matches(self, value: &ColValue) -> bool {
+        matches!(
+            (self, value),
+            (Self::Bool, ColValue::Bool(_))
+                | (Self::UnsignedTiny, ColValue::UnsignedTiny(_))
+                | (Self::Short, ColValue::Short(_))
+                | (Self::Long, ColValue::Long(_))
+                | (Self::LongLong, ColValue::LongLong(_))
+                | (Self::Float, ColValue::Float(_))
+                | (Self::Double, ColValue::Double(_))
+                | (Self::Decimal, ColValue::Decimal(_))
+                | (Self::String, ColValue::String(_))
+                | (Self::Blob, ColValue::Blob(_))
+                | (Self::Date, ColValue::Date(_))
+                | (Self::Time, ColValue::Time(_))
+                | (Self::DateTime, ColValue::DateTime(_))
+                | (Self::Timestamp, ColValue::Timestamp(_))
+        )
+    }
 }
 
 pub struct MssqlColValueConvertor;
 
 impl MssqlColValueConvertor {
-    pub fn from_query(row: &Row, col: &str) -> anyhow::Result<ColValue> {
+    pub fn from_query(row: &Row, col: &str, col_type: &MssqlColType) -> anyhow::Result<ColValue> {
+        let index = Self::query_col_index(row, col)?;
+        Self::from_query_at(row, index, col_type)
+    }
+
+    fn from_query_by_result_type(row: &Row, col: &str) -> anyhow::Result<ColValue> {
+        let index = Self::query_col_index(row, col)?;
+        let col_type = MssqlColType::try_from(row.columns()[index].column_type())?;
+        Self::from_query_at(row, index, &col_type)
+    }
+
+    fn query_col_index(row: &Row, col: &str) -> anyhow::Result<usize> {
         let mut matching_columns = row
             .columns()
             .iter()
@@ -61,7 +110,7 @@ impl MssqlColValueConvertor {
             ));
         }
 
-        Self::from_query_at(row, index)
+        Ok(index)
     }
 
     pub fn from_query_required_string(row: &Row, col: &str) -> anyhow::Result<String> {
@@ -72,7 +121,7 @@ impl MssqlColValueConvertor {
     }
 
     pub fn from_query_optional_string(row: &Row, col: &str) -> anyhow::Result<Option<String>> {
-        let value = Self::from_query(row, col)?;
+        let value = Self::from_query_by_result_type(row, col)?;
         let actual_type = value.type_name();
         match value {
             ColValue::String(value) => Ok(Some(value)),
@@ -91,6 +140,13 @@ impl MssqlColValueConvertor {
     pub fn from_query_required_i16(row: &Row, col: &str) -> anyhow::Result<i16> {
         Self::from_query_required(row, col, "Short", |value| match value {
             ColValue::Short(value) => Some(value),
+            _ => None,
+        })
+    }
+
+    pub fn from_query_required_u8(row: &Row, col: &str) -> anyhow::Result<u8> {
+        Self::from_query_required(row, col, "UnsignedTiny", |value| match value {
+            ColValue::UnsignedTiny(value) => Some(value),
             _ => None,
         })
     }
@@ -115,7 +171,7 @@ impl MssqlColValueConvertor {
         expected_type: &str,
         convert: impl FnOnce(ColValue) -> Option<T>,
     ) -> anyhow::Result<T> {
-        let value = Self::from_query(row, col)?;
+        let value = Self::from_query_by_result_type(row, col)?;
         let actual_type = value.type_name();
         convert(value).ok_or_else(|| {
             DtError::DatabaseInvariant(
@@ -129,77 +185,47 @@ impl MssqlColValueConvertor {
         })
     }
 
-    fn from_query_at(row: &Row, index: usize) -> anyhow::Result<ColValue> {
-        let col_type = row.columns()[index].column_type();
-        match col_type {
-            MssqlColType::Null => {
-                let value = row.try_get::<bool, _>(index)?;
-                if value.is_some() {
-                    bail!(DtError::DatabaseInvariant(
-                        DbType::Mssql,
-                        "Tiberius returned a value for ColumnType::Null".to_string(),
-                    ));
+    fn from_query_at(row: &Row, index: usize, col_type: &MssqlColType) -> anyhow::Result<ColValue> {
+        match col_value_kind(col_type) {
+            MssqlColValueKind::Bool => Self::try_get_as::<bool>(row, index, ColValue::Bool),
+            MssqlColValueKind::UnsignedTiny => {
+                Self::try_get_as::<u8>(row, index, ColValue::UnsignedTiny)
+            }
+            MssqlColValueKind::Short => Self::try_get_as::<i16>(row, index, ColValue::Short),
+            MssqlColValueKind::Long => Self::try_get_as::<i32>(row, index, ColValue::Long),
+            MssqlColValueKind::LongLong => Self::try_get_as::<i64>(row, index, ColValue::LongLong),
+            MssqlColValueKind::Float => Self::try_get_as::<f32>(row, index, ColValue::Float),
+            MssqlColValueKind::Double => Self::try_get_as::<f64>(row, index, ColValue::Double),
+            MssqlColValueKind::Decimal => Self::try_get_as::<BigDecimal>(row, index, |value| {
+                ColValue::Decimal(value.to_string())
+            }),
+            MssqlColValueKind::String => match col_type {
+                MssqlColType::Guid => Self::try_get_as::<Uuid>(row, index, |value| {
+                    ColValue::String(value.to_string())
+                }),
+                MssqlColType::Xml => Self::try_get_as::<&XmlData>(row, index, |value| {
+                    ColValue::String(value.to_string())
+                }),
+                _ => {
+                    Self::try_get_as::<&str>(row, index, |value| ColValue::String(value.to_owned()))
                 }
-                Ok(ColValue::None)
-            }
-            MssqlColType::Bit | MssqlColType::Bitn => {
-                Self::try_get_as::<bool>(row, index, ColValue::Bool)
-            }
-            MssqlColType::Int1 => Self::try_get_as::<u8>(row, index, ColValue::UnsignedTiny),
-            MssqlColType::Int2 => Self::try_get_as::<i16>(row, index, ColValue::Short),
-            MssqlColType::Int4 => Self::try_get_as::<i32>(row, index, ColValue::Long),
-            MssqlColType::Int8 => Self::try_get_as::<i64>(row, index, ColValue::LongLong),
-            MssqlColType::Float4 => Self::try_get_as::<f32>(row, index, ColValue::Float),
-            MssqlColType::Float8 | MssqlColType::Money | MssqlColType::Money4 => {
-                Self::try_get_as::<f64>(row, index, ColValue::Double)
-            }
-            MssqlColType::Decimaln | MssqlColType::Numericn => {
-                Self::try_get_as::<BigDecimal>(row, index, |value| {
-                    ColValue::Decimal(value.to_string())
-                })
-            }
-            MssqlColType::BigVarChar
-            | MssqlColType::BigChar
-            | MssqlColType::NVarchar
-            | MssqlColType::NChar
-            | MssqlColType::Text
-            | MssqlColType::NText => {
-                Self::try_get_as::<&str>(row, index, |value| ColValue::String(value.to_owned()))
-            }
-            MssqlColType::BigVarBin | MssqlColType::BigBinary | MssqlColType::Image => {
+            },
+            MssqlColValueKind::Blob => {
                 Self::try_get_as::<&[u8]>(row, index, |value| ColValue::Blob(value.to_vec()))
             }
-            MssqlColType::Guid => {
-                Self::try_get_as::<Uuid>(row, index, |value| ColValue::String(value.to_string()))
-            }
-            MssqlColType::Xml => Self::try_get_as::<&XmlData>(row, index, |value| {
-                ColValue::String(value.to_string())
-            }),
-            MssqlColType::Datetime4
-            | MssqlColType::Datetime
-            | MssqlColType::Datetimen
-            | MssqlColType::Datetime2 => Self::try_get_as::<NaiveDateTime>(row, index, |value| {
+            MssqlColValueKind::DateTime => Self::try_get_as::<NaiveDateTime>(row, index, |value| {
                 ColValue::DateTime(value.format("%Y-%m-%d %H:%M:%S%.f").to_string())
             }),
-            MssqlColType::Daten => Self::try_get_as::<NaiveDate>(row, index, |value| {
+            MssqlColValueKind::Date => Self::try_get_as::<NaiveDate>(row, index, |value| {
                 ColValue::Date(value.format("%Y-%m-%d").to_string())
             }),
-            MssqlColType::Timen => Self::try_get_as::<NaiveTime>(row, index, |value| {
+            MssqlColValueKind::Time => Self::try_get_as::<NaiveTime>(row, index, |value| {
                 ColValue::Time(value.format("%H:%M:%S%.f").to_string())
             }),
-            MssqlColType::DatetimeOffsetn => {
+            MssqlColValueKind::Timestamp => {
                 Self::try_get_as::<DateTime<FixedOffset>>(row, index, |value| {
                     ColValue::Timestamp(value.to_rfc3339())
                 })
-            }
-            MssqlColType::Intn
-            | MssqlColType::Floatn
-            | MssqlColType::Udt
-            | MssqlColType::SSVariant => {
-                bail!(DtError::DatabaseUnsupportedTableStructure(
-                    DbType::Mssql,
-                    format!("MSSQL column type {col_type:?} is not supported"),
-                ))
             }
         }
     }
@@ -217,40 +243,42 @@ impl MssqlColValueConvertor {
     }
 
     pub fn from_str(col_type: &MssqlColType, value: &str) -> anyhow::Result<ColValue> {
-        let parsed = match bind_kind(col_type)? {
-            MssqlBindKind::Bool => ColValue::Bool(parse_bool(value).ok_or_else(|| {
+        let parsed = match col_value_kind(col_type) {
+            MssqlColValueKind::Bool => ColValue::Bool(parse_bool(value).ok_or_else(|| {
                 DtError::DatabaseStatementFailed(
                     DbType::Mssql,
                     format!("invalid bit value: {value}"),
                 )
             })?),
-            MssqlBindKind::U8 => ColValue::UnsignedTiny(value.parse()?),
-            MssqlBindKind::I16 => ColValue::Short(value.parse()?),
-            MssqlBindKind::I32 => ColValue::Long(value.parse()?),
-            MssqlBindKind::I64 => ColValue::LongLong(value.parse()?),
-            MssqlBindKind::F32 => ColValue::Float(value.parse()?),
-            MssqlBindKind::F64 | MssqlBindKind::Money => ColValue::Double(value.parse()?),
-            MssqlBindKind::Decimal => ColValue::Decimal(parse_decimal(value)?.to_string()),
-            MssqlBindKind::Text => ColValue::String(value.to_string()),
-            MssqlBindKind::Binary => ColValue::Blob(hex::decode(value)?),
-            MssqlBindKind::Uuid => ColValue::String(Uuid::parse_str(value)?.to_string()),
-            MssqlBindKind::Xml => ColValue::String(XmlData::new(value).to_string()),
-            MssqlBindKind::Date => ColValue::Date(
+            MssqlColValueKind::UnsignedTiny => ColValue::UnsignedTiny(value.parse()?),
+            MssqlColValueKind::Short => ColValue::Short(value.parse()?),
+            MssqlColValueKind::Long => ColValue::Long(value.parse()?),
+            MssqlColValueKind::LongLong => ColValue::LongLong(value.parse()?),
+            MssqlColValueKind::Float => ColValue::Float(parse_finite_f32(value)?),
+            MssqlColValueKind::Double => ColValue::Double(parse_finite_f64(value)?),
+            MssqlColValueKind::Decimal => ColValue::Decimal(parse_decimal(value)?.to_string()),
+            MssqlColValueKind::String => match col_type {
+                MssqlColType::Guid => ColValue::String(Uuid::parse_str(value)?.to_string()),
+                MssqlColType::Xml => ColValue::String(XmlData::new(value).to_string()),
+                _ => ColValue::String(value.to_string()),
+            },
+            MssqlColValueKind::Blob => ColValue::Blob(hex::decode(value)?),
+            MssqlColValueKind::Date => ColValue::Date(
                 NaiveDate::parse_from_str(value, "%Y-%m-%d")?
                     .format("%Y-%m-%d")
                     .to_string(),
             ),
-            MssqlBindKind::Time => ColValue::Time(
+            MssqlColValueKind::Time => ColValue::Time(
                 NaiveTime::parse_from_str(value, "%H:%M:%S%.f")?
                     .format("%H:%M:%S%.f")
                     .to_string(),
             ),
-            MssqlBindKind::NaiveDateTime => ColValue::DateTime(
+            MssqlColValueKind::DateTime => ColValue::DateTime(
                 NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")?
                     .format("%Y-%m-%d %H:%M:%S%.f")
                     .to_string(),
             ),
-            MssqlBindKind::DateTimeOffset => {
+            MssqlColValueKind::Timestamp => {
                 ColValue::Timestamp(DateTime::parse_from_rfc3339(value)?.to_rfc3339())
             }
         };
@@ -262,24 +290,34 @@ impl MssqlColValueConvertor {
         value: &'a ColValue,
         col_type: &MssqlColType,
     ) -> anyhow::Result<()> {
-        let result = match bind_kind(col_type)? {
-            MssqlBindKind::Bool => Self::bind_as(query, value, as_bool_checked),
-            MssqlBindKind::U8 => Self::bind_as(query, value, as_u8_checked),
-            MssqlBindKind::I16 => Self::bind_as(query, value, as_i16_checked),
-            MssqlBindKind::I32 => Self::bind_as(query, value, as_i32_checked),
-            MssqlBindKind::I64 => Self::bind_as(query, value, as_i64_checked),
-            MssqlBindKind::F32 => Self::bind_as(query, value, as_f32_checked),
-            MssqlBindKind::F64 => Self::bind_as(query, value, as_f64_checked),
-            MssqlBindKind::Money => Self::bind_as(query, value, as_money_decimal),
-            MssqlBindKind::Decimal => Self::bind_as(query, value, as_big_decimal),
-            MssqlBindKind::Text => Self::bind_as(query, value, as_text),
-            MssqlBindKind::Binary => Self::bind_as(query, value, as_binary),
-            MssqlBindKind::Uuid => Self::bind_as(query, value, parse_uuid),
-            MssqlBindKind::Xml => Self::bind_as(query, value, parse_xml),
-            MssqlBindKind::Date => Self::bind_as(query, value, parse_date),
-            MssqlBindKind::Time => Self::bind_as(query, value, parse_time),
-            MssqlBindKind::NaiveDateTime => Self::bind_as(query, value, parse_datetime),
-            MssqlBindKind::DateTimeOffset => Self::bind_as(query, value, parse_datetime_offset),
+        let kind = col_value_kind(col_type);
+        if !matches!(value, ColValue::None | ColValue::UnchangedToast) && !kind.matches(value) {
+            bail!(invalid_value(
+                value,
+                &format!("MSSQL {col_type:?}"),
+                format!("expected ColValue::{}", kind.type_name()),
+            ));
+        }
+
+        let result = match kind {
+            MssqlColValueKind::Bool => Self::bind_as(query, value, as_bool_checked),
+            MssqlColValueKind::UnsignedTiny => Self::bind_as(query, value, as_u8_checked),
+            MssqlColValueKind::Short => Self::bind_as(query, value, as_i16_checked),
+            MssqlColValueKind::Long => Self::bind_as(query, value, as_i32_checked),
+            MssqlColValueKind::LongLong => Self::bind_as(query, value, as_i64_checked),
+            MssqlColValueKind::Float => Self::bind_as(query, value, as_f32_checked),
+            MssqlColValueKind::Double => Self::bind_as(query, value, as_f64_checked),
+            MssqlColValueKind::Decimal => Self::bind_as(query, value, as_big_decimal),
+            MssqlColValueKind::String => match col_type {
+                MssqlColType::Guid => Self::bind_as(query, value, parse_uuid),
+                MssqlColType::Xml => Self::bind_as(query, value, parse_xml),
+                _ => Self::bind_as(query, value, as_text),
+            },
+            MssqlColValueKind::Blob => Self::bind_as(query, value, as_binary),
+            MssqlColValueKind::Date => Self::bind_as(query, value, parse_date),
+            MssqlColValueKind::Time => Self::bind_as(query, value, parse_time),
+            MssqlColValueKind::DateTime => Self::bind_as(query, value, parse_datetime),
+            MssqlColValueKind::Timestamp => Self::bind_as(query, value, parse_datetime_offset),
         };
 
         result.with_context(|| {
@@ -310,45 +348,36 @@ impl MssqlColValueConvertor {
     }
 }
 
-fn bind_kind(col_type: &MssqlColType) -> anyhow::Result<MssqlBindKind> {
-    let kind = match col_type {
-        MssqlColType::Bit | MssqlColType::Bitn => MssqlBindKind::Bool,
-        MssqlColType::Int1 => MssqlBindKind::U8,
-        MssqlColType::Int2 => MssqlBindKind::I16,
-        MssqlColType::Int4 => MssqlBindKind::I32,
-        MssqlColType::Int8 => MssqlBindKind::I64,
-        MssqlColType::Float4 => MssqlBindKind::F32,
-        MssqlColType::Float8 => MssqlBindKind::F64,
-        MssqlColType::Money | MssqlColType::Money4 => MssqlBindKind::Money,
-        MssqlColType::Decimaln | MssqlColType::Numericn => MssqlBindKind::Decimal,
+fn col_value_kind(col_type: &MssqlColType) -> MssqlColValueKind {
+    match col_type {
+        MssqlColType::Bit | MssqlColType::Bitn => MssqlColValueKind::Bool,
+        MssqlColType::Int1 => MssqlColValueKind::UnsignedTiny,
+        MssqlColType::Int2 => MssqlColValueKind::Short,
+        MssqlColType::Int4 => MssqlColValueKind::Long,
+        MssqlColType::Int8 => MssqlColValueKind::LongLong,
+        MssqlColType::Float4 => MssqlColValueKind::Float,
+        MssqlColType::Float8 => MssqlColValueKind::Double,
+        MssqlColType::Money | MssqlColType::Money4 => MssqlColValueKind::Double,
+        MssqlColType::Decimaln | MssqlColType::Numericn => MssqlColValueKind::Decimal,
         MssqlColType::BigVarChar
         | MssqlColType::BigChar
         | MssqlColType::NVarchar
         | MssqlColType::NChar
         | MssqlColType::Text
-        | MssqlColType::NText => MssqlBindKind::Text,
+        | MssqlColType::NText
+        | MssqlColType::Guid
+        | MssqlColType::Xml => MssqlColValueKind::String,
         MssqlColType::BigVarBin | MssqlColType::BigBinary | MssqlColType::Image => {
-            MssqlBindKind::Binary
+            MssqlColValueKind::Blob
         }
-        MssqlColType::Guid => MssqlBindKind::Uuid,
-        MssqlColType::Xml => MssqlBindKind::Xml,
-        MssqlColType::Daten => MssqlBindKind::Date,
-        MssqlColType::Timen => MssqlBindKind::Time,
+        MssqlColType::Daten => MssqlColValueKind::Date,
+        MssqlColType::Timen => MssqlColValueKind::Time,
         MssqlColType::Datetime4
         | MssqlColType::Datetime
         | MssqlColType::Datetimen
-        | MssqlColType::Datetime2 => MssqlBindKind::NaiveDateTime,
-        MssqlColType::DatetimeOffsetn => MssqlBindKind::DateTimeOffset,
-        MssqlColType::Null
-        | MssqlColType::Intn
-        | MssqlColType::Floatn
-        | MssqlColType::Udt
-        | MssqlColType::SSVariant => bail!(DtError::DatabaseUnsupportedTableStructure(
-            DbType::Mssql,
-            format!("column type {col_type:?} is not supported"),
-        )),
-    };
-    Ok(kind)
+        | MssqlColType::Datetime2 => MssqlColValueKind::DateTime,
+        MssqlColType::DatetimeOffsetn => MssqlColValueKind::Timestamp,
+    }
 }
 
 fn invalid_value(value: &ColValue, target: &str, detail: impl std::fmt::Display) -> anyhow::Error {
@@ -365,18 +394,6 @@ fn invalid_value(value: &ColValue, target: &str, detail: impl std::fmt::Display)
 fn as_bool_checked(value: &ColValue) -> anyhow::Result<bool> {
     match value {
         ColValue::Bool(value) => Ok(*value),
-        value if value.is_integer() => match value.convert_into_integer_128()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(invalid_value(value, "bit", "integer must be 0 or 1")),
-        },
-        original @ ColValue::String(value) => parse_bool(value)
-            .ok_or_else(|| invalid_value(original, "bit", "invalid boolean string")),
-        original @ ColValue::RawString(value) => {
-            let value_str = std::str::from_utf8(value)?;
-            parse_bool(value_str)
-                .ok_or_else(|| invalid_value(original, "bit", "invalid boolean string"))
-        }
         _ => Err(invalid_value(value, "bit", "incompatible value type")),
     }
 }
@@ -391,72 +408,78 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
+fn parse_finite_f32(value: &str) -> anyhow::Result<f32> {
+    let parsed = value.parse::<f32>()?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        bail!(DtError::DatabaseStatementFailed(
+            DbType::Mssql,
+            format!("real value must be finite: {value}"),
+        ))
+    }
+}
+
+fn parse_finite_f64(value: &str) -> anyhow::Result<f64> {
+    let parsed = value.parse::<f64>()?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        bail!(DtError::DatabaseStatementFailed(
+            DbType::Mssql,
+            format!("float value must be finite: {value}"),
+        ))
+    }
+}
+
 fn as_u8_checked(value: &ColValue) -> anyhow::Result<u8> {
-    u8::try_from(value.convert_into_integer_128()?)
-        .map_err(|error| invalid_value(value, "tinyint", error))
+    match value {
+        ColValue::UnsignedTiny(value) => Ok(*value),
+        _ => Err(invalid_value(value, "tinyint", "incompatible value type")),
+    }
 }
 
 fn as_i16_checked(value: &ColValue) -> anyhow::Result<i16> {
-    i16::try_from(value.convert_into_integer_128()?)
-        .map_err(|error| invalid_value(value, "smallint", error))
+    match value {
+        ColValue::Short(value) => Ok(*value),
+        _ => Err(invalid_value(value, "smallint", "incompatible value type")),
+    }
 }
 
 fn as_i32_checked(value: &ColValue) -> anyhow::Result<i32> {
-    i32::try_from(value.convert_into_integer_128()?)
-        .map_err(|error| invalid_value(value, "int", error))
+    match value {
+        ColValue::Long(value) => Ok(*value),
+        _ => Err(invalid_value(value, "int", "incompatible value type")),
+    }
 }
 
 fn as_i64_checked(value: &ColValue) -> anyhow::Result<i64> {
-    i64::try_from(value.convert_into_integer_128()?)
-        .map_err(|error| invalid_value(value, "bigint", error))
+    match value {
+        ColValue::LongLong(value) => Ok(*value),
+        _ => Err(invalid_value(value, "bigint", "incompatible value type")),
+    }
 }
 
 fn as_f32_checked(value: &ColValue) -> anyhow::Result<f32> {
-    let converted = as_f64_checked(value)? as f32;
-    if converted.is_finite() {
-        Ok(converted)
-    } else {
-        Err(invalid_value(value, "real", "value is out of range"))
+    match value {
+        ColValue::Float(value) if value.is_finite() => Ok(*value),
+        ColValue::Float(_) => Err(invalid_value(value, "real", "value must be finite")),
+        _ => Err(invalid_value(value, "real", "incompatible value type")),
     }
 }
 
 fn as_f64_checked(value: &ColValue) -> anyhow::Result<f64> {
-    let converted = match value {
-        ColValue::Float(value) => *value as f64,
-        ColValue::Double(value) => *value,
-        ColValue::Decimal(value) => {
-            decimal_literal_shape(value)?;
-            value.parse::<f64>()?
-        }
-        value if value.is_integer() => value.convert_into_integer_128()? as f64,
-        _ => return Err(invalid_value(value, "float", "incompatible value type")),
-    };
-
-    if converted.is_finite() {
-        Ok(converted)
-    } else {
-        Err(invalid_value(value, "float", "value must be finite"))
+    match value {
+        ColValue::Double(value) if value.is_finite() => Ok(*value),
+        ColValue::Double(_) => Err(invalid_value(value, "float", "value must be finite")),
+        _ => Err(invalid_value(value, "float", "incompatible value type")),
     }
 }
 
 fn as_big_decimal(value: &ColValue) -> anyhow::Result<BigDecimal> {
     match value {
         ColValue::Decimal(value) => parse_decimal(value),
-        value if value.is_integer() => {
-            parse_decimal(&value.convert_into_integer_128()?.to_string())
-        }
         _ => Err(invalid_value(value, "decimal", "incompatible value type")),
-    }
-}
-
-fn as_money_decimal(value: &ColValue) -> anyhow::Result<BigDecimal> {
-    match value {
-        ColValue::Float(value) if value.is_finite() => parse_decimal(&value.to_string()),
-        ColValue::Double(value) if value.is_finite() => parse_decimal(&value.to_string()),
-        ColValue::Float(_) | ColValue::Double(_) => {
-            Err(invalid_value(value, "money", "value must be finite"))
-        }
-        _ => as_big_decimal(value),
     }
 }
 
@@ -517,53 +540,16 @@ fn decimal_literal_shape(value: &str) -> anyhow::Result<(usize, usize)> {
     Ok((precision, fraction.len()))
 }
 
-fn as_text<'a>(value: &'a ColValue) -> anyhow::Result<Cow<'a, str>> {
-    let value: Cow<'a, str> = match value {
-        ColValue::Bool(value) => Cow::Owned(value.to_string()),
-        ColValue::Tiny(value) => Cow::Owned(value.to_string()),
-        ColValue::UnsignedTiny(value) => Cow::Owned(value.to_string()),
-        ColValue::Short(value) => Cow::Owned(value.to_string()),
-        ColValue::UnsignedShort(value) => Cow::Owned(value.to_string()),
-        ColValue::Long(value) => Cow::Owned(value.to_string()),
-        ColValue::UnsignedLong(value) => Cow::Owned(value.to_string()),
-        ColValue::LongLong(value) => Cow::Owned(value.to_string()),
-        ColValue::UnsignedLongLong(value) => Cow::Owned(value.to_string()),
-        ColValue::Float(value) if value.is_finite() => Cow::Owned(value.to_string()),
-        ColValue::Double(value) if value.is_finite() => Cow::Owned(value.to_string()),
-        ColValue::Float(_) | ColValue::Double(_) => {
-            return Err(invalid_value(value, "text", "float value must be finite"));
-        }
-        ColValue::Decimal(value)
-        | ColValue::Time(value)
-        | ColValue::Date(value)
-        | ColValue::DateTime(value)
-        | ColValue::Timestamp(value)
-        | ColValue::String(value)
-        | ColValue::Set2(value)
-        | ColValue::Enum2(value)
-        | ColValue::Json2(value) => Cow::Borrowed(value),
-        ColValue::Year(value) => Cow::Owned(value.to_string()),
-        ColValue::RawString(value) | ColValue::Json(value) => {
-            Cow::Borrowed(std::str::from_utf8(value)?)
-        }
-        ColValue::Bit(value) => Cow::Owned(value.to_string()),
-        ColValue::Set(value) => Cow::Owned(value.to_string()),
-        ColValue::Enum(value) => Cow::Owned(value.to_string()),
-        ColValue::Json3(value) => Cow::Owned(value.to_string()),
-        ColValue::None
-        | ColValue::UnchangedToast
-        | ColValue::Blob(_)
-        | ColValue::MongoDoc(_)
-        | ColValue::MongoRawDoc(_) => {
-            return Err(invalid_value(value, "text", "incompatible value type"));
-        }
-    };
-    Ok(value)
+fn as_text(value: &ColValue) -> anyhow::Result<&str> {
+    match value {
+        ColValue::String(value) => Ok(value),
+        _ => Err(invalid_value(value, "text", "incompatible value type")),
+    }
 }
 
-fn as_binary(value: &ColValue) -> anyhow::Result<Cow<'_, [u8]>> {
+fn as_binary(value: &ColValue) -> anyhow::Result<&[u8]> {
     match value {
-        ColValue::Blob(value) | ColValue::RawString(value) => Ok(Cow::Borrowed(value.as_slice())),
+        ColValue::Blob(value) => Ok(value),
         _ => Err(invalid_value(value, "binary", "incompatible value type")),
     }
 }
@@ -578,7 +564,7 @@ fn parse_xml(value: &ColValue) -> anyhow::Result<XmlData> {
 
 fn parse_date(value: &ColValue) -> anyhow::Result<NaiveDate> {
     let value = match value {
-        ColValue::Date(value) | ColValue::String(value) => value,
+        ColValue::Date(value) => value,
         _ => return Err(invalid_value(value, "date", "incompatible value type")),
     };
     Ok(NaiveDate::parse_from_str(value, "%Y-%m-%d")?)
@@ -586,7 +572,7 @@ fn parse_date(value: &ColValue) -> anyhow::Result<NaiveDate> {
 
 fn parse_time(value: &ColValue) -> anyhow::Result<NaiveTime> {
     let value = match value {
-        ColValue::Time(value) | ColValue::String(value) => value,
+        ColValue::Time(value) => value,
         _ => return Err(invalid_value(value, "time", "incompatible value type")),
     };
     Ok(NaiveTime::parse_from_str(value, "%H:%M:%S%.f")?)
@@ -594,7 +580,7 @@ fn parse_time(value: &ColValue) -> anyhow::Result<NaiveTime> {
 
 fn parse_datetime(value: &ColValue) -> anyhow::Result<NaiveDateTime> {
     let value = match value {
-        ColValue::DateTime(value) | ColValue::Timestamp(value) | ColValue::String(value) => value,
+        ColValue::DateTime(value) => value,
         _ => {
             return Err(invalid_value(value, "datetime", "incompatible value type"));
         }
@@ -607,7 +593,7 @@ fn parse_datetime(value: &ColValue) -> anyhow::Result<NaiveDateTime> {
 
 fn parse_datetime_offset(value: &ColValue) -> anyhow::Result<DateTime<FixedOffset>> {
     let value = match value {
-        ColValue::Timestamp(value) | ColValue::String(value) => value,
+        ColValue::Timestamp(value) => value,
         _ => {
             return Err(invalid_value(
                 value,
@@ -622,7 +608,6 @@ fn parse_datetime_offset(value: &ColValue) -> anyhow::Result<DateTime<FixedOffse
 fn as_utf8_text<'a>(value: &'a ColValue, target: &str) -> anyhow::Result<&'a str> {
     match value {
         ColValue::String(value) => Ok(value),
-        ColValue::RawString(value) => Ok(std::str::from_utf8(value)?),
         _ => Err(invalid_value(value, target, "incompatible value type")),
     }
 }
@@ -637,85 +622,98 @@ mod tests {
     }
 
     #[test]
-    fn classifies_supported_bind_types() {
+    fn classifies_supported_col_value_types() {
         let cases = [
-            ("bit", MssqlBindKind::Bool),
-            ("tinyint", MssqlBindKind::U8),
-            ("smallint", MssqlBindKind::I16),
-            ("int", MssqlBindKind::I32),
-            ("bigint", MssqlBindKind::I64),
-            ("real", MssqlBindKind::F32),
-            ("float", MssqlBindKind::F64),
-            ("money", MssqlBindKind::Money),
-            ("smallmoney", MssqlBindKind::Money),
-            ("decimal", MssqlBindKind::Decimal),
-            ("numeric", MssqlBindKind::Decimal),
-            ("varchar", MssqlBindKind::Text),
-            ("nvarchar", MssqlBindKind::Text),
-            ("varbinary", MssqlBindKind::Binary),
-            ("uniqueidentifier", MssqlBindKind::Uuid),
-            ("xml", MssqlBindKind::Xml),
-            ("date", MssqlBindKind::Date),
-            ("time", MssqlBindKind::Time),
-            ("datetime", MssqlBindKind::NaiveDateTime),
-            ("datetimeoffset", MssqlBindKind::DateTimeOffset),
+            ("bit", MssqlColValueKind::Bool),
+            ("tinyint", MssqlColValueKind::UnsignedTiny),
+            ("smallint", MssqlColValueKind::Short),
+            ("int", MssqlColValueKind::Long),
+            ("bigint", MssqlColValueKind::LongLong),
+            ("real", MssqlColValueKind::Float),
+            ("float", MssqlColValueKind::Double),
+            ("money", MssqlColValueKind::Double),
+            ("smallmoney", MssqlColValueKind::Double),
+            ("decimal", MssqlColValueKind::Decimal),
+            ("numeric", MssqlColValueKind::Decimal),
+            ("varchar", MssqlColValueKind::String),
+            ("char", MssqlColValueKind::String),
+            ("nvarchar", MssqlColValueKind::String),
+            ("nchar", MssqlColValueKind::String),
+            ("text", MssqlColValueKind::String),
+            ("ntext", MssqlColValueKind::String),
+            ("varbinary", MssqlColValueKind::Blob),
+            ("binary", MssqlColValueKind::Blob),
+            ("image", MssqlColValueKind::Blob),
+            ("rowversion", MssqlColValueKind::Blob),
+            ("timestamp", MssqlColValueKind::Blob),
+            ("uniqueidentifier", MssqlColValueKind::String),
+            ("xml", MssqlColValueKind::String),
+            ("date", MssqlColValueKind::Date),
+            ("time", MssqlColValueKind::Time),
+            ("smalldatetime", MssqlColValueKind::DateTime),
+            ("datetime", MssqlColValueKind::DateTime),
+            ("datetime2", MssqlColValueKind::DateTime),
+            ("datetimeoffset", MssqlColValueKind::Timestamp),
         ];
 
         for (type_name, expected) in cases {
-            assert_eq!(bind_kind(&col_type(type_name)).unwrap(), expected);
+            assert_eq!(col_value_kind(&col_type(type_name)), expected);
         }
         assert_eq!(
-            bind_kind(&col_type(" NVARCHAR ")).unwrap(),
-            MssqlBindKind::Text
+            col_value_kind(&col_type(" NVARCHAR ")),
+            MssqlColValueKind::String
+        );
+        assert_eq!(col_value_kind(&MssqlColType::Bit), MssqlColValueKind::Bool);
+        assert_eq!(
+            col_value_kind(&MssqlColType::Datetimen),
+            MssqlColValueKind::DateTime
         );
     }
 
     #[test]
     fn rejects_unsupported_bind_types() {
-        assert!(bind_kind(&col_type("sql_variant")).is_err());
-
-        for col_type in [MssqlColType::Intn, MssqlColType::Floatn, MssqlColType::Udt] {
-            assert!(bind_kind(&col_type).is_err());
+        for col_type in [
+            tiberius::ColumnType::Null,
+            tiberius::ColumnType::Intn,
+            tiberius::ColumnType::Floatn,
+            tiberius::ColumnType::Udt,
+            tiberius::ColumnType::SSVariant,
+        ] {
+            assert!(MssqlColType::try_from(col_type).is_err());
         }
+        assert!(parse_mssql_col_type("sql_variant").is_err());
     }
 
     #[test]
-    fn converts_integers_without_truncation() {
+    fn accepts_only_the_mapped_integer_variant() {
         assert_eq!(
             as_u8_checked(&ColValue::UnsignedTiny(u8::MAX)).unwrap(),
             u8::MAX
         );
         assert!(as_u8_checked(&ColValue::Long(-1)).is_err());
-        assert!(as_u8_checked(&ColValue::UnsignedShort(256)).is_err());
+        assert!(as_u8_checked(&ColValue::UnsignedShort(255)).is_err());
 
         assert_eq!(
             as_i16_checked(&ColValue::Short(i16::MIN)).unwrap(),
             i16::MIN
         );
-        assert!(as_i16_checked(&ColValue::Long(i16::MAX as i32 + 1)).is_err());
-        assert!(as_i32_checked(&ColValue::UnsignedLong(i32::MAX as u32 + 1)).is_err());
-        assert!(as_i64_checked(&ColValue::UnsignedLongLong(u64::MAX)).is_err());
+        assert!(as_i16_checked(&ColValue::Long(i16::MAX as i32)).is_err());
+        assert!(as_i32_checked(&ColValue::Short(1)).is_err());
+        assert!(as_i64_checked(&ColValue::Long(1)).is_err());
     }
 
     #[test]
     fn converts_boolean_values_strictly() {
         assert!(as_bool_checked(&ColValue::Bool(true)).unwrap());
-        assert!(!as_bool_checked(&ColValue::Long(0)).unwrap());
-        assert!(as_bool_checked(&ColValue::String("TRUE".to_string())).unwrap());
-        assert!(!as_bool_checked(&ColValue::RawString(b"false".to_vec())).unwrap());
-        assert!(as_bool_checked(&ColValue::Long(2)).is_err());
-        assert!(as_bool_checked(&ColValue::String("yes".to_string())).is_err());
-        assert!(as_bool_checked(&ColValue::RawString(vec![0xff])).is_err());
+        assert!(!as_bool_checked(&ColValue::Bool(false)).unwrap());
+        assert!(as_bool_checked(&ColValue::Long(1)).is_err());
+        assert!(as_bool_checked(&ColValue::String("true".to_string())).is_err());
     }
 
     #[test]
     fn validates_float_and_decimal_values() {
-        assert_eq!(
-            as_f64_checked(&ColValue::Decimal("12.5".to_string())).unwrap(),
-            12.5
-        );
-        assert!(as_f64_checked(&ColValue::Decimal("9".repeat(39))).is_ok());
-        assert!(as_f64_checked(&ColValue::Decimal(format!("0.{}1", "0".repeat(37)))).is_ok());
+        assert_eq!(as_f64_checked(&ColValue::Double(12.5)).unwrap(), 12.5);
+        assert!(as_f64_checked(&ColValue::Float(12.5)).is_err());
         assert!(as_f64_checked(&ColValue::Double(f64::INFINITY)).is_err());
         assert!(as_f32_checked(&ColValue::Double(f64::MAX)).is_err());
 
@@ -732,12 +730,12 @@ mod tests {
         assert!(parse_decimal("1.2.3").is_err());
 
         assert_eq!(
-            as_money_decimal(&ColValue::Double(12.34))
+            as_big_decimal(&ColValue::Decimal("12.3400".to_string()))
                 .unwrap()
                 .to_string(),
-            "12.34"
+            "12.3400"
         );
-        assert!(as_money_decimal(&ColValue::Double(f64::NAN)).is_err());
+        assert!(as_big_decimal(&ColValue::Double(12.34)).is_err());
     }
 
     #[test]
@@ -746,17 +744,11 @@ mod tests {
             as_text(&ColValue::String("text".to_string())).unwrap(),
             "text"
         );
-        assert_eq!(
-            as_text(&ColValue::Json3(serde_json::json!({"a": 1}))).unwrap(),
-            r#"{"a":1}"#
-        );
+        assert!(as_text(&ColValue::Json3(serde_json::json!({"a": 1}))).is_err());
         assert!(as_text(&ColValue::RawString(vec![0xff])).is_err());
         assert!(as_text(&ColValue::Blob(vec![1])).is_err());
 
-        assert_eq!(
-            as_binary(&ColValue::Blob(vec![1, 2])).unwrap().as_ref(),
-            &[1, 2]
-        );
+        assert_eq!(as_binary(&ColValue::Blob(vec![1, 2])).unwrap(), &[1, 2]);
         assert!(as_binary(&ColValue::String("not binary".to_string())).is_err());
     }
 
@@ -813,22 +805,16 @@ mod tests {
             ColValue::Long(-42)
         );
         assert_eq!(
-            MssqlColValueConvertor::from_str(&col_type("decimal"), "12.3400").unwrap(),
-            ColValue::Decimal("12.3400".to_string())
+            MssqlColValueConvertor::from_str(&col_type("money"), "12.3400").unwrap(),
+            ColValue::Double(12.34)
         );
         assert_eq!(
             MssqlColValueConvertor::from_str(&col_type("varbinary"), "00ff10").unwrap(),
             ColValue::Blob(vec![0, 255, 16])
         );
-        assert_eq!(
-            MssqlColValueConvertor::from_str(
-                &col_type("datetimeoffset"),
-                "2026-08-11T12:34:56+08:00"
-            )
-            .unwrap(),
-            ColValue::Timestamp("2026-08-11T12:34:56+08:00".to_string())
-        );
         assert!(MssqlColValueConvertor::from_str(&col_type("bit"), "2").is_err());
+        assert!(MssqlColValueConvertor::from_str(&col_type("real"), "NaN").is_err());
+        assert!(MssqlColValueConvertor::from_str(&col_type("float"), "inf").is_err());
     }
 
     #[test]
@@ -843,25 +829,32 @@ mod tests {
             "real",
             "float",
             "money",
+            "smallmoney",
             "decimal",
+            "numeric",
+            "varchar",
+            "char",
             "nvarchar",
+            "nchar",
+            "text",
+            "ntext",
             "varbinary",
+            "binary",
+            "image",
+            "rowversion",
+            "timestamp",
             "uniqueidentifier",
             "xml",
             "date",
             "time",
+            "smalldatetime",
+            "datetime",
             "datetime2",
             "datetimeoffset",
         ] {
             let mut query = Query::new("SELECT @P1");
             MssqlColValueConvertor::bind(&mut query, &null, &col_type(type_name)).unwrap();
         }
-
-        let too_precise = ColValue::Decimal("9".repeat(39));
-        let mut query = Query::new("SELECT @P1");
-        assert!(
-            MssqlColValueConvertor::bind(&mut query, &too_precise, &col_type("decimal")).is_err()
-        );
 
         let mut query = Query::new("SELECT @P1");
         assert!(MssqlColValueConvertor::bind(
@@ -870,5 +863,16 @@ mod tests {
             &col_type("int")
         )
         .is_err());
+
+        let wrong_money_value = ColValue::Decimal("12.3400".to_string());
+        let mut query = Query::new("SELECT @P1");
+        assert!(
+            MssqlColValueConvertor::bind(&mut query, &wrong_money_value, &col_type("money"))
+                .is_err()
+        );
+
+        let money_value = ColValue::Double(12.34);
+        let mut query = Query::new("SELECT @P1");
+        MssqlColValueConvertor::bind(&mut query, &money_value, &col_type("money")).unwrap();
     }
 }

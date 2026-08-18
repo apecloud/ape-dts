@@ -28,7 +28,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
-    error::{DtError, DtResultExt, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtOptionExt, DtResultExt, EndpointRole, ErrorCode, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::parse_size_limit,
@@ -799,9 +799,9 @@ impl TaskRunner {
             propagate_checkpoint_to_sinker,
         };
         if matches!(self.config.sinker_basic.sink_type, SinkType::Check) {
-            let checker = checker.ok_or_else(|| {
-                DtError::invalid_config("standalone check requires a direct checker runtime")
-            })?;
+            let checker = checker.or_dt_error(DtError::invalid_config(
+                "standalone check requires a direct checker runtime",
+            ))?;
             if checker.is_async() {
                 bail!("standalone check must not use async checker runtime");
             }
@@ -873,7 +873,9 @@ impl TaskRunner {
         let checker_target = self
             .config
             .checker_target()
-            .ok_or_else(|| DtError::invalid_config("config [checker] target is missing"))?;
+            .or_dt_error(DtError::invalid_config(
+                "config [checker] target is missing",
+            ))?;
         let max_connections = checker_target.max_connections.max(1);
         let queue_size = cfg
             .inline_check

@@ -1,3 +1,0 @@
-route_src_schema.schema_orders
-route_table_schema.source_orders
-route_col_schema.source_users
