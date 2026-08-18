@@ -4,6 +4,7 @@ use dt_common::{
     meta::ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
 };
 use dt_connector::meta_fetcher::{
+    mssql::mssql_struct_check_fetcher::MssqlStructCheckFetcher,
     mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher,
     pg::pg_struct_check_fetcher::PgStructCheckFetcher,
 };
@@ -197,6 +198,57 @@ impl RdbStructTestRunner {
         println!(
             "summary: src tables: {:?}, dst tables: {:?}",
             src_db_tbs, dst_db_tbs
+        );
+        Ok(())
+    }
+
+    pub async fn run_mssql_struct_test(&mut self) -> anyhow::Result<()> {
+        self.base.execute_prepare_sqls().await?;
+        self.base.base.start_task().await?;
+
+        let src_check_fetcher = MssqlStructCheckFetcher {
+            connection_pool: self
+                .base
+                .src_mssql_endpoint
+                .as_ref()
+                .expect("MSSQL source test endpoint is required")
+                .create_pool()
+                .await?,
+        };
+        let dst_check_fetcher = MssqlStructCheckFetcher {
+            connection_pool: self
+                .base
+                .dst_mssql_endpoint
+                .as_ref()
+                .expect("MSSQL destination test endpoint is required")
+                .create_pool()
+                .await?,
+        };
+
+        let (src_db_tbs, dst_db_tbs) = self.base.get_compare_db_tbs()?;
+        if src_db_tbs.is_empty() {
+            bail!("MSSQL struct test requires at least one table in compare_tbs.txt");
+        }
+
+        for (src_db_tb, dst_db_tb) in src_db_tbs.iter().zip(&dst_db_tbs) {
+            let src_table = src_check_fetcher
+                .fetch_table(&src_db_tb.0, &src_db_tb.1)
+                .await?;
+            let dst_table = dst_check_fetcher
+                .fetch_table(&dst_db_tb.0, &dst_db_tb.1)
+                .await?;
+
+            println!(
+                "comparing MSSQL src table: {:?} with dst table: {:?}",
+                src_db_tb, dst_db_tb
+            );
+            assert_eq!(src_table, dst_table);
+        }
+
+        println!(
+            "summary: compared all {} MSSQL tables: {:?}",
+            src_db_tbs.len(),
+            src_db_tbs
         );
         Ok(())
     }

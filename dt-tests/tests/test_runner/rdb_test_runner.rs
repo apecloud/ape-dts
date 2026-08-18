@@ -1327,9 +1327,20 @@ impl RdbTestRunner {
             let mut seen = HashSet::new();
             src_db_tbs.retain(|db_tb| seen.insert(db_tb.clone()));
             if src_db_tbs.is_empty() {
-                anyhow::bail!(
-                    "no MSSQL CREATE TABLE statements found in src_prepare.sql or src_test.sql"
-                );
+                let compare_tbs_file = format!("{}/compare_tbs.txt", self.base.test_dir);
+                src_db_tbs = BaseTestRunner::load_file(&compare_tbs_file)
+                    .into_iter()
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        (!line.is_empty() && !line.starts_with('#'))
+                            .then(|| Self::parse_full_tb_name(line, &db_type))
+                    })
+                    .collect();
+                if src_db_tbs.is_empty() {
+                    anyhow::bail!(
+                        "no MSSQL CREATE TABLE statements or explicit comparison tables found"
+                    );
+                }
             }
         }
 
@@ -1349,7 +1360,6 @@ impl RdbTestRunner {
         db_type: &DbType,
         sqls: &[String],
     ) -> anyhow::Result<Vec<(String, String)>> {
-        // todo: implement MSSQL DDL parser to extract created tables from SQLs
         if matches!(db_type, DbType::Mssql) {
             return mssql_ddl_scanner::extract_created_tables(sqls);
         }

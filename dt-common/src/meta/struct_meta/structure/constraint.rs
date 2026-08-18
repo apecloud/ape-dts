@@ -38,6 +38,13 @@ impl ConstraintType {
                 _ => Self::Unknown,
             },
 
+            DbType::Mssql => match str {
+                "PRIMARY KEY" | "PRIMARY_KEY_CONSTRAINT" => Self::Primary,
+                "UNIQUE" | "UNIQUE_CONSTRAINT" => Self::Unique,
+                "CHECK" | "CHECK_CONSTRAINT" => Self::Check,
+                _ => Self::Unknown,
+            },
+
             _ => Self::Unknown,
         }
     }
@@ -58,6 +65,13 @@ impl ConstraintType {
                 Self::Foreign => "f",
                 Self::Check => "c",
                 Self::Unknown => "unknown",
+            },
+
+            DbType::Mssql => match self {
+                Self::Primary => "PRIMARY KEY",
+                Self::Unique => "UNIQUE",
+                Self::Check => "CHECK",
+                Self::Foreign | Self::Unknown => "unknown",
             },
 
             _ => "unknown",

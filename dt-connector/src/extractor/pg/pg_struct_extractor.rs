@@ -6,6 +6,7 @@ use sqlx::{Pool, Postgres};
 use crate::{
     extractor::base_extractor::{BaseExtractor, ExtractState},
     meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
+    rdb_struct_filter::RdbStructFilter,
     Extractor,
 };
 use dt_common::{
@@ -66,7 +67,7 @@ impl PgStructExtractor {
         let mut pg_fetcher = PgStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
             schemas,
-            filter: Some(self.filter.to_owned()),
+            filter: RdbStructFilter::for_source(self.filter.to_owned()),
             allow_missing_schemas: false,
         };
 

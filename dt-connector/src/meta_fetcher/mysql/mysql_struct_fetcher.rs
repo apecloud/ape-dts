@@ -26,14 +26,15 @@ use dt_common::{
             },
         },
     },
-    rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
+
+use crate::rdb_struct_filter::RdbStructFilter;
 
 pub struct MysqlStructFetcher {
     pub conn_pool: Pool<MySql>,
     pub dbs: HashSet<String>,
-    pub filter: Option<RdbFilter>,
+    pub filter: RdbStructFilter,
     pub meta_manager: MysqlMetaManager,
     pub allow_missing_databases: bool,
 }
@@ -557,10 +558,7 @@ impl MysqlStructFetcher {
         if !self.dbs.contains(db) {
             return true;
         }
-        if let Some(filter) = &mut self.filter {
-            return filter.filter_tb(db, tb);
-        }
-        false
+        self.filter.filter_tb(db, tb)
     }
 
     fn get_index_kind(non_unique: i32, index_type: &IndexType) -> IndexKind {
