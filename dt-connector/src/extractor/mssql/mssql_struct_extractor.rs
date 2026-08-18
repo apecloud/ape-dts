@@ -14,6 +14,7 @@ use dt_common::{
 use crate::{
     extractor::base_extractor::{BaseExtractor, ExtractState},
     meta_fetcher::mssql::mssql_struct_fetcher::MssqlStructFetcher,
+    rdb_struct_filter::RdbStructFilter,
     Extractor,
 };
 
@@ -60,7 +61,8 @@ impl MssqlStructExtractor {
         let mut fetcher = MssqlStructFetcher {
             connection_pool: self.connection_pool.clone(),
             schemas,
-            filter: Some(self.filter.clone()),
+            filter: RdbStructFilter::for_source(self.filter.clone()),
+            allow_missing_schemas: false,
         };
 
         for statement in fetcher.get_create_schema_statements("").await? {

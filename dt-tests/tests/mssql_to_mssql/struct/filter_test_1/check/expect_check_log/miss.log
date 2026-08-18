@@ -1,0 +1,6 @@
+{"key":"constraint.struct_filter_mssql2mssql_1.constraint_table.ck_filter_1_amount","src_sql":"ALTER TABLE [struct_filter_mssql2mssql_1].[constraint_table] ADD CONSTRAINT [ck_filter_1_amount] CHECK ([amount]>=(0))"}
+{"key":"constraint.struct_filter_mssql2mssql_1.constraint_table.ck_filter_1_status","src_sql":"ALTER TABLE [struct_filter_mssql2mssql_1].[constraint_table] ADD CONSTRAINT [ck_filter_1_status] CHECK ([status]='disabled' OR [status]='active')"}
+{"key":"constraint.struct_filter_mssql2mssql_1.full_index_type.ck_filter_1","src_sql":"ALTER TABLE [struct_filter_mssql2mssql_1].[full_index_type] ADD CONSTRAINT [ck_filter_1] CHECK ([check_col]>=(0))"}
+{"key":"index.struct_filter_mssql2mssql_1.full_index_type.composite_index","src_sql":"CREATE NONCLUSTERED INDEX [composite_index] ON [struct_filter_mssql2mssql_1].[full_index_type] ([composite_index_col1] ASC, [composite_index_col2] DESC, [composite_index_col3] ASC)"}
+{"key":"index.struct_filter_mssql2mssql_1.full_index_type.index_index","src_sql":"CREATE NONCLUSTERED INDEX [index_index] ON [struct_filter_mssql2mssql_1].[full_index_type] ([index_col] ASC)"}
+{"key":"index.struct_filter_mssql2mssql_1.full_index_type.simple_index","src_sql":"CREATE NONCLUSTERED INDEX [simple_index] ON [struct_filter_mssql2mssql_1].[full_index_type] ([simple_index_col] ASC)"}
