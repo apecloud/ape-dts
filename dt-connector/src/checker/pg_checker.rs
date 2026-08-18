@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
-use sqlx::{Pool, Postgres};
-
 use dt_common::meta::{
     ddl_meta::ddl_data::DdlData, pg::pg_meta_manager::PgMetaManager, row_data::RowData,
 };
+use futures::TryStreamExt;
+use sqlx::{Pool, Postgres};
 
 use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
 use crate::rdb_query_builder::RdbQueryBuilder;

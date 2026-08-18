@@ -3,15 +3,15 @@ use std::{io::ErrorKind, net::Shutdown};
 use anyhow::{bail, Context, Error};
 use async_std::{io::BufReader, net::TcpStream, prelude::*};
 use async_trait::async_trait;
-use futures::executor::block_on;
-use url::Url;
-
-use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     error::{DtError, DtOptionExt},
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
 };
+use futures::executor::block_on;
+use url::Url;
+
+use super::{redis_resp_reader::RedisRespReader, redis_resp_types::Value, StreamReader};
 
 pub struct RedisClient {
     pub url: String,

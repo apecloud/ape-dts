@@ -71,6 +71,7 @@ help: ## Display this help.
 ##@ Development
 
 CARGO_BUILD_ARGS ?=
+RUSTFMT_TOOLCHAIN ?= nightly-2025-10-30
 
 .PHONY: init
 init: ## Build
@@ -92,8 +93,16 @@ build-release: ## Build release
 clean: ## Clean
 	cargo clean
 
+.PHONY: format
+format: ## Format Rust code
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all
+
+.PHONY: format-check
+format-check: ## Check Rust code formatting
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all --check
+
 .PHONY: lint
-lint: ## Run code linting
+lint: format-check ## Run code linting
 	cargo clippy --workspace
 
 .PHONY: test 

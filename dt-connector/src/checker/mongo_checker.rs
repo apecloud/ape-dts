@@ -3,13 +3,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mongodb::{
-    bson::{doc, oid::ObjectId, Bson, Document},
-    Client,
-};
-use serde_json::Value as JsonValue;
-
-use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
 use dt_common::{
     error::{DtError, DtErrorContextExt, ErrorObject, Stage},
     meta::{
@@ -21,6 +14,13 @@ use dt_common::{
     },
 };
 use dt_common::{log_error, log_warn};
+use mongodb::{
+    bson::{doc, oid::ObjectId, Bson, Document},
+    Client,
+};
+use serde_json::Value as JsonValue;
+
+use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
 
 pub struct MongoChecker {
     mongo_client: Client,

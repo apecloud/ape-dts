@@ -1,7 +1,6 @@
+use crate::meta::struct_meta::structure::structure_type::StructureType;
 use crate::meta::struct_meta::structure::user_defined::PgUdf;
 use crate::rdb_filter::RdbFilter;
-
-use crate::meta::struct_meta::structure::structure_type::StructureType;
 
 #[derive(Debug, Clone)]
 pub struct PgCreateUdfStatement {

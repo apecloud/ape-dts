@@ -2,13 +2,6 @@ use anyhow::{bail, Context, Result};
 use async_std::path::Path;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use tokio::{fs::File, io::AsyncBufReadExt, io::BufReader};
-
-use crate::extractor::resumer::{
-    recovery::{Recovery, RecoverySnapshotCache},
-    utils::ResumerUtil,
-    CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
-};
 use dt_common::{
     config::{
         config_enums::{TaskKind, TaskType},
@@ -18,6 +11,13 @@ use dt_common::{
     log_warn,
     meta::position::Position,
     utils::file_util::FileUtil,
+};
+use tokio::{fs::File, io::AsyncBufReadExt, io::BufReader};
+
+use crate::extractor::resumer::{
+    recovery::{Recovery, RecoverySnapshotCache},
+    utils::ResumerUtil,
+    CURRENT_POSITION_LOG_FLAG, TAIL_POSITION_COUNT,
 };
 
 const CDC_CURRENT_POSITION_KEY: &str = "current_position";
@@ -265,13 +265,13 @@ impl Recovery for LogRecovery {
 #[cfg(test)]
 mod tests {
     use dashmap::DashMap;
-
-    use super::{LogRecovery, RecoverySnapshotCache};
-    use crate::extractor::resumer::recovery::Recovery;
     use dt_common::{
         config::config_enums::{TaskKind, TaskType},
         meta::position::Position,
     };
+
+    use super::{LogRecovery, RecoverySnapshotCache};
+    use crate::extractor::resumer::recovery::Recovery;
 
     fn new_log_recovery() -> LogRecovery {
         LogRecovery {

@@ -2,7 +2,6 @@ use std::{cmp, sync::Arc};
 
 use async_mutex::Mutex;
 use async_trait::async_trait;
-
 use dt_common::{
     config::sinker_config::BasicSinkerConfig,
     error::DtError,

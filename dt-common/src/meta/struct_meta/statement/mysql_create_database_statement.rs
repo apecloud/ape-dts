@@ -1,6 +1,5 @@
-use crate::rdb_filter::RdbFilter;
-
 use crate::meta::struct_meta::structure::{database::Database, structure_type::StructureType};
+use crate::rdb_filter::RdbFilter;
 
 #[derive(Debug, Clone)]
 pub struct MysqlCreateDatabaseStatement {

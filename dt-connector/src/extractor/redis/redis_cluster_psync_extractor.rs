@@ -2,6 +2,17 @@ use std::sync::{atomic::Ordering, Arc};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use dt_common::{
+    config::{
+        config_enums::{DbType, ExtractType},
+        connection_auth_config::ConnectionAuthConfig,
+    },
+    error::{DtError, DtErrorContextExt, ErrorCode},
+    log_info, log_warn,
+    meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
+    rdb_filter::RdbFilter,
+    utils::redis_util::RedisUtil,
+};
 use tokio::{sync::Mutex, task::JoinSet};
 use url::Url;
 
@@ -16,17 +27,6 @@ use crate::{
         resumer::recovery::Recovery,
     },
     Extractor,
-};
-use dt_common::{
-    config::{
-        config_enums::{DbType, ExtractType},
-        connection_auth_config::ConnectionAuthConfig,
-    },
-    error::{DtError, DtErrorContextExt, ErrorCode},
-    log_info, log_warn,
-    meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
-    rdb_filter::RdbFilter,
-    utils::redis_util::RedisUtil,
 };
 
 pub struct RedisClusterPsyncExtractor {
@@ -269,9 +269,9 @@ mod tests {
     use std::collections::HashMap;
 
     use dt_common::meta::position::Position;
+    use dt_common::meta::redis::cluster_node::ClusterNode;
 
     use super::RedisClusterPsyncExtractor;
-    use dt_common::meta::redis::cluster_node::ClusterNode;
 
     fn node(id: &str, address: &str) -> ClusterNode {
         let (host, port) = address.split_once(':').unwrap();

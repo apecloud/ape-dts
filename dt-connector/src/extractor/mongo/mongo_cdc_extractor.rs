@@ -9,23 +9,6 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
-use mongodb::{
-    bson::{doc, raw::RawDocument, raw::RawDocumentBuf, Bson, Document, Timestamp},
-    change_stream::event::ResumeToken,
-    options::{FullDocumentBeforeChangeType, FullDocumentType},
-    Client,
-};
-use serde_json::json;
-use tokio::{sync::Mutex, time::Instant};
-
-use crate::{
-    common::mongo::{changestream_parser, oplog_parser},
-    extractor::{
-        base_extractor::{BaseExtractor, ExtractState},
-        resumer::recovery::Recovery,
-    },
-    Extractor,
-};
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtOptionExt},
@@ -49,6 +32,23 @@ use dt_common::{
     rdb_filter::RdbFilter,
     system_dbs::SystemDb,
     utils::time_util::TimeUtil,
+};
+use mongodb::{
+    bson::{doc, raw::RawDocument, raw::RawDocumentBuf, Bson, Document, Timestamp},
+    change_stream::event::ResumeToken,
+    options::{FullDocumentBeforeChangeType, FullDocumentType},
+    Client,
+};
+use serde_json::json;
+use tokio::{sync::Mutex, time::Instant};
+
+use crate::{
+    common::mongo::{changestream_parser, oplog_parser},
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        resumer::recovery::Recovery,
+    },
+    Extractor,
 };
 
 pub struct MongoCdcExtractor {

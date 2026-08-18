@@ -218,8 +218,9 @@ impl BaseSplitter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use dt_common::meta::order_key::OrderKey;
+
+    use super::*;
 
     fn make_tb_meta() -> RdbTbMeta {
         RdbTbMeta {

@@ -1,11 +1,6 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-
-use futures::TryStreamExt;
-
-use sqlx::{Pool, Postgres};
-
 use dt_common::{
     log_info,
     meta::{
@@ -18,6 +13,8 @@ use dt_common::{
     },
     rdb_filter::RdbFilter,
 };
+use futures::TryStreamExt;
+use sqlx::{Pool, Postgres};
 
 use crate::{
     checker::check_log::CheckLog,

@@ -1,8 +1,7 @@
 use std::cmp;
 
-use crate::{close_conn_pool, rdb_router::RdbRouter, Sinker};
-
 use anyhow::bail;
+use async_trait::async_trait;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
     error::{DtError, DtErrorContextExt},
@@ -20,10 +19,10 @@ use dt_common::{
     },
     rdb_filter::RdbFilter,
 };
-
-use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
+
+use crate::{close_conn_pool, rdb_router::RdbRouter, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const SIGN_COL_TYPE: &str = "BOOLEAN";

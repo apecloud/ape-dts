@@ -5,9 +5,8 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::RedisString;
 
-use crate::extractor::redis::StreamReader;
-
 use super::rdb_reader::RdbReader;
+use crate::extractor::redis::StreamReader;
 
 const LP_ENCODING_7BIT_UINT_MASK: u8 = 0x80; // 10000000
 const LP_ENCODING_7BIT_UINT: u8 = 0x00; // 00000000

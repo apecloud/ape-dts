@@ -1,10 +1,10 @@
 use anyhow::{bail, Context};
+use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
+use dt_common::{error::DtError, log_debug, log_info};
 use sqlx::types::chrono;
 
 use super::{entry_parser::entry_parser::EntryParser, reader::rdb_reader::RdbReader};
 use crate::extractor::redis::{rdb::entry_parser::module2_parser::ModuleParser, StreamReader};
-use dt_common::meta::redis::{redis_entry::RedisEntry, redis_object::RedisCmd};
-use dt_common::{error::DtError, log_debug, log_info};
 
 const K_FLAG_SLOT_INFO: u8 = 0xf4; // (244) (Redis 7.4+) RDB_OPCODE_SLOT_INFO: slot info
 const _K_FLAG_FUNCTION2: u8 = 0xf5; // (245) function library data

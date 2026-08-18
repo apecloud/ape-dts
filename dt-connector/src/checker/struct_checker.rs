@@ -7,9 +7,6 @@ use std::{
 use anyhow::{bail, Context};
 use async_mutex::Mutex;
 use chrono::Local;
-use sqlx::{MySql, Pool, Postgres};
-use tokio::time::sleep;
-
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, Stage},
@@ -21,6 +18,8 @@ use dt_common::{
     },
     rdb_filter::RdbFilter,
 };
+use sqlx::{MySql, Pool, Postgres};
+use tokio::time::sleep;
 
 use crate::{
     checker::check_log::{to_json_line, CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},

@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-
-use crate::{base_pipeline::BasePipeline, Pipeline};
 use dt_common::{
     log_warn,
     meta::{position::Position, row_data::RowData, struct_meta::struct_data::StructData},
@@ -8,6 +6,8 @@ use dt_common::{
 use dt_connector::{
     checker::CheckerHandle, sinker::busy_tracking_sinker::BusyTrackingSinker, Sinker,
 };
+
+use crate::{base_pipeline::BasePipeline, Pipeline};
 
 pub struct CheckerPipeline {
     inner: BasePipeline,

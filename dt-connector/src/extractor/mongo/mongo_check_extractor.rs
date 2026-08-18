@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 use async_trait::async_trait;
-
 use dt_common::log_info;
 use dt_common::meta::{
     col_value::ColValue,
@@ -11,7 +10,6 @@ use dt_common::meta::{
     row_data::RowData,
     row_type::RowType,
 };
-
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, Document},
     Client,

@@ -3,9 +3,8 @@ use std::fs::File;
 use chrono::{Duration, Utc};
 use dt_common::{config::config_enums::DbType, utils::time_util::TimeUtil};
 
-use crate::test_config_util::TestConfigUtil;
-
 use super::{base_test_runner::BaseTestRunner, rdb_test_runner::RdbTestRunner};
+use crate::test_config_util::TestConfigUtil;
 
 /// This is used for test cases: rdb(src) -> sql log.
 /// We need one task runner to generate sql log

@@ -1,14 +1,13 @@
 use std::cmp;
 
 use async_trait::async_trait;
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use tokio::{time::Duration, time::Instant};
-
 use dt_common::{
     error::{DtErrorContextExt, ErrorCode},
     meta::{avro::avro_converter::AvroConverter, row_data::RowData},
     utils::limit_queue::LimitedQueue,
 };
+use rdkafka::producer::{FutureProducer, FutureRecord};
+use tokio::{time::Duration, time::Instant};
 
 use crate::{rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 

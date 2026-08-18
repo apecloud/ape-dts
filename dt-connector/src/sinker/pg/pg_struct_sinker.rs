@@ -1,5 +1,9 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use dt_common::{
+    config::config_enums::ConflictPolicyEnum, meta::struct_meta::struct_data::StructData,
+    rdb_filter::RdbFilter,
+};
 use sqlx::{Pool, Postgres};
 
 use crate::{
@@ -9,10 +13,6 @@ use crate::{
         base_struct_sinker::{BaseStructSinker, DBConnPool},
     },
     Sinker,
-};
-use dt_common::{
-    config::config_enums::ConflictPolicyEnum, meta::struct_meta::struct_data::StructData,
-    rdb_filter::RdbFilter,
 };
 
 #[derive(Clone)]

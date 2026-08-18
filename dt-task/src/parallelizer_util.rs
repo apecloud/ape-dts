@@ -1,6 +1,5 @@
 use std::collections::{HashMap, VecDeque};
 
-use super::task_util::TaskUtil;
 use dt_common::{
     config::{config_enums::ParallelType, task_config::TaskConfig},
     error::{DtError, DtOptionExt},
@@ -15,6 +14,8 @@ use dt_parallelizer::{
     serial_parallelizer::SerialParallelizer, snapshot_parallelizer::SnapshotParallelizer,
     table_parallelizer::TableParallelizer, Merger, Parallelizer,
 };
+
+use super::task_util::TaskUtil;
 
 pub struct ParallelizerUtil {}
 

@@ -1,10 +1,6 @@
 use std::cmp;
 
 use anyhow::bail;
-use sqlx::{query, MySql, Pool, Postgres};
-use tokio::time::Instant;
-
-use crate::sinker::base_sinker::BaseSinker;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
     error::{DtErrorContextExt, ErrorCode},
@@ -13,6 +9,10 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
+use sqlx::{query, MySql, Pool, Postgres};
+use tokio::time::Instant;
+
+use crate::sinker::base_sinker::BaseSinker;
 
 pub struct BaseStructSinker {}
 

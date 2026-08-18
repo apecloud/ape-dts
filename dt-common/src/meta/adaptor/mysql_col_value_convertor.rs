@@ -3,11 +3,10 @@ use std::io::Cursor;
 use anyhow::bail;
 use byteorder::{LittleEndian, ReadBytesExt};
 use chrono::{TimeZone, Utc};
-use sqlx::{mysql::MySqlRow, types::BigDecimal, Row};
-
 use mysql_binlog_connector_rust::column::{
     column_value::ColumnValue, json::json_binary::JsonBinary,
 };
+use sqlx::{mysql::MySqlRow, types::BigDecimal, Row};
 
 use crate::{
     config::config_enums::DbType,

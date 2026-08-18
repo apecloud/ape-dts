@@ -3,13 +3,12 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::json;
 
+use super::mysql_col_type::MysqlColType;
 use crate::meta::rdb_tb_meta::RdbTbMeta;
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtOptionExt, DtResultExt, ErrorObject},
 };
-
-use super::mysql_col_type::MysqlColType;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MysqlTbMeta {

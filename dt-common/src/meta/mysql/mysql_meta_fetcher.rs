@@ -1,7 +1,7 @@
-use futures::TryStreamExt;
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Ok};
+use futures::TryStreamExt;
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};

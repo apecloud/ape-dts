@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context};
-use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Postgres};
-
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, ErrorObject},
@@ -21,6 +19,7 @@ use dt_common::{
     },
     utils::sql_util::SqlUtil,
 };
+use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Postgres};
 
 pub struct RdbQueryInfo<'a> {
     pub sql: String,

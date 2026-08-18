@@ -1,10 +1,11 @@
-use dt_common::{config::task_config::TaskConfig, logger::TaskLogger, utils::time_util::TimeUtil};
-use dt_connector::data_marker::DataMarker;
-use dt_task::task_runner::TaskRunner;
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader},
 };
+
+use dt_common::{config::task_config::TaskConfig, logger::TaskLogger, utils::time_util::TimeUtil};
+use dt_connector::data_marker::DataMarker;
+use dt_task::task_runner::TaskRunner;
 use tokio::task::JoinHandle;
 
 use crate::test_config_util::TestConfigUtil;

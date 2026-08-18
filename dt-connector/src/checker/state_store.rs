@@ -2,9 +2,8 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::{query, ColumnIndex, Database, Decode, MySql, Pool, Postgres, QueryBuilder, Row, Type};
-
 use dt_common::{config::resumer_config::ResumerConfig, error::DtError, meta::position::Position};
+use sqlx::{query, ColumnIndex, Database, Decode, MySql, Pool, Postgres, QueryBuilder, Row, Type};
 
 use crate::extractor::resumer::{utils::ResumerUtil, ResumerDbPool, ResumerType};
 

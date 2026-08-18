@@ -1,8 +1,8 @@
 use anyhow::bail;
-
-use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
 use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::{HashObject, RedisString};
+
+use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
 
 pub struct HashParser {}
 

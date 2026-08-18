@@ -1,9 +1,10 @@
 #[cfg(test)]
 mod test {
 
+    use std::collections::{HashMap, HashSet};
+
     use dt_precheck::meta::check_item::CheckItem;
     use serial_test::serial;
-    use std::collections::{HashMap, HashSet};
 
     use crate::test_runner::test_base::TestBase;
 

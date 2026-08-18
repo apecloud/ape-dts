@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod test {
-    use crate::test_runner::rdb_test_runner::RdbTestRunner;
     use dt_common::meta::pg::pg_meta_manager::PgMetaManager;
     use serial_test::serial;
+
+    use crate::test_runner::rdb_test_runner::RdbTestRunner;
 
     #[tokio::test]
     #[serial]

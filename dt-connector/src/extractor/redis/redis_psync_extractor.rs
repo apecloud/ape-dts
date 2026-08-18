@@ -8,21 +8,6 @@ use std::{
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use tokio::{sync::Mutex, time::Instant};
-
-use super::redis_client::RedisClient;
-use crate::{
-    extractor::{
-        base_extractor::{BaseExtractor, ExtractState},
-        redis::{
-            rdb::{rdb_parser::RdbParser, reader::rdb_reader::RdbReader},
-            redis_resp_types::Value,
-            StreamReader,
-        },
-        resumer::{recovery::Recovery, utils::ResumerUtil},
-    },
-    Extractor,
-};
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
@@ -38,6 +23,21 @@ use dt_common::{
     },
     rdb_filter::RdbFilter,
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
+};
+use tokio::{sync::Mutex, time::Instant};
+
+use super::redis_client::RedisClient;
+use crate::{
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        redis::{
+            rdb::{rdb_parser::RdbParser, reader::rdb_reader::RdbReader},
+            redis_resp_types::Value,
+            StreamReader,
+        },
+        resumer::{recovery::Recovery, utils::ResumerUtil},
+    },
+    Extractor,
 };
 
 pub struct RedisPsyncExtractor {

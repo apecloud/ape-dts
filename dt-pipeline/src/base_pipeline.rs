@@ -1,15 +1,10 @@
-use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::{
-    sync::{Mutex, RwLock},
-    time::{Duration, Instant},
-};
 
-use crate::{lua_processor::LuaProcessor, Pipeline};
+use async_trait::async_trait;
 use dt_common::{
     config::sinker_config::SinkerConfig,
     error::{DtResultExt, Stage},
@@ -35,6 +30,12 @@ use dt_connector::{
     Sinker,
 };
 use dt_parallelizer::{DataSize, Parallelizer};
+use tokio::{
+    sync::{Mutex, RwLock},
+    time::{Duration, Instant},
+};
+
+use crate::{lua_processor::LuaProcessor, Pipeline};
 
 pub struct BasePipeline {
     pub buffer: Arc<DtQueue>,

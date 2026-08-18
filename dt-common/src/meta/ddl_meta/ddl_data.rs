@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::config::config_enums::DbType;
-
 use super::{ddl_statement::DdlStatement, ddl_type::DdlType};
+use crate::config::config_enums::DbType;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct DdlData {

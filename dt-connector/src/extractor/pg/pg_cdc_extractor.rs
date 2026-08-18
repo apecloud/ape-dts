@@ -11,29 +11,6 @@ use std::{
 
 use anyhow::Error;
 use async_trait::async_trait;
-use futures::StreamExt;
-use postgres_protocol::message::backend::{
-    DeleteBody, InsertBody,
-    LogicalReplicationMessage::{
-        Begin, Commit, Delete, Insert, Origin, Relation, Truncate, Type, Update,
-    },
-    RelationBody,
-    ReplicationMessage::*,
-    TruncateBody, TupleData, UpdateBody,
-};
-use postgres_types::PgLsn;
-use sqlx::{postgres::PgArguments, query::Query, Pool, Postgres};
-use tokio::{sync::Mutex, time::Duration, time::Instant};
-use tokio_postgres::replication::LogicalReplicationStream;
-
-use crate::{
-    extractor::{
-        base_extractor::{BaseExtractor, ExtractState},
-        pg::pg_cdc_client::PgCdcClient,
-        resumer::recovery::Recovery,
-    },
-    Extractor,
-};
 use dt_common::{
     config::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
@@ -59,6 +36,29 @@ use dt_common::{
     },
     rdb_filter::RdbFilter,
     utils::time_util::TimeUtil,
+};
+use futures::StreamExt;
+use postgres_protocol::message::backend::{
+    DeleteBody, InsertBody,
+    LogicalReplicationMessage::{
+        Begin, Commit, Delete, Insert, Origin, Relation, Truncate, Type, Update,
+    },
+    RelationBody,
+    ReplicationMessage::*,
+    TruncateBody, TupleData, UpdateBody,
+};
+use postgres_types::PgLsn;
+use sqlx::{postgres::PgArguments, query::Query, Pool, Postgres};
+use tokio::{sync::Mutex, time::Duration, time::Instant};
+use tokio_postgres::replication::LogicalReplicationStream;
+
+use crate::{
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        pg::pg_cdc_client::PgCdcClient,
+        resumer::recovery::Recovery,
+    },
+    Extractor,
 };
 
 pub struct PgCdcExtractor {

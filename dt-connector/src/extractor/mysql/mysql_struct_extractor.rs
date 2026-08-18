@@ -1,13 +1,6 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-use sqlx::{MySql, Pool};
-
-use crate::{
-    extractor::base_extractor::{BaseExtractor, ExtractState},
-    meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher,
-    Extractor,
-};
 use dt_common::{
     config::task_config::DEFAULT_DB_BATCH_SIZE,
     log_info, log_warn,
@@ -16,6 +9,13 @@ use dt_common::{
         struct_meta::{statement::struct_statement::StructStatement, struct_data::StructData},
     },
     rdb_filter::RdbFilter,
+};
+use sqlx::{MySql, Pool};
+
+use crate::{
+    extractor::base_extractor::{BaseExtractor, ExtractState},
+    meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher,
+    Extractor,
 };
 
 pub struct MysqlStructExtractor {

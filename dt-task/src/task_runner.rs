@@ -9,15 +9,8 @@ use std::{
 use anyhow::{bail, Context};
 use async_mutex::Mutex as AsyncMutex;
 use chrono::Local;
-use opendal::Operator;
-use tokio::{
-    fs::{self as tokio_fs, metadata},
-    runtime::Handle,
-    sync::{Mutex, RwLock},
-    task::JoinSet,
-};
-use tokio_util::sync::CancellationToken;
-
+#[cfg(feature = "metrics")]
+use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
@@ -62,14 +55,19 @@ use dt_pipeline::{
     base_pipeline::BasePipeline, checker_pipeline::CheckerPipeline, lua_processor::LuaProcessor,
     Pipeline,
 };
+use opendal::Operator;
+use tokio::{
+    fs::{self as tokio_fs, metadata},
+    runtime::Handle,
+    sync::{Mutex, RwLock},
+    task::JoinSet,
+};
+use tokio_util::sync::CancellationToken;
 
 use super::{
     extractor_util::ExtractorUtil, parallelizer_util::ParallelizerUtil, sinker_util::SinkerUtil,
 };
 use crate::task_util::{ConnClient, TaskUtil};
-
-#[cfg(feature = "metrics")]
-use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
 
 #[derive(Clone)]
 pub struct TaskInfo {
@@ -1547,8 +1545,9 @@ impl TaskRunner {
 mod tests {
     use std::{fs, time::SystemTime};
 
-    use super::TaskRunner;
     use opendal::{services::Memory, Operator};
+
+    use super::TaskRunner;
 
     #[tokio::test]
     async fn upload_local_check_logs_to_s3_deletes_empty_optional_logs() {

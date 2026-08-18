@@ -91,18 +91,17 @@ mod noop;
 #[cfg(feature = "tracing")]
 mod traced;
 
-#[cfg(feature = "tracing")]
-pub(crate) use traced::snapshot_global;
-#[cfg(feature = "tracing")]
-pub use traced::{
-    dump_global_summary, enable, init_tracing, instrument_wait, set_output_format,
-    set_task_summary_mode, trace_task_future,
-};
-
 #[cfg(not(feature = "tracing"))]
 pub(crate) use noop::snapshot_global;
 #[cfg(not(feature = "tracing"))]
 pub use noop::{
+    dump_global_summary, enable, init_tracing, instrument_wait, set_output_format,
+    set_task_summary_mode, trace_task_future,
+};
+#[cfg(feature = "tracing")]
+pub(crate) use traced::snapshot_global;
+#[cfg(feature = "tracing")]
+pub use traced::{
     dump_global_summary, enable, init_tracing, instrument_wait, set_output_format,
     set_task_summary_mode, trace_task_future,
 };

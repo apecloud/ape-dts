@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use std::sync::Arc;
 
 use super::counter::Counter;
 use super::counter_type::{CounterType, WindowType};

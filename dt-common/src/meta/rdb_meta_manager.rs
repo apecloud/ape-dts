@@ -2,12 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
 
-use crate::error::DtError;
-
 use super::{
     ddl_meta::ddl_data::DdlData, mysql::mysql_meta_manager::MysqlMetaManager,
     pg::pg_meta_manager::PgMetaManager, rdb_tb_meta::RdbTbMeta,
 };
+use crate::error::DtError;
 
 pub const RDB_PRIMARY_KEY_FLAG: &str = "primary";
 

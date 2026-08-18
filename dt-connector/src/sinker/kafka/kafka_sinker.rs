@@ -1,12 +1,11 @@
 use async_trait::async_trait;
-use kafka::producer::{Producer, Record};
-use tokio::time::Instant;
-
 use dt_common::{
     error::{DtResultExt, ErrorCode},
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
     utils::limit_queue::LimitedQueue,
 };
+use kafka::producer::{Producer, Record};
+use tokio::time::Instant;
 
 use crate::{call_batch_fn, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 

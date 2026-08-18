@@ -1,15 +1,6 @@
 use std::str::FromStr;
 
 use anyhow::Context;
-use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-use postgres_openssl::MakeTlsConnector;
-use postgres_types::PgLsn;
-use tokio_postgres::{
-    config::ReplicationMode, replication::LogicalReplicationStream, Client, Config, NoTls,
-    SimpleQueryMessage::Row,
-};
-use url::Url;
-
 use dt_common::{
     config::{
         config_enums::DbType,
@@ -19,6 +10,14 @@ use dt_common::{
     error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
     log_info, log_warn,
 };
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use postgres_openssl::MakeTlsConnector;
+use postgres_types::PgLsn;
+use tokio_postgres::{
+    config::ReplicationMode, replication::LogicalReplicationStream, Client, Config, NoTls,
+    SimpleQueryMessage::Row,
+};
+use url::Url;
 
 pub struct PgCdcClient {
     pub url: String,

@@ -5,23 +5,6 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use futures::TryStreamExt;
-use sqlx::{MySql, Pool, Row};
-
-use crate::{
-    extractor::{
-        base_extractor::{BaseExtractor, ExtractState},
-        base_splitter::SnapshotChunk,
-        estimated_sample_limit,
-        mysql::mysql_snapshot_splitter::MySqlSnapshotSplitter,
-        rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
-        resumer::recovery::Recovery,
-        snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
-        snapshot_dispatcher::{SnapshotDispatcher, TableMonitorGuard},
-        snapshot_types::SnapshotTableId,
-    },
-    Extractor,
-};
 use dt_common::utils::sql_util::MYSQL_ESCAPE;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
@@ -43,8 +26,24 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::serialize_util::SerializeUtil,
 };
-
+use futures::TryStreamExt;
 use quote_mysql as quote;
+use sqlx::{MySql, Pool, Row};
+
+use crate::{
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        base_splitter::SnapshotChunk,
+        estimated_sample_limit,
+        mysql::mysql_snapshot_splitter::MySqlSnapshotSplitter,
+        rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
+        resumer::recovery::Recovery,
+        snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
+        snapshot_dispatcher::{SnapshotDispatcher, TableMonitorGuard},
+        snapshot_types::SnapshotTableId,
+    },
+    Extractor,
+};
 
 pub struct MysqlSnapshotExtractor {
     pub shared: MysqlSnapshotShared,

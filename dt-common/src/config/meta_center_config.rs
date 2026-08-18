@@ -1,6 +1,5 @@
-use crate::config::connection_auth_config::ConnectionAuthConfig;
-
 use super::config_enums::ConflictPolicyEnum;
+use crate::config::connection_auth_config::ConnectionAuthConfig;
 
 #[derive(Clone, Debug, Default)]
 pub enum MetaCenterConfig {

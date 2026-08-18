@@ -1,8 +1,5 @@
-use super::{
-    base_test_runner::BaseTestRunner, check_util::CheckUtil, rdb_test_runner::RdbTestRunner,
-    rdb_util::RdbUtil,
-};
-use crate::test_config_util::TestConfigUtil;
+use std::{fs::File, path::Path};
+
 use anyhow::Context;
 use chrono::Utc;
 use dt_common::utils::time_util::TimeUtil;
@@ -22,7 +19,12 @@ use dt_connector::extractor::resumer::{
 };
 use serde_json::Value;
 use sqlx::{query, Row};
-use std::{fs::File, path::Path};
+
+use super::{
+    base_test_runner::BaseTestRunner, check_util::CheckUtil, rdb_test_runner::RdbTestRunner,
+    rdb_util::RdbUtil,
+};
+use crate::test_config_util::TestConfigUtil;
 
 pub struct CheckTestRunner {
     base: RdbTestRunner,

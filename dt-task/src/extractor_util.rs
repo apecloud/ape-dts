@@ -5,9 +5,6 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-
 use dt_common::{
     config::{
         config_enums::{CheckMode, DbType, ExtractType, SinkType, TaskKind},
@@ -62,10 +59,11 @@ use dt_connector::{
     rdb_router::RdbRouter,
     Extractor,
 };
-
-use crate::task_util::ConnClient;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use super::task_util::TaskUtil;
+use crate::task_util::ConnClient;
 
 pub type PartitionCols = HashMap<(String, String), String>;
 

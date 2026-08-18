@@ -1,6 +1,4 @@
 use crate::meta::struct_meta::structure::column::ColumnDefault;
-use crate::{config::config_enums::DbType, rdb_filter::RdbFilter};
-
 use crate::meta::struct_meta::structure::index::IndexType;
 use crate::meta::struct_meta::structure::{
     column::Column,
@@ -9,6 +7,7 @@ use crate::meta::struct_meta::structure::{
     structure_type::StructureType,
     table::Table,
 };
+use crate::{config::config_enums::DbType, rdb_filter::RdbFilter};
 
 #[derive(Debug, Clone)]
 pub struct MysqlCreateTableStatement {

@@ -1,15 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
-use mongodb::Client;
-use sqlx::{MySql, Pool, Postgres};
-use strum::{Display, EnumString, IntoStaticStr};
-use tokio::time::Instant;
-
-use crate::extractor::resumer::{
-    recorder::{to_database::DatabaseRecorder, Recorder},
-    recovery::{from_database::DatabaseRecovery, from_log::LogRecovery, Recovery},
-};
 use dt_common::{
     config::{
         config_enums::TaskType, connection_auth_config::ConnectionAuthConfig,
@@ -18,6 +9,15 @@ use dt_common::{
     error::DtError,
     log_info, log_warn,
     meta::position::Position,
+};
+use mongodb::Client;
+use sqlx::{MySql, Pool, Postgres};
+use strum::{Display, EnumString, IntoStaticStr};
+use tokio::time::Instant;
+
+use crate::extractor::resumer::{
+    recorder::{to_database::DatabaseRecorder, Recorder},
+    recovery::{from_database::DatabaseRecovery, from_log::LogRecovery, Recovery},
 };
 pub mod recorder;
 pub mod recovery;

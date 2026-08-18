@@ -4,9 +4,6 @@ use std::{
 };
 
 use anyhow::bail;
-use futures::TryStreamExt;
-use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
-
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, ErrorCode},
@@ -29,6 +26,8 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
+use futures::TryStreamExt;
+use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 pub struct MysqlStructFetcher {
     pub conn_pool: Pool<MySql>,

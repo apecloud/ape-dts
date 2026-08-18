@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 use url::Url;
 use urlencoding::encode;
 
-use crate::{config::ini_loader::IniLoader, error::DtError};
-
 use super::ssl_config::SslConfig;
+use crate::{config::ini_loader::IniLoader, error::DtError};
 
 const BASIC_AUTH_USERNAME_KEY: &str = "username";
 const BASIC_AUTH_PASSWORD_KEY: &str = "password";

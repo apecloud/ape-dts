@@ -1,8 +1,7 @@
-use crate::rdb_filter::RdbFilter;
-
 use crate::meta::struct_meta::structure::{
     rbac::PgPrivilege, rbac::PgRole, rbac::PgRoleMember, structure_type::StructureType,
 };
+use crate::rdb_filter::RdbFilter;
 
 #[derive(Debug, Clone)]
 pub struct PgCreateRbacStatement {
@@ -119,13 +118,14 @@ impl PgCreateRbacStatement {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use dashmap::DashMap;
 
     use super::*;
     use crate::config::config_enums::DbType;
     use crate::meta::struct_meta::structure::rbac::{PgPrivilege, PgRole, PgRoleMember};
     use crate::rdb_filter::RdbFilter;
-    use std::collections::{HashMap, HashSet};
 
     fn build_filter() -> RdbFilter {
         let mut filter = RdbFilter {

@@ -14,11 +14,10 @@ use dt_common::quote_mysql;
 use dt_common::utils::sql_util::*;
 use dt_common::{log_debug, log_info};
 use futures::TryStreamExt;
+use quote_mysql as quote;
 use sqlx::{MySql, Pool, Row};
 
 use crate::extractor::base_splitter::{BaseSplitter, ChunkRange, EvenSplitOutcome, SnapshotChunk};
-
-use quote_mysql as quote;
 
 #[derive(Debug)]
 pub struct MySqlSnapshotSplitter {

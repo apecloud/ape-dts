@@ -2,10 +2,6 @@ use std::{cmp, collections::HashMap};
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mongodb::{bson::doc, Client};
-use tokio::time::Instant;
-
-use crate::{sinker::base_sinker::BaseSinker, Sinker};
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
     error::{DtResultExt, ErrorCode},
@@ -25,6 +21,10 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
+use mongodb::{bson::doc, Client};
+use tokio::time::Instant;
+
+use crate::{sinker::base_sinker::BaseSinker, Sinker};
 
 #[derive(Clone)]
 pub struct MongoStructSinker {

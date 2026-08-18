@@ -1,20 +1,20 @@
-use futures::{Stream, TryStreamExt};
 use std::collections::HashMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use sqlx::{mysql::MySqlRow, query, Error, MySql, Pool};
-
-use crate::{
-    fetcher::traits::Fetcher,
-    meta::database_mode::{Constraint, Database, Schema, Table},
-};
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
 use dt_task::task_util::TaskUtil;
+use futures::{Stream, TryStreamExt};
+use sqlx::{mysql::MySqlRow, query, Error, MySql, Pool};
+
+use crate::{
+    fetcher::traits::Fetcher,
+    meta::database_mode::{Constraint, Database, Schema, Table},
+};
 
 pub struct MysqlFetcher {
     pub pool: Option<Pool<MySql>>,

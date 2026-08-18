@@ -1,6 +1,14 @@
 use std::{str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
+use dt_common::{
+    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
+    error::DtError,
+    log_info,
+    meta::position::Position,
+    meta::redis::cluster_node::ClusterNode,
+    utils::redis_util::RedisUtil,
+};
 use mongodb::options::ClientOptions;
 use redis::Connection;
 use serde::{Deserialize, Serialize};
@@ -13,14 +21,6 @@ use url::Url;
 use crate::extractor::resumer::{
     RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
     DEFAULT_RESUMER_TABLE,
-};
-use dt_common::{
-    config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    error::DtError,
-    log_info,
-    meta::position::Position,
-    meta::redis::cluster_node::ClusterNode,
-    utils::redis_util::RedisUtil,
 };
 
 pub struct ResumerUtil {}
@@ -276,10 +276,11 @@ impl ResumerUtil {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::meta::position::Position;
+
     use crate::extractor::resumer::{
         utils::ResumerUtil, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,
     };
-    use dt_common::meta::position::Position;
 
     #[test]
     fn test_get_full_table_name() {

@@ -14,11 +14,10 @@ use dt_common::meta::{
 use dt_common::quote_pg;
 use dt_common::utils::sql_util::*;
 use futures::TryStreamExt;
+use quote_pg as quote;
 use sqlx::{Pool, Postgres, Row};
 
 use crate::extractor::base_splitter::{BaseSplitter, ChunkRange, EvenSplitOutcome, SnapshotChunk};
-
-use quote_pg as quote;
 
 pub struct PgSnapshotSplitter {
     basic: BaseSplitter,

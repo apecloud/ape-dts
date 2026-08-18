@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use dt_common::log_info;
 use dt_common::meta::{
@@ -11,7 +13,6 @@ use dt_common::meta::{
 use dt_common::rdb_filter::RdbFilter;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
-use std::collections::HashMap;
 
 use crate::{
     checker::check_log::CheckLog,

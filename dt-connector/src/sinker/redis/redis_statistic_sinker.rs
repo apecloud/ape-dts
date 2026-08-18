@@ -1,11 +1,10 @@
 use async_trait::async_trait;
-use serde::Serialize;
-use serde_json::json;
-
 use dt_common::log_statistic;
 use dt_common::meta::dt_data::DtData;
 use dt_common::meta::dt_data::DtItem;
 use dt_common::meta::redis::redis_statistic_type::RedisStatisticType;
+use serde::Serialize;
+use serde_json::json;
 
 use crate::sinker::base_sinker::BaseSinker;
 use crate::Sinker;

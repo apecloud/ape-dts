@@ -210,10 +210,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use anyhow::Context;
+
     use super::*;
     use crate::error::ErrorReport;
-    use anyhow::Context;
-    use std::io::{Error, ErrorKind};
 
     #[test]
     fn option_or_dt_error_returns_value() {

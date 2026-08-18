@@ -3,13 +3,12 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::json;
 
+use super::pg_col_type::PgColType;
 use crate::meta::rdb_tb_meta::RdbTbMeta;
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtOptionExt, DtResultExt, ErrorObject},
 };
-
-use super::pg_col_type::PgColType;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct PgTbMeta {

@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use dt_common::utils::time_util::TimeUtil;
 use tokio::task::JoinHandle;
 
-use crate::test_config_util::TestConfigUtil;
-
 use super::redis_test_runner::RedisTestRunner;
+use crate::test_config_util::TestConfigUtil;
 
 pub struct RedisCycleTestRunner {
     base: RedisTestRunner,
