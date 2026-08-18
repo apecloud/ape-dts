@@ -33,7 +33,10 @@ use dt_common::{
     log_error,
     log_filter::parse_size_limit,
     log_finished, log_info, log_warn,
-    meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
+    meta::{
+        dt_queue::DtQueue, mssql::mssql_connection_pool::MssqlConnectionPool, position::Position,
+        row_type::RowType, syncer::Syncer,
+    },
     monitor::{
         runtime_trace_monitor::RuntimeTraceMonitor,
         task_metrics::TaskMetricsType,
@@ -916,6 +919,7 @@ impl TaskRunner {
                         checker_db_type,
                         Some(conn_pool),
                         None,
+                        None,
                         filter,
                         router,
                         cfg.output.output_revise_sql,
@@ -937,6 +941,31 @@ impl TaskRunner {
                     .await?;
                     StructCheckerHandle::new(
                         checker_db_type,
+                        None,
+                        Some(conn_pool),
+                        None,
+                        filter,
+                        router,
+                        cfg.output.output_revise_sql,
+                        retry_interval_secs,
+                        max_retries,
+                        check_summary,
+                        monitor.clone(),
+                        task_id.to_string(),
+                    )
+                }
+                DbType::Mssql => {
+                    let conn_pool = MssqlConnectionPool::from_config(
+                        &checker_url,
+                        &checker_auth,
+                        checker_target.app_name.as_deref(),
+                        max_connections,
+                        checker_target.connection_timeout_secs,
+                    )
+                    .await?;
+                    StructCheckerHandle::new(
+                        checker_db_type,
+                        None,
                         None,
                         Some(conn_pool),
                         filter,

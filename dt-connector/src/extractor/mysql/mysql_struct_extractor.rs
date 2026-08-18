@@ -6,6 +6,7 @@ use sqlx::{MySql, Pool};
 use crate::{
     extractor::base_extractor::{BaseExtractor, ExtractState},
     meta_fetcher::mysql::mysql_struct_fetcher::MysqlStructFetcher,
+    rdb_struct_filter::RdbStructFilter,
     Extractor,
 };
 use dt_common::{
@@ -57,7 +58,7 @@ impl MysqlStructExtractor {
         let mut fetcher = MysqlStructFetcher {
             conn_pool: self.conn_pool.to_owned(),
             dbs,
-            filter: Some(self.filter.to_owned()),
+            filter: RdbStructFilter::for_source(self.filter.to_owned()),
             meta_manager,
         };
 

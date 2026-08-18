@@ -297,7 +297,7 @@ impl TaskConfig {
             }
         } else {
             match (kind, sink_type, target_db_type) {
-                (TaskKind::Struct, SinkType::Check, DbType::Mysql | DbType::Pg) => {
+                (TaskKind::Struct, SinkType::Check, DbType::Mysql | DbType::Pg | DbType::Mssql) => {
                     Some(CheckMode::Standalone)
                 }
                 (
@@ -843,7 +843,7 @@ impl TaskConfig {
             },
 
             DbType::Mssql => match sink_type {
-                SinkType::Write => {
+                SinkType::Write | SinkType::Check => {
                     Self::validate_mssql_connection(
                         SINKER,
                         &url,
@@ -2214,6 +2214,71 @@ conflict_policy=ignore
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn mssql_struct_check_config_is_loaded() {
+        let config = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=struct
+url=server=tcp:127.0.0.1,1433;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+
+[sinker]
+db_type=mssql
+sink_type=check
+url=server=tcp:127.0.0.1,1434;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+app_name=mssql-struct-check
+connection_timeout_secs=9
+max_connections=3
+"#,
+        )
+        .expect("MSSQL standalone struct check config should be accepted");
+
+        assert_eq!(
+            config.task_type(),
+            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone)))
+        );
+        assert_eq!(
+            config.checker_target().expect("checker target").db_type,
+            DbType::Mssql
+        );
+        assert!(config.checker.is_some());
+        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+    }
+
+    #[test]
+    fn mssql_snapshot_check_config_remains_unsupported() {
+        let result = load_temp_task_config(
+            r#"[extractor]
+db_type=mssql
+extract_type=snapshot
+url=server=tcp:127.0.0.1,1433;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+
+[sinker]
+db_type=mssql
+sink_type=check
+url=server=tcp:127.0.0.1,1434;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+
+[parallelizer]
+parallel_type=snapshot
+parallel_size=1
+"#,
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]

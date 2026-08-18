@@ -2,7 +2,7 @@
 mod test {
     use serial_test::serial;
 
-    use crate::test_runner::test_base::TestBase;
+    use crate::test_runner::{rdb_struct_test_runner::RdbStructTestRunner, test_base::TestBase};
 
     #[tokio::test]
     #[serial]
@@ -14,7 +14,18 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn struct_filter_test_1() {
-        TestBase::run_mssql_struct_test("mssql_to_mssql/struct/filter_test_1").await;
+        let mut runner = RdbStructTestRunner::new("mssql_to_mssql/struct/filter_test_1")
+            .await
+            .unwrap();
+        runner.run_struct_test_without_check().await.unwrap();
+        runner
+            .base
+            .execute_dst_sqls(&runner.base.base.dst_test_sqls)
+            .await
+            .unwrap();
+        TestBase::run_check_test("mssql_to_mssql/struct/filter_test_1/check").await;
+        runner.base.execute_clean_sqls().await.unwrap();
+        runner.close().await.unwrap();
     }
 
     /// do_structures=constraint,index
@@ -33,7 +44,13 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn struct_route_test() {
-        TestBase::run_mssql_struct_test("mssql_to_mssql/struct/route_test").await;
+        let mut runner = RdbStructTestRunner::new("mssql_to_mssql/struct/route_test")
+            .await
+            .unwrap();
+        runner.run_mssql_struct_test().await.unwrap();
+        TestBase::run_check_test("mssql_to_mssql/struct/route_test/check").await;
+        runner.base.execute_clean_sqls().await.unwrap();
+        runner.close().await.unwrap();
     }
 
     #[tokio::test]
