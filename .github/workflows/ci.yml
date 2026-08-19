@@ -41,8 +41,9 @@ jobs:
           submodules: true
 
       - name: Setup nightly rustfmt
-        uses: dtolnay/rust-toolchain@nightly-2025-10-30
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2025-10-30
           components: rustfmt
 
       - name: Setup Rust toolchain
