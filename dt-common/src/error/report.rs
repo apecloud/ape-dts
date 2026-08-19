@@ -177,9 +177,8 @@ mod tests {
     use chrono::DateTime;
     use url::Url;
 
-    use crate::error::{DtError, DtErrorContext, DtErrorContextExt};
-
     use super::*;
+    use crate::error::{DtError, DtErrorContext, DtErrorContextExt};
 
     #[test]
     fn preserves_structured_error_through_anyhow_context() {

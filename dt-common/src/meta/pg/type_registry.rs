@@ -1,10 +1,10 @@
-use futures::TryStreamExt;
-use sqlx::{postgres::PgRow, Pool, Postgres, Row};
 use std::collections::HashMap;
 
-use crate::error::{DtResultExt, ErrorCode};
+use futures::TryStreamExt;
+use sqlx::{postgres::PgRow, Pool, Postgres, Row};
 
 use super::{pg_col_type::PgColType, pg_value_type::PgValueType};
+use crate::error::{DtResultExt, ErrorCode};
 
 #[derive(Clone)]
 pub struct TypeRegistry {

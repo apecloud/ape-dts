@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
 use dt_common::{
     config::parallelizer_config::ChunkPartitionerRebalanceConfig,
     meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData},

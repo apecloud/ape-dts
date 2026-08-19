@@ -1,5 +1,6 @@
-use crate::error::{DtError, DtErrorContextExt, Stage};
 use strum::IntoStaticStr;
+
+use crate::error::{DtError, DtErrorContextExt, Stage};
 
 #[derive(Clone, IntoStaticStr, Debug)]
 pub enum MongoCdcSource {

@@ -2,19 +2,6 @@ use std::{cmp, collections::HashMap};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use mongodb::{
-    bson::{doc, raw::RawDocumentBuf, Bson, Document},
-    Client, Collection,
-};
-use tokio::time::Instant;
-
-use crate::{
-    call_batch_fn,
-    common::mongo::{changestream_parser, oplog_parser},
-    rdb_router::RdbRouter,
-    sinker::{base_sinker::BaseSinker, checkable_sinker::CheckableSink},
-    Sinker,
-};
 use dt_common::{
     error::{DtResultExt, ErrorCode},
     log_error, log_warn,
@@ -30,6 +17,19 @@ use dt_common::{
         row_type::RowType,
     },
     utils::limit_queue::LimitedQueue,
+};
+use mongodb::{
+    bson::{doc, raw::RawDocumentBuf, Bson, Document},
+    Client, Collection,
+};
+use tokio::time::Instant;
+
+use crate::{
+    call_batch_fn,
+    common::mongo::{changestream_parser, oplog_parser},
+    rdb_router::RdbRouter,
+    sinker::{base_sinker::BaseSinker, checkable_sinker::CheckableSink},
+    Sinker,
 };
 
 #[derive(Clone)]

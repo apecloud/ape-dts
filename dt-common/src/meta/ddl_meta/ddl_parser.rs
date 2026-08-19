@@ -18,8 +18,6 @@ use nom::{
 };
 use regex::Regex;
 
-use crate::error::DtError;
-
 use super::{
     ddl_data::DdlData,
     ddl_statement::{
@@ -37,6 +35,7 @@ use super::{
         keyword_s_to_z,
     },
 };
+use crate::error::DtError;
 use crate::{config::config_enums::DbType, utils::sql_util::SqlUtil};
 
 type SchemaTable = (Option<Vec<u8>>, Vec<u8>);
@@ -1043,9 +1042,8 @@ fn to_string(i: &[u8]) -> String {
 #[cfg(test)]
 mod test_mysql {
 
-    use crate::{config::config_enums::DbType, meta::ddl_meta::ddl_parser::DdlParser};
-
     use super::*;
+    use crate::{config::config_enums::DbType, meta::ddl_meta::ddl_parser::DdlParser};
 
     #[test]
     fn test_create_table_with_schema_mysql() {

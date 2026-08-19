@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-
 use dashmap::DashMap;
 use dt_common::meta::position::Position;
 

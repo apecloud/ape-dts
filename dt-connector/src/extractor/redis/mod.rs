@@ -1,5 +1,6 @@
-use async_trait::async_trait;
 use std::io::{Cursor, Read};
+
+use async_trait::async_trait;
 
 pub mod rdb;
 pub mod redis_client;

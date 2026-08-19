@@ -1,10 +1,12 @@
-use crate::test_runner::mock_data::constants::ConstantValues;
-use crate::test_runner::mock_data::random::{Random, RandomValue};
+use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use fake::faker::internet::raw::{IPv4, IPv6};
 use fake::locales::EN;
 use fake::Fake;
-use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use crate::test_runner::mock_data::constants::ConstantValues;
+use crate::test_runner::mock_data::random::{Random, RandomValue};
 
 /// PostgreSQL inet: IPv4 or IPv6 host address with optional subnet
 /// Format: address/y where y is the netmask bits (optional)

@@ -1,11 +1,6 @@
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
-use kafka::producer::{Producer, RequiredAcks};
-use reqwest::{redirect::Policy, Url};
-use sqlx::types::chrono::Utc;
-use tokio::sync::RwLock;
-
 use dt_common::{
     config::{config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig},
     error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
@@ -24,9 +19,6 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::redis_util::RedisUtil,
 };
-
-use super::task_util::TaskUtil;
-use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 use dt_connector::{
     checker::CheckerHandle,
     data_marker::DataMarker,
@@ -51,6 +43,13 @@ use dt_connector::{
     },
     Sinker,
 };
+use kafka::producer::{Producer, RequiredAcks};
+use reqwest::{redirect::Policy, Url};
+use sqlx::types::chrono::Utc;
+use tokio::sync::RwLock;
+
+use super::task_util::TaskUtil;
+use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 
 type Sinkers = Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>;
 

@@ -1,6 +1,7 @@
+use fake::{Fake, Faker};
+
 use crate::test_runner::mock_data::constants::ConstantValues;
 use crate::test_runner::mock_data::random::{Random, RandomValue};
-use fake::{Fake, Faker};
 
 // =============================================================================
 // WKT (Well-Known Text) formatting utilities

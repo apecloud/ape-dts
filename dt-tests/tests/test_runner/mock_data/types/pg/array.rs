@@ -141,8 +141,9 @@ impl Array {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use dt_common::config::config_enums::DbType;
+
+    use super::*;
 
     fn pg_ctx() -> MockDbContext {
         MockDbContext::new(DbType::Pg, "16.0")

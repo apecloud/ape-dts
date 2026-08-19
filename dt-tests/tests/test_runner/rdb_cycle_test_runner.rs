@@ -1,12 +1,12 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use dt_common::utils::time_util::TimeUtil;
 use dt_connector::data_marker::DataMarker;
-use std::collections::HashMap;
 use tokio::task::JoinHandle;
 
-use crate::{test_config_util::TestConfigUtil, test_runner::mongo_test_runner::SRC};
-
 use super::rdb_test_runner::RdbTestRunner;
+use crate::{test_config_util::TestConfigUtil, test_runner::mongo_test_runner::SRC};
 
 pub struct RdbCycleTestRunner {
     base: RdbTestRunner,

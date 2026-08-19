@@ -40,10 +40,16 @@ jobs:
         with:
           submodules: true
 
+      - name: Setup nightly rustfmt
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-10-30
+          components: rustfmt
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -56,7 +62,7 @@ jobs:
         run: |
           cargo metadata --format-version 1 --no-deps \
             | jq -r '.packages[] | select(.name != "dt-tests") | "--package", .name' \
-            | xargs -r cargo fmt --check
+            | xargs -r cargo +nightly-2025-10-30 fmt --check
 
       - name: Run lint checks (clippy)
         id: lint

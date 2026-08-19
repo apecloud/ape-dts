@@ -3,15 +3,6 @@ use std::str::FromStr;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures::TryStreamExt;
-use mongodb::bson::doc;
-use sqlx::{query, Error as SqlxError, Row};
-
-use crate::extractor::resumer::{
-    recovery::Recovery,
-    utils::{RedisResumerRecord, ResumerUtil},
-    ResumerDbPool, ResumerType,
-};
 use dt_common::{
     config::resumer_config::ResumerConfig,
     error::{
@@ -21,6 +12,15 @@ use dt_common::{
     log_info, log_warn,
     meta::position::Position,
     utils::redis_util::RedisUtil,
+};
+use futures::TryStreamExt;
+use mongodb::bson::doc;
+use sqlx::{query, Error as SqlxError, Row};
+
+use crate::extractor::resumer::{
+    recovery::Recovery,
+    utils::{RedisResumerRecord, ResumerUtil},
+    ResumerDbPool, ResumerType,
 };
 
 pub struct DatabaseRecovery {

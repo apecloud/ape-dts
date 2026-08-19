@@ -1,7 +1,7 @@
-use serde_json::Value;
 use std::{collections::HashSet, fs, fs::File};
 
 use dt_common::config::config_enums::DbType;
+use serde_json::Value;
 
 use super::base_test_runner::BaseTestRunner;
 
@@ -335,8 +335,9 @@ impl CheckUtil {
 
 #[cfg(test)]
 mod tests {
-    use super::CheckUtil;
     use serde_json::json;
+
+    use super::CheckUtil;
 
     fn summary_log(diff_count: usize) -> String {
         format!(

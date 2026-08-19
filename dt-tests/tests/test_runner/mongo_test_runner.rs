@@ -1,4 +1,3 @@
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 
@@ -17,11 +16,11 @@ use mongodb::{
     Client,
 };
 use regex::{Captures, Regex};
+use serde_json::Value;
 use sqlx::types::chrono::Utc;
 
-use crate::test_config_util::TestConfigUtil;
-
 use super::base_test_runner::BaseTestRunner;
+use crate::test_config_util::TestConfigUtil;
 
 pub struct MongoTestRunner {
     pub base: BaseTestRunner,
@@ -1389,8 +1388,9 @@ impl MongoTestRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::MongoTestRunner;
     use serde_json::Value;
+
+    use super::MongoTestRunner;
 
     #[test]
     fn normalize_doc_string_quotes_dollar_prefixed_keys() {

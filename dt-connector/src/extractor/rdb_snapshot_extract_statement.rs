@@ -344,13 +344,15 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashMap;
+
     use dt_common::meta::{
         mysql::mysql_col_type::MysqlColType, mysql::mysql_tb_meta::MysqlTbMeta,
         pg::pg_col_type::PgColType, pg::pg_tb_meta::PgTbMeta, pg::pg_value_type::PgValueType,
         rdb_tb_meta::RdbTbMeta,
     };
-    use std::collections::HashMap;
+
+    use super::*;
 
     fn create_mysql_tb_meta() -> MysqlTbMeta {
         let cols = vec![

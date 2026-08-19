@@ -1,7 +1,7 @@
-use crate::extractor::redis::StreamReader;
+use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 use super::rdb_reader::RdbReader;
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use crate::extractor::redis::StreamReader;
 
 impl RdbReader<'_> {
     pub async fn read_u8(&mut self) -> anyhow::Result<u8> {

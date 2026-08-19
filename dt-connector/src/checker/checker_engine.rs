@@ -4,17 +4,6 @@ use std::{
 };
 
 use anyhow::Context;
-use mongodb::bson::Document;
-use tokio::time::{sleep, Duration, Instant};
-
-use super::{
-    cdc_state::build_identity_key, retry_buffer::RetryItem, CheckContext, CheckEntry,
-    CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta, DataChecker, RecheckKey,
-};
-use crate::{
-    checker::check_log::{to_json_line, CheckLog, DiffColValue},
-    sinker::mongo::mongo_cmd,
-};
 use dt_common::{
     error::{ErrorCode, ErrorReport},
     log_diff, log_miss, log_sql, log_warn,
@@ -27,6 +16,17 @@ use dt_common::{
         task_monitor_handle::TaskMonitorHandle,
     },
     utils::limit_queue::LimitedQueue,
+};
+use mongodb::bson::Document;
+use tokio::time::{sleep, Duration, Instant};
+
+use super::{
+    cdc_state::build_identity_key, retry_buffer::RetryItem, CheckContext, CheckEntry,
+    CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta, DataChecker, RecheckKey,
+};
+use crate::{
+    checker::check_log::{to_json_line, CheckLog, DiffColValue},
+    sinker::mongo::mongo_cmd,
 };
 
 impl<C: Checker> DataChecker<C> {
@@ -1086,13 +1086,15 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CheckContext, CheckerIo};
-    use super::*;
-    use async_trait::async_trait;
     use std::sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex as StdMutex,
     };
+
+    use async_trait::async_trait;
+
+    use super::super::{CheckContext, CheckerIo};
+    use super::*;
 
     struct NoopChecker;
 

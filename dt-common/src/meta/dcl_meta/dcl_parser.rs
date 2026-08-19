@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use anyhow::bail;
 use nom::branch::alt;
 use nom::bytes::complete::tag_no_case;
@@ -5,7 +7,6 @@ use nom::character::complete::{multispace0, multispace1};
 use nom::sequence::tuple;
 use nom::IResult;
 use regex::Regex;
-use std::borrow::Cow;
 
 use crate::{
     config::config_enums::DbType,

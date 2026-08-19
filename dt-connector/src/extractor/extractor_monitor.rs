@@ -1,6 +1,5 @@
-use tokio::time::Instant;
-
 use dt_common::monitor::{counter_type::CounterType, task_monitor_handle::TaskMonitorHandle};
+use tokio::time::Instant;
 
 #[derive(Clone, Default)]
 pub struct ExtractorCounters {

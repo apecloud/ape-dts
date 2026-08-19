@@ -1,9 +1,9 @@
 use anyhow::bail;
+use dt_common::error::DtError;
+use dt_common::meta::redis::redis_object::RedisString;
 
 use super::rdb_reader::RdbReader;
 use crate::extractor::redis::StreamReader;
-use dt_common::error::DtError;
-use dt_common::meta::redis::redis_object::RedisString;
 
 const RDB_ENC_INT8: u8 = 0;
 const RDB_ENC_INT16: u8 = 1;

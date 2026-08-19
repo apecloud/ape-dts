@@ -1,12 +1,6 @@
-use async_trait::async_trait;
-use redis::{Connection, ConnectionLike};
 use std::{cmp, collections::HashMap};
-use url::Url;
 
-use crate::{
-    extractor::base_extractor::{BaseExtractor, ExtractState},
-    Extractor,
-};
+use async_trait::async_trait;
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     error::{DtError, DtOptionExt},
@@ -15,6 +9,13 @@ use dt_common::{
         cluster_node::ClusterNode, command::cmd_encoder::CmdEncoder, redis_object::RedisCmd,
     },
     utils::redis_util::RedisUtil,
+};
+use redis::{Connection, ConnectionLike};
+use url::Url;
+
+use crate::{
+    extractor::base_extractor::{BaseExtractor, ExtractState},
+    Extractor,
 };
 
 const SLOTS_COUNT: usize = 16384;

@@ -12,7 +12,6 @@ use dt_common::{
     utils::{redis_util::RedisUtil, sql_util::SqlUtil, time_util::TimeUtil},
 };
 use dt_connector::rdb_router::RdbRouter;
-
 use redis::Value;
 
 use super::{

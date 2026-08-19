@@ -3,6 +3,7 @@ use std::{collections::HashMap, str::FromStr};
 use anyhow::Context;
 use apache_avro::{from_avro_datum, to_avro_datum, types::Value, Schema};
 
+use super::avro_converter_schema::{AvroConverterSchema, AvroFieldDef};
 use crate::{
     config::config_enums::DbType,
     error::DtError,
@@ -16,8 +17,6 @@ use crate::{
         row_type::RowType,
     },
 };
-
-use super::avro_converter_schema::{AvroConverterSchema, AvroFieldDef};
 
 #[derive(Clone)]
 pub struct AvroConverter {

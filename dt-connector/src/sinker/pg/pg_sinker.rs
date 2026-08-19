@@ -2,17 +2,6 @@ use std::{cmp, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
-use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions},
-    Executor, Pool, Postgres,
-};
-use tokio::{sync::RwLock, time::Instant};
-
-use crate::sinker::checkable_sinker::CheckableSink;
-use crate::{
-    call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
-    rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
-};
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     error::{DtResultExt, ErrorCode},
@@ -26,6 +15,17 @@ use dt_common::{
         row_type::RowType,
     },
     utils::limit_queue::LimitedQueue,
+};
+use sqlx::{
+    postgres::{PgConnectOptions, PgPoolOptions},
+    Executor, Pool, Postgres,
+};
+use tokio::{sync::RwLock, time::Instant};
+
+use crate::sinker::checkable_sinker::CheckableSink;
+use crate::{
+    call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
+    rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
 };
 
 #[derive(Clone)]

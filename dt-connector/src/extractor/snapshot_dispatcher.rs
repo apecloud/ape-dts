@@ -1,12 +1,11 @@
 use std::{collections::VecDeque, future::Future, sync::Arc};
 
-use tokio::task::JoinSet;
-
 use dt_common::{
     error::{DtError, DtResultExt, ErrorCode},
     monitor::task_monitor_handle::TaskMonitorHandle,
     runtime_trace,
 };
+use tokio::task::JoinSet;
 
 use super::{
     base_extractor::ExtractState,

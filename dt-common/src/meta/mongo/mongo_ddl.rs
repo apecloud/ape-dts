@@ -265,8 +265,9 @@ fn index_name_from_bson(index: &Bson) -> Option<Bson> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mongodb::bson::{doc, raw::RawDocumentBuf};
+
+    use super::*;
 
     #[test]
     fn shard_collection_ddl_round_trips_command() {

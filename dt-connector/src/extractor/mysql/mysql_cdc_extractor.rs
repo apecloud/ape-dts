@@ -11,26 +11,6 @@ use std::{
 use anyhow::{bail, Context as AnyhowContext};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use sqlx::{mysql::MySqlArguments, query::Query, MySql, Pool};
-use tokio::{sync::Mutex, time::Instant};
-
-use mysql_binlog_connector_rust::{
-    binlog_client::{BinlogClient, StartPosition},
-    command::gtid_set::GtidSet,
-    event::{
-        event_data::EventData, event_header::EventHeader, query_event::QueryEvent,
-        row_event::RowEvent, table_map_event::TableMapEvent,
-    },
-};
-
-use crate::{
-    extractor::{
-        base_extractor::{BaseExtractor, ExtractState},
-        mysql::binlog_util::BinlogUtil,
-        resumer::recovery::Recovery,
-    },
-    Extractor,
-};
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     error::{DtError, DtOptionExt},
@@ -42,6 +22,25 @@ use dt_common::{
     },
     rdb_filter::RdbFilter,
     utils::time_util::TimeUtil,
+};
+use mysql_binlog_connector_rust::{
+    binlog_client::{BinlogClient, StartPosition},
+    command::gtid_set::GtidSet,
+    event::{
+        event_data::EventData, event_header::EventHeader, query_event::QueryEvent,
+        row_event::RowEvent, table_map_event::TableMapEvent,
+    },
+};
+use sqlx::{mysql::MySqlArguments, query::Query, MySql, Pool};
+use tokio::{sync::Mutex, time::Instant};
+
+use crate::{
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        mysql::binlog_util::BinlogUtil,
+        resumer::recovery::Recovery,
+    },
+    Extractor,
 };
 
 pub struct MysqlCdcExtractor {

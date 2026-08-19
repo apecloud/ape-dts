@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use anyhow::{bail, Context, Ok};
+use dt_common::meta::{col_value::ColValue, row_data::RowData};
 use dt_common::{
     config::{
         config_enums::DbType, config_token_parser::ConfigTokenParser, router_config::RouterConfig,
@@ -10,9 +13,6 @@ use dt_common::{
     },
     utils::sql_util::SqlUtil,
 };
-use std::collections::HashMap;
-
-use dt_common::meta::{col_value::ColValue, row_data::RowData};
 use serde::{Deserialize, Serialize};
 
 type SchemaMap = HashMap<String, String>;

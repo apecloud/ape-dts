@@ -6,13 +6,12 @@ use sqlx::{
     MySql, Pool,
 };
 
+use super::mysql_meta_fetcher::MysqlMetaFetcher;
 use crate::{
     config::{config_enums::ConflictPolicyEnum, connection_auth_config::ConnectionAuthConfig},
     log_error, log_info,
     meta::ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
 };
-
-use super::mysql_meta_fetcher::MysqlMetaFetcher;
 
 #[derive(Clone)]
 pub struct MysqlDbEngineMetaCenter {

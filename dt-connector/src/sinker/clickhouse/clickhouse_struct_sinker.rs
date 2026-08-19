@@ -1,6 +1,5 @@
-use crate::{rdb_router::RdbRouter, Sinker};
-
 use anyhow::bail;
+use async_trait::async_trait;
 use clickhouse::Client;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
@@ -19,7 +18,7 @@ use dt_common::{
     rdb_filter::RdbFilter,
 };
 
-use async_trait::async_trait;
+use crate::{rdb_router::RdbRouter, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const SIGN_COL_TYPE: &str = "Int8";

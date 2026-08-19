@@ -454,10 +454,11 @@ impl From<Bson> for ColValue {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::meta::tagged_col_value_map;
     use crate::meta::tagged_col_value_map::TaggedColValueDef as MetaTaggedColValueDef;
-    use std::collections::BTreeMap;
 
     #[test]
     fn test_is_same_value() {

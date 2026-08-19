@@ -1,6 +1,7 @@
+use std::fmt;
+
 use crate::test_runner::mock_data::constants::ConstantValues;
 use crate::test_runner::mock_data::random::{Random, RandomValue};
-use std::fmt;
 
 /// PostgreSQL money: currency amount with fixed fractional precision
 /// Range: -92233720368547758.08 to +92233720368547758.07

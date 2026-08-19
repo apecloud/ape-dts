@@ -1,13 +1,6 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-use sqlx::{Pool, Postgres};
-
-use crate::{
-    extractor::base_extractor::{BaseExtractor, ExtractState},
-    meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
-    Extractor,
-};
 use dt_common::{
     config::task_config::DEFAULT_DB_BATCH_SIZE,
     log_info, log_warn,
@@ -16,6 +9,13 @@ use dt_common::{
         structure::structure_type::StructureType,
     },
     rdb_filter::RdbFilter,
+};
+use sqlx::{Pool, Postgres};
+
+use crate::{
+    extractor::base_extractor::{BaseExtractor, ExtractState},
+    meta_fetcher::pg::pg_struct_fetcher::PgStructFetcher,
+    Extractor,
 };
 
 pub struct PgStructExtractor {

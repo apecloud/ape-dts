@@ -2,15 +2,6 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use anyhow::{Context, Error};
 use async_trait::async_trait;
-use tokio::sync::Mutex;
-use url::Url;
-
-use super::traits::Prechecker;
-use crate::{
-    config::precheck_config::PrecheckConfig,
-    fetcher::{redis::redis_fetcher::RedisFetcher, traits::Fetcher},
-    meta::{check_item::CheckItem, check_result::CheckResult},
-};
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
@@ -31,6 +22,15 @@ use dt_connector::{
         redis::{redis_client::RedisClient, redis_psync_extractor::RedisPsyncExtractor},
     },
     rdb_router::RdbRouter,
+};
+use tokio::sync::Mutex;
+use url::Url;
+
+use super::traits::Prechecker;
+use crate::{
+    config::precheck_config::PrecheckConfig,
+    fetcher::{redis::redis_fetcher::RedisFetcher, traits::Fetcher},
+    meta::{check_item::CheckItem, check_result::CheckResult},
 };
 
 pub struct RedisPrechecker {
@@ -260,8 +260,9 @@ impl Prechecker for RedisPrechecker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use dt_common::meta::redis::cluster_node::ClusterNode;
+
+    use super::*;
 
     fn cluster_node(address: &str) -> ClusterNode {
         let (host, port) = address.split_once(':').unwrap();

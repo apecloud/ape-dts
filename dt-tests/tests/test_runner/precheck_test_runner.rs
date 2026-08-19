@@ -4,7 +4,6 @@ use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
     logger::TaskLogger,
 };
-
 use dt_precheck::{
     builder::prechecker_builder::PrecheckerBuilder, config::task_config::PrecheckTaskConfig,
     meta::check_result::CheckResult,

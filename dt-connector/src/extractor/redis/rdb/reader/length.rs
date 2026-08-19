@@ -1,9 +1,9 @@
-use crate::extractor::redis::StreamReader;
-
-use super::rdb_reader::RdbReader;
 use anyhow::bail;
 use byteorder::{BigEndian, ByteOrder};
 use dt_common::error::DtError;
+
+use super::rdb_reader::RdbReader;
+use crate::extractor::redis::StreamReader;
 
 const RDB_6_BIT_LEN: u8 = 0;
 const RDB_14_BIT_LEN: u8 = 1;

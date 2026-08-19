@@ -1,8 +1,7 @@
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::extractor::redis::StreamReader;
-
 use super::rdb_reader::RdbReader;
+use crate::extractor::redis::StreamReader;
 
 impl RdbReader<'_> {
     pub async fn read_float(&mut self) -> anyhow::Result<f64> {

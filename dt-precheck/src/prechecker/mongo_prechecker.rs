@@ -1,16 +1,15 @@
 use async_trait::async_trait;
 use dt_common::config::{config_enums::DbType, filter_config::FilterConfig};
+use dt_common::error::DtError;
 use mongodb::bson::Bson;
 use regex::Regex;
 
+use super::traits::Prechecker;
 use crate::{
     config::precheck_config::PrecheckConfig,
     fetcher::{mongo::mongo_fetcher::MongoFetcher, traits::Fetcher},
     meta::{check_item::CheckItem, check_result::CheckResult},
 };
-
-use super::traits::Prechecker;
-use dt_common::error::DtError;
 
 const MONGO_SUPPORTED_VERSION_REGEX: &str = r"4.*|5.0.*|6.0.*|7.0.*";
 

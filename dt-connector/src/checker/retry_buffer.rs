@@ -1,8 +1,7 @@
 use std::{collections::VecDeque, mem::size_of};
 
-use tokio::time::Instant;
-
 use dt_common::meta::row_data::RowData;
+use tokio::time::Instant;
 
 #[derive(Debug)]
 pub(super) struct RetryItem {

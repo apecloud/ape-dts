@@ -256,9 +256,9 @@ impl<T: MockColType + DeserializeOwned> MockData<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use dt_common::config::config_enums::DbType;
 
+    use super::*;
     use crate::test_runner::mock_data::{
         context::MockDbContext, mysql_type::MysqlType, pg_type::PgType,
     };

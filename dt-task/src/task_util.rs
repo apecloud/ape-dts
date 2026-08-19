@@ -1,15 +1,6 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
-use futures::{future::join_all, TryStreamExt};
-use mongodb::{bson::doc, options::ClientOptions, Client};
-use opendal::Operator;
-use sqlx::{
-    mysql::{MySqlConnectOptions, MySqlPoolOptions},
-    postgres::{PgConnectOptions, PgPoolOptions},
-    ConnectOptions, Executor, MySql, Pool, Postgres, Row,
-};
-
 use dt_common::{
     config::{
         config_enums::{DbType, RdbTransactionIsolation, SinkType, TaskKind, TaskType},
@@ -43,6 +34,14 @@ use dt_connector::{
     extractor::resumer::{
         build_recorder, build_recovery, recorder::Recorder, recovery::Recovery, utils::ResumerUtil,
     },
+};
+use futures::{future::join_all, TryStreamExt};
+use mongodb::{bson::doc, options::ClientOptions, Client};
+use opendal::Operator;
+use sqlx::{
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
+    ConnectOptions, Executor, MySql, Pool, Postgres, Row,
 };
 use tokio::select;
 use tokio_util::sync::CancellationToken;

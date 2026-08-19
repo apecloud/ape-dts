@@ -386,9 +386,8 @@ mod tests {
 
     use prometheus::TextEncoder;
 
-    use crate::{config::metrics_config::MetricsConfig, monitor::task_metrics::TaskMetricsType};
-
     use super::PrometheusMetrics;
+    use crate::{config::metrics_config::MetricsConfig, monitor::task_metrics::TaskMetricsType};
 
     #[test]
     fn exports_sinker_worker_metrics_with_public_units() -> anyhow::Result<()> {

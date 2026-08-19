@@ -3,17 +3,16 @@ use std::collections::HashSet;
 use anyhow::bail;
 use async_trait::async_trait;
 use dt_common::config::{config_enums::DbType, filter_config::FilterConfig};
+use dt_common::error::DtError;
 use regex::Regex;
 
+use super::traits::Prechecker;
 use crate::{
     config::precheck_config::PrecheckConfig,
     fetcher::{mysql::mysql_fetcher::MysqlFetcher, traits::Fetcher},
     meta::{check_item::CheckItem, check_result::CheckResult, db_table_model::DbTable},
     prechecker::basic::BasicPrechecker,
 };
-
-use super::traits::Prechecker;
-use dt_common::error::DtError;
 
 const MYSQL_SUPPORT_DB_VERSION_REGEX: &str = r"5\..*|8\..*";
 

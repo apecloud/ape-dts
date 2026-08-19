@@ -2,6 +2,20 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
+use dt_common::{
+    config::config_enums::{DbType, RdbParallelType},
+    error::{DtError, DtErrorContextExt, Stage},
+    log_error, log_info,
+    meta::{
+        col_value::ColValue,
+        mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
+        order_key::OrderKey,
+        position::Position,
+        row_data::RowData,
+        row_type::RowType,
+    },
+    rdb_filter::RdbFilter,
+};
 use mongodb::{
     bson::{doc, oid::ObjectId, raw::RawDocumentBuf, Document},
     options::FindOptions,
@@ -17,20 +31,6 @@ use crate::{
         snapshot_dispatcher::SnapshotDispatcher,
     },
     Extractor,
-};
-use dt_common::{
-    config::config_enums::{DbType, RdbParallelType},
-    error::{DtError, DtErrorContextExt, Stage},
-    log_error, log_info,
-    meta::{
-        col_value::ColValue,
-        mongo::{mongo_constant::MongoConstants, mongo_key::MongoKey},
-        order_key::OrderKey,
-        position::Position,
-        row_data::RowData,
-        row_type::RowType,
-    },
-    rdb_filter::RdbFilter,
 };
 
 pub struct MongoSnapshotExtractor {

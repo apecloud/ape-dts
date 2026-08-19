@@ -498,8 +498,9 @@ fn randomish_u64() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use dt_common::config::task_config::TaskConfig;
+
+    use super::*;
 
     fn paths() -> (&'static Path, &'static Path) {
         (

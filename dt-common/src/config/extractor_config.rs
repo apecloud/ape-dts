@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::config_enums::{DbType, ExtractType};
 use crate::{
     config::{
         config_enums::RdbParallelType, connection_auth_config::ConnectionAuthConfig,
@@ -7,8 +8,6 @@ use crate::{
     },
     meta::mongo::mongo_cdc_source::MongoCdcSource,
 };
-
-use super::config_enums::{DbType, ExtractType};
 
 #[derive(Clone, Debug)]
 pub enum ExtractorConfig {

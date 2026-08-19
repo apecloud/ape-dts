@@ -1,9 +1,5 @@
 use std::time::Duration;
 
-use crate::test_config_util::TestConfigUtil;
-
-use super::base_test_runner::BaseTestRunner;
-use super::rdb_test_runner::RdbTestRunner;
 use dt_common::config::sinker_config::SinkerConfig;
 use dt_common::config::task_config::TaskConfig;
 use dt_common::utils::time_util::TimeUtil;
@@ -13,6 +9,10 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::metadata::Metadata;
 use rdkafka::ClientConfig;
 use regex::Regex;
+
+use super::base_test_runner::BaseTestRunner;
+use super::rdb_test_runner::RdbTestRunner;
+use crate::test_config_util::TestConfigUtil;
 
 /// This is used for test cases: rdb(src) -> kafka -> rdb(dst).
 /// There are 2 tasks running:

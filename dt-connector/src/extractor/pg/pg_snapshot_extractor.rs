@@ -5,23 +5,6 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use futures::TryStreamExt;
-use sqlx::{Pool, Postgres, Row};
-
-use crate::{
-    extractor::{
-        base_extractor::{BaseExtractor, ExtractState},
-        base_splitter::SnapshotChunk,
-        estimated_sample_limit,
-        pg::pg_snapshot_splitter::PgSnapshotSplitter,
-        rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
-        resumer::recovery::Recovery,
-        snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
-        snapshot_dispatcher::{SnapshotDispatcher, TableMonitorGuard},
-        snapshot_types::SnapshotTableId,
-    },
-    Extractor,
-};
 use dt_common::utils::sql_util::PG_ESCAPE;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
@@ -40,8 +23,24 @@ use dt_common::{
     rdb_filter::RdbFilter,
     utils::serialize_util::SerializeUtil,
 };
-
+use futures::TryStreamExt;
 use quote_pg as quote;
+use sqlx::{Pool, Postgres, Row};
+
+use crate::{
+    extractor::{
+        base_extractor::{BaseExtractor, ExtractState},
+        base_splitter::SnapshotChunk,
+        estimated_sample_limit,
+        pg::pg_snapshot_splitter::PgSnapshotSplitter,
+        rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
+        resumer::recovery::Recovery,
+        snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
+        snapshot_dispatcher::{SnapshotDispatcher, TableMonitorGuard},
+        snapshot_types::SnapshotTableId,
+    },
+    Extractor,
+};
 
 pub struct PgSnapshotExtractor {
     pub shared: PgSnapshotShared,

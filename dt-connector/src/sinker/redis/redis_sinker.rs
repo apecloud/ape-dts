@@ -2,9 +2,6 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use redis::{Connection, ConnectionLike, Value};
-use tokio::{sync::RwLock, time::Instant};
-
 use dt_common::{
     error::{DtError, DtErrorContextExt, DtOptionExt, ErrorCode},
     log_debug,
@@ -23,6 +20,8 @@ use dt_common::{
     },
     utils::limit_queue::LimitedQueue,
 };
+use redis::{Connection, ConnectionLike, Value};
+use tokio::{sync::RwLock, time::Instant};
 
 use super::entry_rewriter::EntryRewriter;
 use crate::{

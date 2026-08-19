@@ -2,15 +2,14 @@ use std::{cmp, collections::HashMap};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest::{Client, Method, Response, StatusCode};
-use tokio::time::Instant;
-
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtResultExt, ErrorCode},
     meta::{col_value::ColValue, row_data::RowData, row_type::RowType},
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
+use reqwest::{Client, Method, Response, StatusCode};
+use tokio::time::Instant;
 
 use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 

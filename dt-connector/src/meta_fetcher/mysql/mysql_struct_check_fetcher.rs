@@ -1,7 +1,6 @@
+use dt_common::utils::sql_util::SqlUtil;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
-
-use dt_common::utils::sql_util::SqlUtil;
 
 pub struct MysqlStructCheckFetcher {
     pub conn_pool: Pool<MySql>,

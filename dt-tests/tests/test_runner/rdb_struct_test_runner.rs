@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::bail;
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
@@ -7,7 +9,6 @@ use dt_connector::meta_fetcher::{
     mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher,
     pg::pg_struct_check_fetcher::PgStructCheckFetcher,
 };
-use std::collections::{HashMap, HashSet};
 
 use super::{base_test_runner::BaseTestRunner, rdb_test_runner::RdbTestRunner};
 

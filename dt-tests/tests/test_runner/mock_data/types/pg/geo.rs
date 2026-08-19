@@ -1,6 +1,7 @@
+use fake::{Fake, Faker};
+
 use crate::test_runner::mock_data::constants::ConstantValues;
 use crate::test_runner::mock_data::random::{Random, RandomValue};
-use fake::{Fake, Faker};
 
 /// PostgreSQL point: (x,y)
 pub struct Point(pub geo_types::Point<f64>);

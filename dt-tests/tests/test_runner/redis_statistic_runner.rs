@@ -5,9 +5,8 @@ use dt_common::{
     utils::redis_util::RedisUtil,
 };
 
-use crate::test_runner::redis_test_util::RedisTestUtil;
-
 use super::base_test_runner::{BaseTestRunner, SqlLoadStrategy};
+use crate::test_runner::redis_test_util::RedisTestUtil;
 
 pub struct RedisStatisticTestRunner {
     pub base: BaseTestRunner,

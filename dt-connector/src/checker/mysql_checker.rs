@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
-use sqlx::{MySql, Pool};
-
 use dt_common::meta::{
     ddl_meta::ddl_data::DdlData, mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
 };
+use futures::TryStreamExt;
+use sqlx::{MySql, Pool};
 
 use crate::checker::base_checker::{Checker, CheckerTbMeta, CHECKER_MAX_QUERY_BATCH};
 use crate::rdb_query_builder::RdbQueryBuilder;

@@ -4,8 +4,6 @@ use std::sync::{
 };
 
 use anyhow::bail;
-
-use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
 use dt_common::{
     config::{
         config_enums::DbType,
@@ -28,6 +26,7 @@ use dt_common::{
 };
 
 use super::extractor_monitor::ExtractorMonitor;
+use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
 
 pub struct ExtractState {
     pub monitor: ExtractorMonitor,

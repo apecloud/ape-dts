@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
-use mongodb::bson::{doc, Bson, Document, Regex};
-
 use dt_common::meta::{
     col_value::ColValue, mongo::mongo_constant::MongoConstants, row_data::RowData,
 };
+use mongodb::bson::{doc, Bson, Document, Regex};
 
 use crate::checker::check_log::DiffColValue;
 

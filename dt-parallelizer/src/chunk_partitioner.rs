@@ -748,9 +748,10 @@ impl ChunkPartitioner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use dt_common::config::parallelizer_config::ChunkPartitionerRebalanceStrategy;
     use dt_common::meta::row_type::RowType;
+
+    use super::*;
 
     fn config(strategy: ChunkPartitionerRebalanceStrategy) -> ChunkPartitionerRebalanceConfig {
         ChunkPartitionerRebalanceConfig {

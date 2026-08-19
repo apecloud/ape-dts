@@ -2,8 +2,6 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use async_mutex::Mutex;
 use concurrent_queue::PopError;
-use tokio::task::JoinSet;
-
 use dt_common::{
     error::DtError,
     meta::{
@@ -18,6 +16,7 @@ use dt_common::{
     },
 };
 use dt_connector::Sinker;
+use tokio::task::JoinSet;
 
 type SharedSinker = Arc<Mutex<Box<dyn Sinker + Send>>>;
 

@@ -4,13 +4,12 @@ use dt_common::{
     meta::redis::redis_object::{RedisObject, RedisString},
 };
 
-use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
-
 use super::{
     hash_parser::HashParser, list_parser::ListParser, module2_parser::ModuleParser,
     set_parser::SetParser, stream_parser::StreamParser, string_parser::StringParser,
     zset_parser::ZsetParser,
 };
+use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
 
 pub struct EntryParser {}
 

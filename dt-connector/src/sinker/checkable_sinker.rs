@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use dt_common::log_warn;
+use dt_common::meta::position::Position;
 use dt_common::meta::{
     dcl_meta::dcl_data::DclData, ddl_meta::ddl_data::DdlData, dt_data::DtItem, row_data::RowData,
     struct_meta::struct_data::StructData,
 };
-
-use dt_common::meta::position::Position;
 
 use crate::{checker::CheckerHandle, Sinker};
 

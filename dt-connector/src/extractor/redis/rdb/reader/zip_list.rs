@@ -5,9 +5,8 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt};
 use dt_common::error::DtError;
 use dt_common::meta::redis::redis_object::RedisString;
 
-use crate::extractor::redis::StreamReader;
-
 use super::rdb_reader::RdbReader;
+use crate::extractor::redis::StreamReader;
 
 const ZIP_STR_06B: u8 = 0x00;
 const ZIP_STR_14B: u8 = 0x01;

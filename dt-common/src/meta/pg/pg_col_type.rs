@@ -1,6 +1,7 @@
-use super::pg_value_type::{PgValueType, BPCHAR_OID, TEXT_OID, VARCHAR_OID};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+use super::pg_value_type::{PgValueType, BPCHAR_OID, TEXT_OID, VARCHAR_OID};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PgColType {

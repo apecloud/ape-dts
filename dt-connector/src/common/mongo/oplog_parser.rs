@@ -1,6 +1,5 @@
-use mongodb::bson::Document;
-
 use dt_common::meta::mongo::mongo_constant::MongoConstants;
+use mongodb::bson::Document;
 
 fn append_diff_path(prefix: &str, field: &str) -> String {
     if prefix.is_empty() {

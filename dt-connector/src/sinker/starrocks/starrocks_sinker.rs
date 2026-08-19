@@ -3,10 +3,6 @@ use std::{cmp, collections::HashMap, str::FromStr};
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest::{header, Client, Method, Response, StatusCode};
-use serde_json::Value;
-use tokio::time::Instant;
-
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtResultExt, ErrorCode},
@@ -22,6 +18,9 @@ use dt_common::{
     },
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
+use reqwest::{header, Client, Method, Response, StatusCode};
+use serde_json::Value;
+use tokio::time::Instant;
 
 use crate::{call_batch_fn, sinker::base_sinker::BaseSinker, Sinker};
 

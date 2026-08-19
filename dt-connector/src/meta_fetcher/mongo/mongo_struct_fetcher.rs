@@ -1,11 +1,6 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
-use mongodb::{
-    bson::{doc, Bson, Document},
-    Client,
-};
-
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt},
@@ -17,6 +12,10 @@ use dt_common::{
         },
     },
     rdb_filter::RdbFilter,
+};
+use mongodb::{
+    bson::{doc, Bson, Document},
+    Client,
 };
 
 const STRUCT_CURSOR_BATCH_SIZE: i32 = 100;

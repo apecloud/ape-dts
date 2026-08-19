@@ -1,10 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dt_common::config::config_enums::DbType;
-
 use futures::executor::block_on;
-
-use crate::test_runner::rdb_test_runner::DST;
 
 use super::{
     check_test_runner::CheckTestRunner, mongo_check_test_runner::MongoCheckTestRunner,
@@ -15,6 +12,7 @@ use super::{
     rdb_test_runner::RdbTestRunner, redis_statistic_runner::RedisStatisticTestRunner,
     redis_test_runner::RedisTestRunner,
 };
+use crate::test_runner::rdb_test_runner::DST;
 
 pub struct TestBase {}
 

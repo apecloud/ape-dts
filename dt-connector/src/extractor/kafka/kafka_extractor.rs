@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dt_common::{
+    error::{DtResultExt, ErrorCode},
+    log_info, log_warn,
+    meta::{avro::avro_converter::AvroConverter, position::Position, syncer::Syncer},
+};
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     ClientConfig, Message, Offset, TopicPartitionList,
@@ -13,11 +18,6 @@ use crate::{
         resumer::recovery::Recovery,
     },
     Extractor,
-};
-use dt_common::{
-    error::{DtResultExt, ErrorCode},
-    log_info, log_warn,
-    meta::{avro::avro_converter::AvroConverter, position::Position, syncer::Syncer},
 };
 
 pub struct KafkaExtractor {

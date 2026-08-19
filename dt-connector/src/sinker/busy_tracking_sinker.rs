@@ -136,9 +136,8 @@ mod tests {
     };
     use tokio::sync::Notify;
 
-    use crate::Sinker;
-
     use super::BusyTrackingSinker;
+    use crate::Sinker;
 
     struct TestSinker {
         fail: Arc<AtomicBool>,

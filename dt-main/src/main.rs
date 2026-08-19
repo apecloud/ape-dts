@@ -6,8 +6,6 @@ use std::{
 };
 
 use clap::Parser;
-use tokio::{signal::ctrl_c, spawn, time::sleep};
-
 use dt_common::{
     config::{ini_loader::IniLoader, task_config::TaskConfig},
     error::{DtResultExt, ErrorReport, Stage},
@@ -16,6 +14,7 @@ use dt_common::{
 };
 use dt_precheck::{config::task_config::PrecheckTaskConfig, do_precheck};
 use dt_task::task_runner::TaskRunner;
+use tokio::{signal::ctrl_c, spawn, time::sleep};
 
 const ENV_SHUTDOWN_TIMEOUT_SECS: &str = "SHUTDOWN_TIMEOUT_SECS";
 

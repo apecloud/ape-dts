@@ -11,12 +11,11 @@ use dt_task::task_util::TaskUtil;
 use redis::{Connection, Value};
 use sqlx::{MySql, Pool};
 
-use crate::test_runner::rdb_util::RdbUtil;
-
 use super::{
     base_test_runner::BaseTestRunner, rdb_test_runner::RdbTestRunner,
     redis_test_util::RedisTestUtil,
 };
+use crate::test_runner::rdb_util::RdbUtil;
 
 pub struct RdbRedisTestRunner {
     pub base: BaseTestRunner,

@@ -7,6 +7,7 @@ use dt_common::{
     error::{DtError, DtOptionExt},
 };
 
+use super::{basic::BasicPrechecker, traits::Prechecker};
 use crate::{
     config::precheck_config::PrecheckConfig,
     fetcher::{postgresql::pg_fetcher::PgFetcher, traits::Fetcher},
@@ -15,8 +16,6 @@ use crate::{
         pg_enums::ConstraintTypeEnum,
     },
 };
-
-use super::{basic::BasicPrechecker, traits::Prechecker};
 
 const PG_SUPPORT_DB_VERSION_NUM_MIN: i32 = 120000;
 

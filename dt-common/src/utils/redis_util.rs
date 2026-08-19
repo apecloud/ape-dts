@@ -1,8 +1,8 @@
-use regex::Regex;
 use std::{collections::HashMap, str::FromStr};
 
 use anyhow::{bail, Context};
 use redis::{Connection, ConnectionLike, Value};
+use regex::Regex;
 
 use crate::config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig};
 use crate::error::{DtError, DtOptionExt};

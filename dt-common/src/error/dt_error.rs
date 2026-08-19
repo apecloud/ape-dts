@@ -1,6 +1,5 @@
-use crate::config::config_enums::DbType;
-
 use super::{ClassifyError, DtErrorContext, ErrorCode, Stage};
+use crate::config::config_enums::DbType;
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum DtError {

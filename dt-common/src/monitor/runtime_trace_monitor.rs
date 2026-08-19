@@ -1,10 +1,9 @@
-use async_trait::async_trait;
-
 #[cfg(all(feature = "metrics", feature = "tracing"))]
 use std::sync::{Arc, Mutex};
 
 #[cfg(all(feature = "metrics", feature = "tracing"))]
 use anyhow::Context;
+use async_trait::async_trait;
 #[cfg(all(feature = "metrics", feature = "tracing"))]
 use prometheus::{core::Collector, CounterVec, IntCounterVec, Opts, Registry};
 

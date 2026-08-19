@@ -1,7 +1,10 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use anyhow::Context;
+use dt_common::meta::{position::Position, row_data::RowData, row_type::RowType};
+use dt_common::{log_info, log_warn};
 use openssl::sha::sha256;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::{
     BoundedLineBuffer, CheckEntry, CheckInconsistency, Checker, CheckerStoreKey, DataChecker,
@@ -9,8 +12,6 @@ use super::{
 };
 use crate::checker::check_log::{CheckLog, CheckSummaryLog, CheckTableSummaryLog};
 use crate::checker::state_store::{CheckerCheckpointCommit, CheckerStateRow};
-use dt_common::meta::{position::Position, row_data::RowData, row_type::RowType};
-use dt_common::{log_info, log_warn};
 
 #[derive(Serialize)]
 struct IdentityJsonPayload<'a> {
@@ -560,18 +561,20 @@ impl<C: Checker> DataChecker<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker};
-    use super::*;
-    use crate::checker::check_log::{CheckTableSummaryLog, DiffColValue};
-    use async_trait::async_trait;
-    use dt_common::{meta::col_value::ColValue, utils::limit_queue::LimitedQueue};
-    use opendal::{services::Memory, Operator};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use async_trait::async_trait;
+    use dt_common::{meta::col_value::ColValue, utils::limit_queue::LimitedQueue};
+    use opendal::{services::Memory, Operator};
     use tokio::sync::mpsc;
+
+    use super::super::{CheckContext, Checker, CheckerIo, CheckerTbMeta, DataChecker};
+    use super::*;
+    use crate::checker::check_log::{CheckTableSummaryLog, DiffColValue};
 
     struct NoopChecker;
 

@@ -191,8 +191,9 @@ impl FromStr for CheckLog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn json_line<T: Serialize>(value: &T) -> serde_json::Value {
         serde_json::from_str(&to_json_line(value).unwrap()).unwrap()

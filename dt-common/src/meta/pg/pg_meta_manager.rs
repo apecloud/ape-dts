@@ -1,20 +1,19 @@
 use std::collections::{HashMap, HashSet};
 
+use anyhow::bail;
+use futures::TryStreamExt;
+use sqlx::{Pool, Postgres, Row};
+
+use super::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, type_registry::TypeRegistry};
+use crate::meta::{
+    foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
+    row_data::RowData,
+};
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, DtOptionExt, DtResultExt, ErrorObject},
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
 };
-use anyhow::bail;
-use futures::TryStreamExt;
-use sqlx::{Pool, Postgres, Row};
-
-use crate::meta::{
-    foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
-    row_data::RowData,
-};
-
-use super::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, type_registry::TypeRegistry};
 
 #[derive(Clone)]
 pub struct PgMetaManager {
