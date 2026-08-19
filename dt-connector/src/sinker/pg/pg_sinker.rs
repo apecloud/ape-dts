@@ -85,6 +85,11 @@ impl Sinker for PgSinker {
                 &self.connection_auth,
             )?;
             let mut conn_options = PgConnectOptions::from_str(final_url.as_str())?;
+            let tcp_keepalive = conn_options
+                .get_tcp_keepalive()
+                .copied()
+                .unwrap_or_default();
+            conn_options = conn_options.tcp_keepalive(tcp_keepalive);
             let mut pool_options = PgPoolOptions::new().max_connections(1);
             if let Some(ssl) = self.connection_auth.ssl_config() {
                 conn_options = ssl.apply_pg(conn_options);
