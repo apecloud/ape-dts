@@ -1,5 +1,6 @@
-use anyhow::{bail, Error, Ok};
 use std::{collections::HashMap, fs, io::ErrorKind};
+
+use anyhow::{bail, Error, Ok};
 
 use super::{
     checker_config::{
