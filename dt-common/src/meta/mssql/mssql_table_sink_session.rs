@@ -1,11 +1,10 @@
 use anyhow::{bail, Context};
 
-use crate::{config::config_enums::DbType, utils::sql_util::SqlUtil};
-
 use super::{
     mssql_connection_pool::{MssqlClient, MssqlConnectionPool, MssqlPooledConnection},
     mssql_tb_meta::MssqlTbMeta,
 };
+use crate::{config::config_enums::DbType, utils::sql_util::SqlUtil};
 
 #[must_use = "call post after table writes so the MSSQL session can be reused safely"]
 pub struct MssqlTableSinkSession<'pool, 'meta> {

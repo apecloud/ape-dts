@@ -1,7 +1,6 @@
-use std::{fs, io::ErrorKind};
-
 #[cfg(feature = "metrics")]
 use std::collections::HashMap;
+use std::{fs, io::ErrorKind};
 
 use anyhow::{bail, Error, Ok};
 
