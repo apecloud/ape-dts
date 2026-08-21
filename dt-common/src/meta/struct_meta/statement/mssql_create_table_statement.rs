@@ -64,21 +64,25 @@ pub struct MssqlCreateTableStatement {
 }
 
 impl MssqlCreateTableStatement {
-    pub fn route(&mut self, dst_schema: &str, dst_tb: &str) {
+    pub fn route(&mut self, dst_db: &str, dst_schema: &str, dst_tb: &str) {
+        self.table.database_name = dst_db.to_string();
         self.table.schema_name = dst_schema.to_string();
         self.table.table_name = dst_tb.to_string();
 
         for constraint in &mut self.constraints {
+            constraint.database_name = dst_db.to_string();
             constraint.schema_name = dst_schema.to_string();
             constraint.table_name = dst_tb.to_string();
         }
 
         for index in &mut self.indexes {
+            index.index.database_name = dst_db.to_string();
             index.index.schema_name = dst_schema.to_string();
             index.index.table_name = dst_tb.to_string();
         }
 
         for comment in &mut self.comments {
+            comment.database_name = dst_db.to_string();
             comment.schema_name = dst_schema.to_string();
             comment.table_name = dst_tb.to_string();
         }
@@ -90,7 +94,10 @@ impl MssqlCreateTableStatement {
 
         if table_enabled {
             sqls.push((
-                format!("table.{}.{}", self.table.schema_name, self.table.table_name),
+                format!(
+                    "table.{}.{}.{}",
+                    self.table.database_name, self.table.schema_name, self.table.table_name
+                ),
                 self.table_to_sql()?,
             ));
         }
@@ -107,8 +114,11 @@ impl MssqlCreateTableStatement {
             }
             sqls.push((
                 format!(
-                    "constraint.{}.{}.{}",
-                    constraint.schema_name, constraint.table_name, constraint.constraint_name
+                    "constraint.{}.{}.{}.{}",
+                    constraint.database_name,
+                    constraint.schema_name,
+                    constraint.table_name,
+                    constraint.constraint_name
                 ),
                 Self::constraint_to_sql(constraint),
             ));
@@ -121,8 +131,11 @@ impl MssqlCreateTableStatement {
                 }
                 sqls.push((
                     format!(
-                        "index.{}.{}.{}",
-                        index.index.schema_name, index.index.table_name, index.index.index_name
+                        "index.{}.{}.{}.{}",
+                        index.index.database_name,
+                        index.index.schema_name,
+                        index.index.table_name,
+                        index.index.index_name
                     ),
                     Self::index_to_sql(index)?,
                 ));
@@ -133,12 +146,15 @@ impl MssqlCreateTableStatement {
             for comment in &self.comments {
                 let key = match &comment.comment_type {
                     CommentType::Table => format!(
-                        "table_comment.{}.{}",
-                        comment.schema_name, comment.table_name
+                        "table_comment.{}.{}.{}",
+                        comment.database_name, comment.schema_name, comment.table_name
                     ),
                     CommentType::Column => format!(
-                        "column_comment.{}.{}.{}",
-                        comment.schema_name, comment.table_name, comment.column_name
+                        "column_comment.{}.{}.{}.{}",
+                        comment.database_name,
+                        comment.schema_name,
+                        comment.table_name,
+                        comment.column_name
                     ),
                 };
                 sqls.push((key, Self::comment_to_sql(comment)));
@@ -210,25 +226,35 @@ impl MssqlCreateTableStatement {
 
         if column_sqls.is_empty() {
             return Err(DtError::UnsupportedTableStructure(format!(
-                "MSSQL table {}.{} has no columns",
-                self.table.schema_name, self.table.table_name
+                "MSSQL table {} has no columns",
+                Self::qualified_table(
+                    &self.table.database_name,
+                    &self.table.schema_name,
+                    &self.table.table_name,
+                )
             ))
             .into());
         }
 
         Ok(format!(
-            "CREATE TABLE {}.{} ({})",
-            Self::quote(&self.table.schema_name),
-            Self::quote(&self.table.table_name),
+            "CREATE TABLE {} ({})",
+            Self::qualified_table(
+                &self.table.database_name,
+                &self.table.schema_name,
+                &self.table.table_name,
+            ),
             column_sqls.join(", ")
         ))
     }
 
     fn constraint_to_sql(constraint: &Constraint) -> String {
         format!(
-            "ALTER TABLE {}.{} ADD CONSTRAINT {} {}",
-            Self::quote(&constraint.schema_name),
-            Self::quote(&constraint.table_name),
+            "ALTER TABLE {} ADD CONSTRAINT {} {}",
+            Self::qualified_table(
+                &constraint.database_name,
+                &constraint.schema_name,
+                &constraint.table_name,
+            ),
             Self::quote(&constraint.constraint_name),
             constraint.definition
         )
@@ -280,11 +306,14 @@ impl MssqlCreateTableStatement {
             ""
         };
         let mut sql = format!(
-            "CREATE {unique}{} INDEX {} ON {}.{} ({key_columns})",
+            "CREATE {unique}{} INDEX {} ON {} ({key_columns})",
             index.index_type_desc,
             Self::quote(&index.index.index_name),
-            Self::quote(&index.index.schema_name),
-            Self::quote(&index.index.table_name)
+            Self::qualified_table(
+                &index.index.database_name,
+                &index.index.schema_name,
+                &index.index.table_name,
+            )
         );
 
         let included_columns = index
@@ -312,8 +341,13 @@ impl MssqlCreateTableStatement {
         let value = comment.comment.replace('\'', "''");
         let schema = comment.schema_name.replace('\'', "''");
         let table = comment.table_name.replace('\'', "''");
+        let database = if comment.database_name.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", Self::quote(&comment.database_name))
+        };
         let mut sql = format!(
-            "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=N'{value}', \
+            "EXEC {database}sys.sp_addextendedproperty @name=N'MS_Description', @value=N'{value}', \
              @level0type=N'SCHEMA', @level0name=N'{schema}', \
              @level1type=N'TABLE', @level1name=N'{table}'"
         );
@@ -326,6 +360,10 @@ impl MssqlCreateTableStatement {
 
     fn quote(identifier: &str) -> String {
         SqlUtil::escape_by_db_type(identifier, &DbType::Mssql)
+    }
+
+    fn qualified_table(db: &str, schema: &str, tb: &str) -> String {
+        SqlUtil::render_rdb_table(&DbType::Mssql, db, schema, tb)
     }
 }
 
@@ -349,6 +387,7 @@ mod tests {
         .unwrap();
         let mut statement = MssqlCreateTableStatement {
             table: Table {
+                database_name: "test_db".to_string(),
                 schema_name: "dbo".to_string(),
                 table_name: "users".to_string(),
                 columns: vec![Column {
@@ -367,7 +406,7 @@ mod tests {
             comments: vec![
                 Comment {
                     comment_type: CommentType::Table,
-                    database_name: String::new(),
+                    database_name: "test_db".to_string(),
                     schema_name: "dbo".to_string(),
                     table_name: "users".to_string(),
                     column_name: String::new(),
@@ -375,7 +414,7 @@ mod tests {
                 },
                 Comment {
                     comment_type: CommentType::Column,
-                    database_name: String::new(),
+                    database_name: "test_db".to_string(),
                     schema_name: "dbo".to_string(),
                     table_name: "users".to_string(),
                     column_name: "id".to_string(),
@@ -391,7 +430,7 @@ mod tests {
             .map(|(key, _)| key)
             .collect::<Vec<_>>();
 
-        assert!(keys.contains(&"table_comment.dbo.users".to_string()));
-        assert!(keys.contains(&"column_comment.dbo.users.id".to_string()));
+        assert!(keys.contains(&"table_comment.test_db.dbo.users".to_string()));
+        assert!(keys.contains(&"column_comment.test_db.dbo.users.id".to_string()));
     }
 }

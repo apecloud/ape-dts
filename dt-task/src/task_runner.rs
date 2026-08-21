@@ -1442,7 +1442,6 @@ impl TaskRunner {
             ExtractorConfig::MssqlStruct {
                 url,
                 connection_auth,
-                schema,
                 db_batch_size,
                 ..
             } => {
@@ -1450,8 +1449,7 @@ impl TaskRunner {
                     extractor_config: ExtractorConfig::MssqlStruct {
                         url: url.clone(),
                         connection_auth: connection_auth.clone(),
-                        schema: schema.clone(),
-                        schemas,
+                        dbs: schemas,
                         db_batch_size: *db_batch_size,
                     },
                     no_snapshot_data: false,

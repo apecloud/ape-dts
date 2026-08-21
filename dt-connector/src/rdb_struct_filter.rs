@@ -33,12 +33,17 @@ impl RdbStructFilter {
     }
 
     pub fn filter_tb(&self, schema: &str, table: &str) -> bool {
-        let (source_schema, source_table) = self
+        self.filter_tb_with_db("", schema, table)
+    }
+
+    pub fn filter_tb_with_db(&self, db: &str, schema: &str, table: &str) -> bool {
+        let (source_db, source_schema, source_table) = self
             .reverse_router
             .as_ref()
-            .map(|router| router.reverse_get_tb_map(schema, table))
-            .unwrap_or((schema, table));
-        self.filter.filter_tb(source_schema, source_table)
+            .map(|router| router.reverse_get_tb_map_with_db(db, schema, table))
+            .unwrap_or((db, schema, table));
+        self.filter
+            .filter_tb_with_db(source_db, source_schema, source_table)
     }
 }
 
@@ -113,5 +118,33 @@ mod tests {
 
         assert!(!source_filter.filter_schema("src_schema"));
         assert!(source_filter.filter_schema("dst_schema"));
+    }
+
+    #[test]
+    fn target_filter_reverses_mssql_database_schema_and_table() {
+        let filter = RdbFilter::from_config(
+            &FilterConfig {
+                do_schemas: "[source.db?]".to_string(),
+                do_tbs: "[source.db?].[schema.*].[table?]".to_string(),
+                ..Default::default()
+            },
+            &DbType::Mssql,
+        )
+        .unwrap();
+        let config = RouterConfig::Rdb {
+            schema_map: "[source.db?]:[target.db?]".to_string(),
+            tb_map: "[source.db?].[schema.*].[table?]:[target.db?].[routed.*].[target?]"
+                .to_string(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        let router = RdbRouter::from_config(&config, &DbType::Mssql)
+            .unwrap()
+            .unwrap();
+        let target_filter = RdbStructFilter::for_target(filter, Some(router));
+
+        assert!(!target_filter.filter_schema("target.db?"));
+        assert!(!target_filter.filter_tb_with_db("target.db?", "routed.*", "target?"));
+        assert!(target_filter.filter_tb_with_db("other.db?", "routed.*", "other"));
     }
 }

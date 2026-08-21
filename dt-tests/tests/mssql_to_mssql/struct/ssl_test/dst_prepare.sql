@@ -1,6 +1,7 @@
-IF OBJECT_ID(N'struct_ssl_mssql2mssql.encrypted_table', N'U') IS NOT NULL
-    DROP TABLE struct_ssl_mssql2mssql.encrypted_table;
-GO
-IF SCHEMA_ID(N'struct_ssl_mssql2mssql') IS NOT NULL
-    EXEC(N'DROP SCHEMA struct_ssl_mssql2mssql');
+IF DB_ID(N'struct_ssl_mssql2mssql') IS NOT NULL
+BEGIN
+    ALTER DATABASE [struct_ssl_mssql2mssql] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [struct_ssl_mssql2mssql];
+END;
+CREATE DATABASE [struct_ssl_mssql2mssql];
 GO

@@ -7,11 +7,13 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct MssqlCreateSchemaStatement {
+    pub database_name: String,
     pub schema: Schema,
 }
 
 impl MssqlCreateSchemaStatement {
-    pub fn route(&mut self, dst_schema: &str) {
+    pub fn route(&mut self, dst_db: &str, dst_schema: &str) {
+        self.database_name = dst_db.to_string();
         self.schema.name = dst_schema.to_string();
     }
 
@@ -22,12 +24,22 @@ impl MssqlCreateSchemaStatement {
 
         let schema = SqlUtil::escape_by_db_type(&self.schema.name, &DbType::Mssql);
         let schema_literal = self.schema.name.replace('\'', "''");
-        Ok(vec![(
-            format!("schema.{}", self.schema.name),
+        let create_schema = format!(
+            "IF SCHEMA_ID(N'{schema_literal}') IS NULL EXEC(N'CREATE SCHEMA {}')",
+            schema.replace('\'', "''")
+        );
+        let sql = if self.database_name.is_empty() {
+            create_schema
+        } else {
+            let database = SqlUtil::escape_by_db_type(&self.database_name, &DbType::Mssql);
             format!(
-                "IF SCHEMA_ID(N'{schema_literal}') IS NULL EXEC(N'CREATE SCHEMA {}')",
-                schema.replace('\'', "''")
-            ),
+                "EXEC {database}.sys.sp_executesql N'{}'",
+                create_schema.replace('\'', "''")
+            )
+        };
+        Ok(vec![(
+            format!("schema.{}.{}", self.database_name, self.schema.name),
+            sql,
         )])
     }
 }
