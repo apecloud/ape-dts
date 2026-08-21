@@ -19,15 +19,19 @@ pub struct RdbMerger {
 #[async_trait]
 impl Merger for RdbMerger {
     async fn merge(&mut self, data: Vec<RowData>) -> anyhow::Result<Vec<TbMergedData>> {
-        let mut tb_data_map = HashMap::<String, RdbTbMergedData>::new();
+        let mut tb_data_map = HashMap::<(String, String, String), RdbTbMergedData>::new();
         for row_data in data {
-            let full_tb = format!("{}.{}", row_data.schema, row_data.tb);
-            if let Some(merged) = tb_data_map.get_mut(&full_tb) {
+            let table_key = (
+                row_data.db.clone(),
+                row_data.schema.clone(),
+                row_data.tb.clone(),
+            );
+            if let Some(merged) = tb_data_map.get_mut(&table_key) {
                 self.merge_row_data(merged, row_data).await?;
             } else {
                 let mut merged = RdbTbMergedData::new();
                 self.merge_row_data(&mut merged, row_data).await?;
-                tb_data_map.insert(full_tb, merged);
+                tb_data_map.insert(table_key, merged);
             }
         }
 
@@ -63,7 +67,7 @@ impl RdbMerger {
 
         let tb_meta = match self
             .rdb_meta_manager
-            .get_tb_meta(&row_data.schema, &row_data.tb)
+            .get_tb_meta(&row_data.db, &row_data.schema, &row_data.tb)
             .await
         {
             Ok(tb_meta) => tb_meta,
@@ -112,7 +116,9 @@ impl RdbMerger {
                     return Ok(());
                 }
 
+                let db = row_data.db.clone();
                 let delete = RowData::new(
+                    db.clone(),
                     row_data.schema.clone(),
                     row_data.tb.clone(),
                     0,
@@ -121,6 +127,7 @@ impl RdbMerger {
                     None,
                 );
                 let insert = RowData::new(
+                    db.clone(),
                     row_data.schema,
                     row_data.tb,
                     0,
@@ -128,13 +135,13 @@ impl RdbMerger {
                     None,
                     row_data.after,
                 );
-
                 let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
 
                 if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
                     || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)?
                 {
                     let row_data = RowData::new(
+                        db,
                         delete.schema,
                         delete.tb,
                         0,
@@ -286,6 +293,7 @@ mod tests {
         );
 
         RowData::new(
+            String::new(),
             "test_db".to_string(),
             "test_tb".to_string(),
             0,

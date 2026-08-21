@@ -14,7 +14,7 @@ pub enum ResumerConfig {
         url: String,
         connection_auth: ConnectionAuthConfig,
         db_type: DbType,
-        // such as public.ape_task_position or database1.table1
+        // MySQL/MongoDB: database.table; PG: schema.table; MSSQL: database.table (uses dbo).
         table_full_name: String,
         max_connections: usize,
         is_direct_connection: Option<bool>,

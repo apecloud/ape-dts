@@ -1,0 +1,10 @@
+ape_dts.test_db_3.one_pk_no_uk_1
+ape_dts.test_db_4.one_pk_no_uk_1
+ape_dts.test_db_1.one_pk_no_uk_2
+ape_dts.test_db_2.one_pk_no_uk_2
+ape_dts.test_db_3.one_pk_no_uk_2
+ape_dts.test_db_4.one_pk_no_uk_2
+ape_dts.test_db_5.one_pk_no_uk_2
+ape_dts.other_test_db_1.one_pk_no_uk_2
+filter_db_skip.dbo.db_level_filtered
+ape_dts.filter_schema_skip.schema_level_filtered

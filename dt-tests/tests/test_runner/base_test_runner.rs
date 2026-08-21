@@ -28,6 +28,7 @@ pub struct BaseTestRunner {
 pub enum SqlLoadStrategy {
     Semicolon,
     Line,
+    MssqlGo,
 }
 
 #[allow(dead_code)]
@@ -86,15 +87,14 @@ impl BaseTestRunner {
         let tmp_dir = format!("{}/tmp/{}", project_root, relative_test_dir);
         let dst_task_config_file = format!("{}/{}", tmp_dir, task_config_file);
 
-        // update relative path to absolute path in task_config.ini
+        // Resolve connection placeholders before TaskConfig validates the
+        // generated file while updating relative paths.
+        TestConfigUtil::update_task_config_from_env(&src_task_config_file, &dst_task_config_file);
         TestConfigUtil::update_file_paths_in_task_config(
-            &src_task_config_file,
+            &dst_task_config_file,
             &dst_task_config_file,
             &project_root,
         );
-
-        // update extractor / sinker urls from .env
-        TestConfigUtil::update_task_config_from_env(&dst_task_config_file, &dst_task_config_file);
         dst_task_config_file
     }
 
@@ -190,6 +190,9 @@ impl BaseTestRunner {
         let lines = Self::load_file(sql_file);
         if matches!(sql_load_strategy, SqlLoadStrategy::Line) {
             return Self::load_sql_file_by_line(lines);
+        }
+        if matches!(sql_load_strategy, SqlLoadStrategy::MssqlGo) {
+            return Self::load_sql_file_by_mssql_go(lines);
         }
 
         let mut sqls = Vec::new();
@@ -308,6 +311,28 @@ impl BaseTestRunner {
         sqls
     }
 
+    fn load_sql_file_by_mssql_go(lines: Vec<String>) -> Vec<String> {
+        let mut batches = Vec::new();
+        let mut current_batch = String::new();
+
+        for line in lines {
+            if line.trim().eq_ignore_ascii_case("GO") {
+                if !current_batch.trim().is_empty() {
+                    batches.push(Self::flush_sql(&mut current_batch));
+                }
+                continue;
+            }
+
+            current_batch.push_str(&line);
+            current_batch.push('\n');
+        }
+
+        if !current_batch.trim().is_empty() {
+            batches.push(Self::flush_sql(&mut current_batch));
+        }
+        batches
+    }
+
     fn flush_sql(current_sql: &mut String) -> String {
         let sql = current_sql.trim().trim_end_matches(';').to_string();
         current_sql.clear();
@@ -382,5 +407,22 @@ mod tests {
                 "LPUSH key_3 value".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn load_sql_file_by_mssql_go_only_splits_standalone_go_lines() {
+        let sqls = BaseTestRunner::load_sql_file_by_mssql_go(vec![
+            "CREATE TABLE dbo.t (id INT);".to_string(),
+            "go".to_string(),
+            "INSERT INTO dbo.t VALUES (1);".to_string(),
+            "SELECT 'GO'; -- string content is not a separator".to_string(),
+            "-- GO".to_string(),
+            "GO".to_string(),
+        ]);
+
+        assert_eq!(sqls.len(), 2);
+        assert!(sqls[0].contains("CREATE TABLE"));
+        assert!(sqls[1].contains("SELECT 'GO'"));
+        assert!(sqls[1].contains("-- GO"));
     }
 }

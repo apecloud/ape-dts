@@ -28,8 +28,8 @@ impl BaseSinker {
         }
     }
 
-    pub fn task_id_for_schema_tb(&self, schema: &str, tb: &str) -> String {
-        self.monitor.task_id_for_schema_tb(schema, tb)
+    pub fn task_id_for_db_schema_tb(&self, db: &str, schema: &str, tb: &str) -> String {
+        self.monitor.task_id_for_db_schema_tb(db, schema, tb)
     }
 
     pub fn task_id_for_rows(&self, rows: &[RowData]) -> String {
@@ -45,11 +45,11 @@ impl BaseSinker {
             return self.monitor.default_task_id().to_string();
         };
 
-        let (schema, tb) = match router {
-            Some(router) => router.reverse_get_tb_map(&first.schema, &first.tb),
-            None => (first.schema.as_str(), first.tb.as_str()),
+        let (db, schema, tb) = match router {
+            Some(router) => router.reverse_get_tb_map_with_db(&first.db, &first.schema, &first.tb),
+            None => (first.db.as_str(), first.schema.as_str(), first.tb.as_str()),
         };
-        self.task_id_for_schema_tb(schema, tb)
+        self.task_id_for_db_schema_tb(db, schema, tb)
     }
 
     pub fn ensure_monitor_for(&self, task_id: &str) {

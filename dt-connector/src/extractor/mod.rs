@@ -4,6 +4,7 @@ pub mod base_splitter;
 pub mod extractor_monitor;
 pub mod kafka;
 pub mod mongo;
+pub mod mssql;
 pub mod mysql;
 pub mod pg;
 pub mod rdb_snapshot_extract_statement;

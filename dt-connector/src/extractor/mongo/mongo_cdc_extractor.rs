@@ -439,16 +439,24 @@ impl MongoCdcExtractor {
             operation_time: ts.time,
             timestamp: Position::format_timestamp_millis(ts.time as i64 * 1000),
         };
-        let row_data = RowData::new(db.to_string(), tb.to_string(), 0, row_type, before, after);
+        let row_data = RowData::new(
+            String::new(),
+            db.to_string(),
+            tb.to_string(),
+            0,
+            row_type,
+            before,
+            after,
+        );
         Ok((row_data, position))
     }
 
     fn oplog_document<'a>(value: Option<&'a Bson>, field: &str) -> anyhow::Result<&'a Document> {
-        Ok(value
+        value
             .and_then(Bson::as_document)
             .or_dt_error(DtError::mongo_statement(format!(
                 "oplog field {field} is missing or is not a document"
-            )))?)
+            )))
     }
 
     // Event example:
@@ -733,7 +741,7 @@ impl MongoCdcExtractor {
                         Some(before)
                     };
                     let after = if after.is_empty() { None } else { Some(after) };
-                    let row_data = RowData::new(db, tb, 0, row_type, before, after);
+                    let row_data = RowData::new(String::new(), db, tb, 0, row_type, before, after);
                     self.push_row_to_buf(row_data, position).await?;
                 }
             }
@@ -956,6 +964,7 @@ impl MongoCdcExtractor {
                     ColValue::MongoRawDoc(document.to_raw_document_buf()),
                 );
                 Ok(Some(RowData::new(
+                    String::new(),
                     db,
                     tb,
                     0,
@@ -973,6 +982,7 @@ impl MongoCdcExtractor {
                     ColValue::MongoDoc(document_key),
                 );
                 Ok(Some(RowData::new(
+                    String::new(),
                     db,
                     tb,
                     0,
@@ -1010,6 +1020,7 @@ impl MongoCdcExtractor {
                     ColValue::MongoRawDoc(update_description.to_raw_document_buf()),
                 );
                 Ok(Some(RowData::new(
+                    String::new(),
                     db,
                     tb,
                     0,
@@ -1038,6 +1049,7 @@ impl MongoCdcExtractor {
                     ColValue::MongoRawDoc(document.to_raw_document_buf()),
                 );
                 Ok(Some(RowData::new(
+                    String::new(),
                     db,
                     tb,
                     0,

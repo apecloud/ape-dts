@@ -6,8 +6,8 @@ use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtOptionExt},
     meta::{
-        adaptor::pg_col_value_convertor::PgColValueConvertor, mysql::mysql_tb_meta::MysqlTbMeta,
-        pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta,
+        adaptor::pg_col_value_convertor::PgColValueConvertor, mssql::mssql_tb_meta::MssqlTbMeta,
+        mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta,
     },
     utils::sql_util::SqlUtil,
 };
@@ -25,6 +25,7 @@ pub struct RdbSnapshotExtractStatement<'a> {
     rdb_tb_meta: &'a RdbTbMeta,
     pg_tb_meta: Option<&'a PgTbMeta>,
     mysql_tb_meta: Option<&'a MysqlTbMeta>,
+    mssql_tb_meta: Option<&'a MssqlTbMeta>,
     order_cols: Option<&'a Vec<String>>,
     ignore_cols: Option<&'a HashSet<String>>,
     where_condition: Option<&'a String>,
@@ -40,6 +41,7 @@ impl<'r> From<&'r MysqlTbMeta> for RdbSnapshotExtractStatement<'r> {
             rdb_tb_meta: &mysql_tb_meta.basic,
             mysql_tb_meta: Some(mysql_tb_meta),
             pg_tb_meta: None,
+            mssql_tb_meta: None,
             order_cols: None,
             ignore_cols: None,
             where_condition: None,
@@ -57,6 +59,25 @@ impl<'r> From<&'r PgTbMeta> for RdbSnapshotExtractStatement<'r> {
             rdb_tb_meta: &pg_tb_meta.basic,
             mysql_tb_meta: None,
             pg_tb_meta: Some(pg_tb_meta),
+            mssql_tb_meta: None,
+            order_cols: None,
+            ignore_cols: None,
+            where_condition: None,
+            limit: 0,
+            predicate_type: OrderKeyPredicateType::None,
+            placeholder_index: Cell::new(0),
+        }
+    }
+}
+
+impl<'r> From<&'r MssqlTbMeta> for RdbSnapshotExtractStatement<'r> {
+    fn from(mssql_tb_meta: &'r MssqlTbMeta) -> Self {
+        RdbSnapshotExtractStatement {
+            db_type: DbType::Mssql,
+            rdb_tb_meta: &mssql_tb_meta.basic,
+            mysql_tb_meta: None,
+            pg_tb_meta: None,
+            mssql_tb_meta: Some(mssql_tb_meta),
             order_cols: None,
             ignore_cols: None,
             where_condition: None,
@@ -100,11 +121,16 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
 
     pub fn build(&self) -> anyhow::Result<String> {
         let extract_cols_str = self.build_extract_cols_str()?;
+        let top = if matches!(self.db_type, DbType::Mssql) && self.limit > 0 {
+            format!("TOP ({}) ", self.limit)
+        } else {
+            String::new()
+        };
         let mut sql = format!(
-            "SELECT {} FROM {}.{}",
+            "SELECT {}{} FROM {}",
+            top,
             extract_cols_str,
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb)
+            self.table_name()
         );
         let mut predicates: Vec<String> = Vec::new();
         match self.where_condition {
@@ -164,7 +190,7 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 sql.push_str(&self.build_order_by_clause(order_cols)?);
             }
         }
-        if self.limit > 0 {
+        if self.limit > 0 && !matches!(self.db_type, DbType::Mssql) {
             sql.push_str(&format!(" LIMIT {}", self.limit));
         }
         Ok(sql)
@@ -176,7 +202,9 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
             if self.ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
-            if let Some(tb_meta) = self.pg_tb_meta {
+            if self.mssql_tb_meta.is_some() {
+                extract_cols.push(self.escape(col));
+            } else if let Some(tb_meta) = self.pg_tb_meta {
                 let col_type = tb_meta.get_col_type(col)?;
                 let extract_type = PgColValueConvertor::get_extract_type(col_type);
                 let extract_col = if extract_type.is_empty() {
@@ -232,6 +260,14 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 ));
             }
             Ok(placeholders.join(", "))
+        } else if self.mssql_tb_meta.is_some() {
+            let mut placeholders = Vec::with_capacity(order_cols.len());
+            for _ in order_cols {
+                let idx = self.placeholder_index.get() + 1;
+                self.placeholder_index.set(idx);
+                placeholders.push(format!("@P{idx}"));
+            }
+            Ok(placeholders.join(", "))
         } else {
             bail!(
                 "unsupported db type: {:?} for building placeholder string",
@@ -244,6 +280,11 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
         let len = order_cols.len();
         if len == 0 {
             return Ok(String::new());
+        }
+        if self.mssql_tb_meta.is_some() && len > 1 {
+            let lower = self.build_mssql_lexicographic_predicate(order_cols, true)?;
+            let upper = self.build_mssql_lexicographic_predicate(order_cols, false)?;
+            return Ok(format!("({lower}) AND ({upper})"));
         }
         // (col_1, col_2, col_3) > (?, ?, ?) AND (col_1, col_2, col_3) <= (?, ?, ?)
         let order_col_str = self.build_order_col_str(order_cols);
@@ -265,6 +306,12 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
         if len == 0 {
             return Ok(String::new());
         }
+        if self.mssql_tb_meta.is_some() && len > 1 {
+            return Ok(format!(
+                "({})",
+                self.build_mssql_lexicographic_predicate(order_cols, true)?
+            ));
+        }
         // (col_1, col_2, col_3) > (?, ?, ?)
         let order_col_str = self.build_order_col_str(order_cols);
         let place_holder_str = self.build_place_holder_str(order_cols)?;
@@ -279,6 +326,12 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
         if len == 0 {
             return Ok(String::new());
         }
+        if self.mssql_tb_meta.is_some() && len > 1 {
+            return Ok(format!(
+                "({})",
+                self.build_mssql_lexicographic_predicate(order_cols, false)?
+            ));
+        }
         // (col_1, col_2, col_3) <= (?, ?, ?)
         let order_col_str = self.build_order_col_str(order_cols);
         let place_holder_str = self.build_place_holder_str(order_cols)?;
@@ -289,6 +342,44 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
             r#"({}) <= ({})"#,
             &order_col_str, &place_holder_str
         ))
+    }
+
+    fn build_mssql_lexicographic_predicate(
+        &self,
+        order_cols: &[String],
+        greater_than: bool,
+    ) -> anyhow::Result<String> {
+        let placeholders = self
+            .build_place_holder_str(order_cols)?
+            .split(", ")
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let mut alternatives = Vec::with_capacity(order_cols.len());
+        for index in 0..order_cols.len() {
+            let mut terms = Vec::with_capacity(index + 1);
+            for prefix in 0..index {
+                terms.push(format!(
+                    "{} = {}",
+                    self.escape(&order_cols[prefix]),
+                    placeholders[prefix]
+                ));
+            }
+            let operator = if greater_than {
+                ">"
+            } else if index + 1 == order_cols.len() {
+                "<="
+            } else {
+                "<"
+            };
+            terms.push(format!(
+                "{} {} {}",
+                self.escape(&order_cols[index]),
+                operator,
+                placeholders[index]
+            ));
+            alternatives.push(format!("({})", terms.join(" AND ")));
+        }
+        Ok(alternatives.join(" OR "))
     }
 
     fn build_null_predicate(&self, order_cols: &[String], is_null: bool) -> anyhow::Result<String> {
@@ -312,9 +403,8 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
         match order_cols.len() {
             0 => Ok(String::new()),
             1 => Ok(format!(
-                "{}.{}.{} ASC",
-                self.escape(&self.rdb_tb_meta.schema),
-                self.escape(&self.rdb_tb_meta.tb),
+                "{}.{} ASC",
+                self.table_name(),
                 self.escape(&order_cols[0])
             )),
             _ => {
@@ -322,14 +412,7 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 // (col_1, col_2, col_3) ASC does not trigger index scan sometimes
                 Ok(order_cols
                     .iter()
-                    .map(|col| {
-                        format!(
-                            "{}.{}.{} ASC",
-                            self.escape(&self.rdb_tb_meta.schema),
-                            self.escape(&self.rdb_tb_meta.tb),
-                            self.escape(col)
-                        )
-                    })
+                    .map(|col| format!("{}.{} ASC", self.table_name(), self.escape(col)))
                     .collect::<Vec<String>>()
                     .join(", "))
             }
@@ -340,6 +423,15 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
     fn escape(&self, token: &str) -> String {
         SqlUtil::escape_by_db_type(token, &self.db_type)
     }
+
+    fn table_name(&self) -> String {
+        SqlUtil::render_rdb_table(
+            &self.db_type,
+            &self.rdb_tb_meta.db,
+            &self.rdb_tb_meta.schema,
+            &self.rdb_tb_meta.tb,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -347,8 +439,12 @@ mod tests {
     use std::collections::HashMap;
 
     use dt_common::meta::{
-        mysql::mysql_col_type::MysqlColType, mysql::mysql_tb_meta::MysqlTbMeta,
-        pg::pg_col_type::PgColType, pg::pg_tb_meta::PgTbMeta, pg::pg_value_type::PgValueType,
+        mssql::{mssql_col_type::MssqlColType, mssql_tb_meta::MssqlTbMeta},
+        mysql::mysql_col_type::MysqlColType,
+        mysql::mysql_tb_meta::MysqlTbMeta,
+        pg::pg_col_type::PgColType,
+        pg::pg_tb_meta::PgTbMeta,
+        pg::pg_value_type::PgValueType,
         rdb_tb_meta::RdbTbMeta,
     };
 
@@ -533,6 +629,35 @@ mod tests {
             basic,
             oid: 16384,
             col_type_map,
+        }
+    }
+
+    fn create_mssql_tb_meta() -> MssqlTbMeta {
+        let cols = vec![
+            "tenant_id".to_string(),
+            "id".to_string(),
+            "name".to_string(),
+        ];
+        let nullable_cols = HashSet::from(["tenant_id".to_string(), "name".to_string()]);
+        let basic = RdbTbMeta {
+            schema: "test_schema".to_string(),
+            tb: "test_table".to_string(),
+            cols,
+            nullable_cols,
+            ..Default::default()
+        };
+        let col_type_map = HashMap::from([
+            ("tenant_id".to_string(), MssqlColType::Int4),
+            ("id".to_string(), MssqlColType::Int8),
+            ("name".to_string(), MssqlColType::NVarchar),
+        ]);
+        MssqlTbMeta {
+            basic,
+            col_type_map,
+            identity_col: None,
+            computed_cols: HashSet::new(),
+            generated_always_type_map: HashMap::new(),
+            rowversion_cols: HashSet::new(),
         }
     }
 
@@ -1258,6 +1383,49 @@ mod tests {
         assert_eq!(
             sql,
             r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE id > 100 AND `price` IS NOT NULL AND `bio` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`bio` ASC LIMIT 100"#
+        );
+    }
+
+    #[test]
+    fn test_mssql_multiple_order_cols_gt_with_top_and_where_condition() {
+        let mssql_meta = create_mssql_tb_meta();
+        let order_cols = vec!["id".to_string(), "tenant_id".to_string()];
+        let where_condition = "[name] <> N'ignored'".to_string();
+        let sql = RdbSnapshotExtractStatement::from(&mssql_meta)
+            .with_order_cols(&order_cols)
+            .with_where_condition(&where_condition)
+            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_limit(25)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "SELECT TOP (25) [tenant_id],[id],[name] FROM [test_schema].[test_table] \
+             WHERE [name] <> N'ignored' AND (([id] > @P1) OR ([id] = @P1 AND \
+             [tenant_id] > @P2)) AND [tenant_id] IS NOT NULL ORDER BY \
+             [test_schema].[test_table].[id] ASC, \
+             [test_schema].[test_table].[tenant_id] ASC"
+        );
+    }
+
+    #[test]
+    fn test_mssql_multiple_order_cols_range_uses_distinct_parameters() {
+        let mssql_meta = create_mssql_tb_meta();
+        let order_cols = vec!["id".to_string(), "tenant_id".to_string()];
+        let sql = RdbSnapshotExtractStatement::from(&mssql_meta)
+            .with_order_cols(&order_cols)
+            .with_predicate_type(OrderKeyPredicateType::Range)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "SELECT [tenant_id],[id],[name] FROM [test_schema].[test_table] WHERE \
+             (([id] > @P1) OR ([id] = @P1 AND [tenant_id] > @P2)) AND \
+             (([id] < @P3) OR ([id] = @P3 AND [tenant_id] <= @P4)) AND \
+             [tenant_id] IS NOT NULL ORDER BY [test_schema].[test_table].[id] ASC, \
+             [test_schema].[test_table].[tenant_id] ASC"
         );
     }
 }

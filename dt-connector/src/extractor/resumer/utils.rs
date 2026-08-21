@@ -5,8 +5,11 @@ use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     error::DtError,
     log_info,
-    meta::position::Position,
-    meta::redis::cluster_node::ClusterNode,
+    meta::{
+        mssql::{mssql_connection_pool::MssqlConnectionPool, MSSQL_DEFAULT_SCHEMA},
+        position::Position,
+        redis::cluster_node::ClusterNode,
+    },
     utils::redis_util::RedisUtil,
 };
 use mongodb::options::ClientOptions;
@@ -60,6 +63,19 @@ impl ResumerUtil {
         Ok((schema.to_string(), table.to_string()))
     }
 
+    /// Maps the external two-part checkpoint table name into the internal db/schema/tb model.
+    pub fn get_checkpoint_db_schema_tb(
+        full_table_name: &str,
+        db_type: &DbType,
+    ) -> Result<(String, String, String)> {
+        let (namespace, tb) = Self::get_full_table_name(full_table_name)?;
+        if matches!(db_type, DbType::Mssql) {
+            Ok((namespace, MSSQL_DEFAULT_SCHEMA.to_string(), tb))
+        } else {
+            Ok((String::new(), namespace, tb))
+        }
+    }
+
     pub async fn create_pool(
         url: &str,
         connection_auth: &ConnectionAuthConfig,
@@ -67,6 +83,19 @@ impl ResumerUtil {
         max_connections: u32,
         is_direct_connection: Option<bool>,
     ) -> anyhow::Result<ResumerDbPool> {
+        if matches!(db_type, DbType::Mssql) {
+            let pool = MssqlConnectionPool::from_config(
+                url,
+                connection_auth,
+                Some("ape-dts-resumer"),
+                max_connections,
+                15,
+            )
+            .await
+            .context("failed to create MSSQL connection pool")?;
+            return Ok(ResumerDbPool::Mssql(pool));
+        }
+
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)
             .context("failed to merge URL with connection auth")?;
 
@@ -239,9 +268,9 @@ impl ResumerUtil {
 
     pub fn get_key_from_position(position: &Position) -> String {
         match position {
-            Position::RdbSnapshot { schema, tb, .. }
-            | Position::RdbSnapshotFinished { schema, tb, .. } => {
-                format!("{}-{}", schema, tb)
+            Position::RdbSnapshot { db, schema, tb, .. }
+            | Position::RdbSnapshotFinished { db, schema, tb, .. } => {
+                Self::get_table_key(db, schema, tb)
             }
             Position::Kafka {
                 topic, partition, ..
@@ -264,12 +293,23 @@ impl ResumerUtil {
         }
     }
 
-    pub fn get_key_from_base((schema, tb): (String, String), resumer_type: ResumerType) -> String {
+    pub fn get_key_from_base(
+        (db, schema, tb): (String, String, String),
+        resumer_type: ResumerType,
+    ) -> String {
         match resumer_type {
             ResumerType::SnapshotDoing | ResumerType::SnapshotFinished => {
-                format!("{}-{}", schema, tb)
+                Self::get_table_key(&db, &schema, &tb)
             }
             _ => DEFAULT_POSITION_KEY.to_string(),
+        }
+    }
+
+    fn get_table_key(db: &str, schema: &str, tb: &str) -> String {
+        if db.is_empty() {
+            format!("{}-{}", schema, tb)
+        } else {
+            format!("{}-{}-{}", db, schema, tb)
         }
     }
 }
@@ -279,7 +319,7 @@ mod tests {
     use dt_common::meta::position::Position;
 
     use crate::extractor::resumer::{
-        utils::ResumerUtil, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,
+        utils::ResumerUtil, ResumerType, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,
     };
 
     #[test]
@@ -309,6 +349,42 @@ mod tests {
         // Test invalid full table name - empty table
         let result = ResumerUtil::get_full_table_name("schema_name.");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn checkpoint_table_maps_mssql_schema_config_to_database() {
+        assert_eq!(
+            ResumerUtil::get_checkpoint_db_schema_tb(
+                "",
+                &dt_common::config::config_enums::DbType::Mssql,
+            )
+            .unwrap(),
+            (
+                DEFAULT_RESUMER_SCHEMA.to_string(),
+                "dbo".to_string(),
+                DEFAULT_RESUMER_TABLE.to_string(),
+            )
+        );
+        assert_eq!(
+            ResumerUtil::get_checkpoint_db_schema_tb(
+                "checkpoint_db.positions",
+                &dt_common::config::config_enums::DbType::Mssql,
+            )
+            .unwrap(),
+            (
+                "checkpoint_db".to_string(),
+                "dbo".to_string(),
+                "positions".to_string(),
+            )
+        );
+        assert_eq!(
+            ResumerUtil::get_checkpoint_db_schema_tb(
+                "public.positions",
+                &dt_common::config::config_enums::DbType::Pg,
+            )
+            .unwrap(),
+            (String::new(), "public".to_string(), "positions".to_string(),)
+        );
     }
 
     #[test]
@@ -343,6 +419,24 @@ mod tests {
         assert_eq!(
             ResumerUtil::get_redis_resumer_scan_pattern("task-1", Some("42")),
             "apedts:resumer:{42}:task-1:*"
+        );
+    }
+
+    #[test]
+    fn snapshot_resumer_key_uses_db_only_when_present() {
+        assert_eq!(
+            ResumerUtil::get_key_from_base(
+                (String::new(), "schema1".into(), "tb1".into()),
+                ResumerType::SnapshotDoing,
+            ),
+            "schema1-tb1"
+        );
+        assert_eq!(
+            ResumerUtil::get_key_from_base(
+                ("db1".into(), "schema1".into(), "tb1".into()),
+                ResumerType::SnapshotDoing,
+            ),
+            "db1-schema1-tb1"
         );
     }
 }

@@ -29,7 +29,12 @@ use serde::de::DeserializeOwned;
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::{sync::Semaphore, task::JoinHandle};
 
-use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
+use super::{
+    base_test_runner::{BaseTestRunner, SqlLoadStrategy},
+    mssql_ddl_scanner,
+    mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint},
+    rdb_util::{DbSchemaTb, RdbUtil},
+};
 use crate::{
     test_config_util::TestConfigUtil,
     test_runner::mock_data::{
@@ -44,6 +49,8 @@ pub struct RdbTestRunner {
     pub dst_conn_pool_mysql: Option<Pool<MySql>>,
     pub src_conn_pool_pg: Option<Pool<Postgres>>,
     pub dst_conn_pool_pg: Option<Pool<Postgres>>,
+    pub src_mssql_endpoint: Option<MssqlTestEndpoint>,
+    pub dst_mssql_endpoint: Option<MssqlTestEndpoint>,
     pub meta_center_pool_mysql: Option<Pool<MySql>>,
     pub config: TaskConfig,
     pub router: Option<RdbRouter>,
@@ -51,7 +58,7 @@ pub struct RdbTestRunner {
     pub unordered_compare: bool, // whether to compare rows in unordered way
     pub unordered_compare_threads: usize,
     pub mock_prepare_only: bool,
-    pub mock_db_tbs: Vec<(String, String)>,
+    pub mock_db_tbs: Vec<DbSchemaTb>,
 }
 
 pub const SRC: &str = "src";
@@ -66,7 +73,7 @@ struct MockDataPrepare {
     dst_prepare_stmts_for_struct_task: Vec<String>,
     snapshot_dml_stmts: Vec<String>,
     cdc_insert_stmts: Vec<String>,
-    db_tbs: Vec<(String, String)>,
+    db_tbs: Vec<DbSchemaTb>,
 }
 
 impl MockDataPrepare {
@@ -81,21 +88,48 @@ impl MockDataPrepare {
             dst_prepare_stmts_for_struct_task: mock_data.mock_dst_prepare_stmts_for_struct_task(),
             snapshot_dml_stmts: mock_data.mock_dml_stmts(),
             cdc_insert_stmts: mock_data.mock_insert_stmts(),
-            db_tbs: mock_data.mock_db_tbs(),
+            db_tbs: mock_data
+                .mock_db_tbs()
+                .into_iter()
+                .map(|(schema, tb)| (String::new(), schema, tb))
+                .collect(),
         }
     }
 }
 
 #[allow(dead_code)]
 impl RdbTestRunner {
+    async fn ensure_mssql_databases<const N: usize>(
+        endpoint: &MssqlTestEndpoint,
+        sql_groups: [&[String]; N],
+    ) -> anyhow::Result<()> {
+        let mut databases = HashSet::new();
+        for sqls in sql_groups {
+            for (db, _, _) in mssql_ddl_scanner::extract_created_tables(sqls)? {
+                databases.insert(db);
+            }
+        }
+        for db in databases {
+            endpoint.ensure_database(&db).await?;
+        }
+        Ok(())
+    }
+
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let mut base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        let mut base = if relative_test_dir.starts_with("mssql_to_mssql/") {
+            BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::MssqlGo)
+                .await?
+        } else {
+            BaseTestRunner::new(relative_test_dir).await?
+        };
 
         // prepare conn pools
         let mut src_conn_pool_mysql = None;
         let mut dst_conn_pool_mysql = None;
         let mut src_conn_pool_pg = None;
         let mut dst_conn_pool_pg = None;
+        let mut src_mssql_endpoint = None;
+        let mut dst_mssql_endpoint = None;
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
         let src_db_type = config.extractor_basic.db_type.clone();
@@ -144,6 +178,16 @@ impl RdbTestRunner {
                     TaskUtil::create_pg_conn_pool(&src_url, &src_connection_auth, 5, false, true)
                         .await?,
                 );
+            }
+            DbType::Mssql => {
+                let endpoint =
+                    MssqlTestEndpoint::from_task_config(&config, TaskConfigEndpoint::Extractor)?;
+                Self::ensure_mssql_databases(
+                    &endpoint,
+                    [&base.src_prepare_sqls, &base.src_test_sqls],
+                )
+                .await?;
+                src_mssql_endpoint = Some(endpoint);
             }
             _ => {}
         }
@@ -220,6 +264,16 @@ impl RdbTestRunner {
                         .await?,
                     );
                 }
+                DbType::Mssql => {
+                    let endpoint =
+                        MssqlTestEndpoint::from_task_config(&config, TaskConfigEndpoint::Sinker)?;
+                    Self::ensure_mssql_databases(
+                        &endpoint,
+                        [&base.dst_prepare_sqls, &base.dst_test_sqls],
+                    )
+                    .await?;
+                    dst_mssql_endpoint = Some(endpoint);
+                }
                 _ => {}
             }
         }
@@ -252,6 +306,8 @@ impl RdbTestRunner {
             dst_conn_pool_mysql,
             src_conn_pool_pg,
             dst_conn_pool_pg,
+            src_mssql_endpoint,
+            dst_mssql_endpoint,
             meta_center_pool_mysql,
             config,
             router,
@@ -276,6 +332,12 @@ impl RdbTestRunner {
         }
         if let Some(pool) = &self.dst_conn_pool_pg {
             pool.close().await;
+        }
+        if let Some(endpoint) = &self.src_mssql_endpoint {
+            endpoint.close().await?;
+        }
+        if let Some(endpoint) = &self.dst_mssql_endpoint {
+            endpoint.close().await?;
         }
         Ok(())
     }
@@ -405,10 +467,10 @@ impl RdbTestRunner {
                 continue;
             }
             let src_ddl_sql = src_fetcher
-                .fetch_table(&src_db_tbs[i].0, &src_db_tbs[i].1)
+                .fetch_table(&src_db_tbs[i].1, &src_db_tbs[i].2)
                 .await?;
             let meta_center_ddl_sql = meta_center_fetcher
-                .fetch_table(&dst_db_tbs[i].0, &dst_db_tbs[i].1)
+                .fetch_table(&dst_db_tbs[i].1, &dst_db_tbs[i].2)
                 .await?;
             assert_eq!(src_ddl_sql, meta_center_ddl_sql);
         }
@@ -599,7 +661,7 @@ impl RdbTestRunner {
             &['.'],
             &TokenEscapePair::from_char_pairs(SqlUtil::get_escape_pairs(&db_type)),
         );
-        let db_tb = (tokens[0].clone(), tokens[1].clone());
+        let db_tb = (String::new(), tokens[0].clone(), tokens[1].clone());
 
         self.execute_prepare_sqls().await?;
 
@@ -745,6 +807,9 @@ impl RdbTestRunner {
         if let Some(pool) = &self.src_conn_pool_pg {
             RdbUtil::execute_sqls_pg(pool, sqls).await?;
         }
+        if let Some(endpoint) = &self.src_mssql_endpoint {
+            endpoint.execute_batches(sqls).await?;
+        }
         Ok(())
     }
 
@@ -755,13 +820,16 @@ impl RdbTestRunner {
         if let Some(pool) = &self.dst_conn_pool_pg {
             RdbUtil::execute_sqls_pg(pool, sqls).await?;
         }
+        if let Some(endpoint) = &self.dst_mssql_endpoint {
+            endpoint.execute_batches(sqls).await?;
+        }
         Ok(())
     }
 
     pub async fn compare_data_for_tbs_ignore_filtered(
         &self,
-        src_db_tbs: &[(String, String)],
-        dst_db_tbs: &[(String, String)],
+        src_db_tbs: &[DbSchemaTb],
+        dst_db_tbs: &[DbSchemaTb],
     ) -> anyhow::Result<bool> {
         let filtered_db_tbs = self.get_filtered_db_tbs();
         if self.unordered_compare && self.unordered_compare_threads > 1 {
@@ -786,8 +854,8 @@ impl RdbTestRunner {
 
     pub async fn compare_data_for_tbs(
         &self,
-        src_db_tbs: &[(String, String)],
-        dst_db_tbs: &[(String, String)],
+        src_db_tbs: &[DbSchemaTb],
+        dst_db_tbs: &[DbSchemaTb],
     ) -> anyhow::Result<bool> {
         let filtered_db_tbs = self.get_filtered_db_tbs();
         if self.unordered_compare && self.unordered_compare_threads > 1 {
@@ -822,7 +890,7 @@ impl RdbTestRunner {
 
     async fn compare_tb_data_pairs_parallel(
         &self,
-        compare_pairs: Vec<((String, String), (String, String))>,
+        compare_pairs: Vec<(DbSchemaTb, DbSchemaTb)>,
     ) -> anyhow::Result<bool> {
         let semaphore = std::sync::Arc::new(Semaphore::new(self.unordered_compare_threads));
         let mut handles = Vec::with_capacity(compare_pairs.len());
@@ -847,8 +915,8 @@ impl RdbTestRunner {
 
     async fn compare_tb_data(
         &self,
-        src_db_tb: &(String, String),
-        dst_db_tb: &(String, String),
+        src_db_tb: &DbSchemaTb,
+        dst_db_tb: &DbSchemaTb,
     ) -> anyhow::Result<bool> {
         let src_data = self.fetch_data(src_db_tb, SRC).await?;
         let dst_data = self.fetch_data(dst_db_tb, DST).await?;
@@ -874,7 +942,7 @@ impl RdbTestRunner {
         &self,
         src_data: &[RowData],
         dst_data: &[RowData],
-        src_db_tb: &(String, String),
+        src_db_tb: &DbSchemaTb,
     ) -> bool {
         if src_data.len() != dst_data.len() {
             println!(
@@ -887,14 +955,14 @@ impl RdbTestRunner {
 
         let src_db_type = self.get_db_type(SRC);
         let dst_db_type = self.get_db_type(DST);
-
         // router: col_map
-        let col_map = self
-            .router
-            .as_ref()
-            .and_then(|router| router.get_col_map(&src_db_tb.0, &src_db_tb.1));
+        let col_map = self.router.as_ref().and_then(|router| {
+            router.get_col_map_with_db(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2)
+        });
         // filter: ignore_cols
-        let ignore_cols = self.filter.get_ignore_cols(&src_db_tb.0, &src_db_tb.1);
+        let ignore_cols =
+            self.filter
+                .get_ignore_cols_with_db(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2);
 
         if self.unordered_compare {
             // Unordered comparison: use multiset matching for tables without primary key
@@ -1220,72 +1288,95 @@ impl RdbTestRunner {
 
     pub async fn fetch_data(
         &self,
-        db_tb: &(String, String),
+        db_schema_tb: &DbSchemaTb,
         from: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        self.fetch_data_with_condition(db_tb, from, "").await
+        self.fetch_data_with_condition(db_schema_tb, from, "").await
     }
 
     pub async fn fetch_data_with_condition(
         &self,
-        db_tb: &(String, String),
+        db_schema_tb: &DbSchemaTb,
         from: &str,
         condition: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        let where_sql = self.get_where_sql(&db_tb.0, &db_tb.1, condition);
+        let where_sql =
+            self.get_where_sql(&db_schema_tb.0, &db_schema_tb.1, &db_schema_tb.2, condition);
         let (conn_pool_mysql, conn_pool_pg) = self.get_conn_pool(from);
         let data = if let Some(pool) = conn_pool_mysql {
             let db_type = self.get_db_type(from);
-            RdbUtil::fetch_data_mysql_compatible(pool, None, db_tb, &db_type, &where_sql).await?
+            RdbUtil::fetch_data_mysql_compatible(pool, None, db_schema_tb, &db_type, &where_sql)
+                .await?
         } else if let Some(pool) = conn_pool_pg {
-            RdbUtil::fetch_data_pg(pool, None, db_tb, &where_sql).await?
+            RdbUtil::fetch_data_pg(pool, None, db_schema_tb, &where_sql).await?
+        } else if let Some(endpoint) = self.get_mssql_endpoint(from) {
+            RdbUtil::fetch_data_mssql(endpoint, None, db_schema_tb, &where_sql).await?
         } else {
             Vec::new()
         };
         Ok(data)
     }
 
-    pub fn parse_full_tb_name(full_tb_name: &str, db_type: &DbType) -> (String, String) {
+    pub fn parse_full_tb_name(full_tb_name: &str, db_type: &DbType) -> anyhow::Result<DbSchemaTb> {
         let escape_pairs = SqlUtil::get_escape_pairs(db_type);
         let tokens = ConfigTokenParser::parse(
             full_tb_name,
             &['.'],
             &TokenEscapePair::from_char_pairs(escape_pairs.clone()),
         );
-        let (db, tb) = if tokens.len() > 1 {
-            (tokens[0].to_string(), tokens[1].to_string())
-        } else {
-            (String::new(), full_tb_name.to_string())
-        };
+        if matches!(db_type, DbType::Mssql) {
+            anyhow::ensure!(
+                tokens.len() == 3,
+                "MSSQL test table must be explicitly qualified as database.schema.table: {full_tb_name}"
+            );
+            return Ok((
+                SqlUtil::unescape(&tokens[0], &escape_pairs[0]),
+                SqlUtil::unescape(&tokens[1], &escape_pairs[0]),
+                SqlUtil::unescape(&tokens[2], &escape_pairs[0]),
+            ));
+        }
 
-        (
-            SqlUtil::unescape(&db, &escape_pairs[0]),
-            SqlUtil::unescape(&tb, &escape_pairs[0]),
-        )
+        let (schema, tb) = if tokens.len() > 1 {
+            (tokens[0].as_str(), tokens[1].as_str())
+        } else {
+            ("", full_tb_name)
+        };
+        Ok((
+            String::new(),
+            SqlUtil::unescape(schema, &escape_pairs[0]),
+            SqlUtil::unescape(tb, &escape_pairs[0]),
+        ))
     }
 
     /// get compare tbs
     #[allow(clippy::type_complexity)]
-    pub fn get_compare_db_tbs(
-        &self,
-    ) -> anyhow::Result<(Vec<(String, String)>, Vec<(String, String)>)> {
+    pub fn get_compare_db_tbs(&self) -> anyhow::Result<(Vec<DbSchemaTb>, Vec<DbSchemaTb>)> {
         let db_type = self.get_db_type(SRC);
         let mut src_db_tbs =
             Self::get_compare_db_tbs_from_sqls(&db_type, &self.base.src_prepare_sqls)?;
-        // since tables may be created/dropped in src_test.sql for ddl tests,
-        // we also need to parse src_test.sql.
-        src_db_tbs.extend_from_slice(&Self::get_compare_db_tbs_from_sqls(
+        // Tables may be created or dropped in src_test.sql for DDL tests.
+        src_db_tbs.extend(Self::get_compare_db_tbs_from_sqls(
             &db_type,
             &self.base.src_test_sqls,
         )?);
 
+        if matches!(db_type, DbType::Mssql) {
+            let mut seen = HashSet::new();
+            src_db_tbs.retain(|db_tb| seen.insert(db_tb.clone()));
+            if src_db_tbs.is_empty() {
+                anyhow::bail!(
+                    "no MSSQL CREATE TABLE statements found in src_prepare.sql or src_test.sql"
+                );
+            }
+        }
+
         let mut dst_db_tbs = vec![];
-        for (db, tb) in src_db_tbs.iter() {
-            let (dst_db, dst_tb) = match &self.router {
-                Some(router) => router.get_tb_map(db, tb),
-                None => (db.as_str(), tb.as_str()),
+        for (db, schema, tb) in src_db_tbs.iter() {
+            let (dst_db, dst_schema, dst_tb) = match &self.router {
+                Some(router) => router.get_tb_map_with_db(db, schema, tb),
+                None => (db.as_str(), schema.as_str(), tb.as_str()),
             };
-            dst_db_tbs.push((dst_db.into(), dst_tb.into()));
+            dst_db_tbs.push((dst_db.into(), dst_schema.into(), dst_tb.into()));
         }
 
         Ok((src_db_tbs, dst_db_tbs))
@@ -1294,7 +1385,12 @@ impl RdbTestRunner {
     pub fn get_compare_db_tbs_from_sqls(
         db_type: &DbType,
         sqls: &[String],
-    ) -> anyhow::Result<Vec<(String, String)>> {
+    ) -> anyhow::Result<Vec<DbSchemaTb>> {
+        // todo: implement MSSQL DDL parser to extract created tables from SQLs
+        if matches!(db_type, DbType::Mssql) {
+            return mssql_ddl_scanner::extract_created_tables(sqls);
+        }
+
         let mut db_tbs = vec![];
         let parser = DdlParser::new(db_type.to_owned());
 
@@ -1313,30 +1409,21 @@ impl RdbTestRunner {
                 if db.is_empty() {
                     db = PUBLIC.to_string();
                 }
-                db_tbs.push((db, tb));
+                db_tbs.push((String::new(), db, tb));
             }
         }
 
         Ok(db_tbs)
     }
-
-    fn get_filtered_db_tbs(&self) -> HashSet<(String, String)> {
+    fn get_filtered_db_tbs(&self) -> HashSet<DbSchemaTb> {
         let mut filtered_db_tbs = HashSet::new();
         let db_type = &self.get_db_type(SRC);
-        let delimiters = vec!['.'];
-        let escape_pairs = SqlUtil::get_escape_pairs(db_type);
         let filtered_tbs_file = format!("{}/filtered_tbs.txt", &self.base.test_dir);
 
         if BaseTestRunner::check_path_exists(&filtered_tbs_file) {
             let lines = BaseTestRunner::load_file(&filtered_tbs_file);
             for line in lines.iter() {
-                let db_tb =
-                    ConfigTokenParser::parse_config(line, db_type, &delimiters, None).unwrap();
-                if db_tb.len() == 2 {
-                    let db = SqlUtil::unescape(&db_tb[0], &escape_pairs[0]);
-                    let tb = SqlUtil::unescape(&db_tb[1], &escape_pairs[0]);
-                    filtered_db_tbs.insert((db, tb));
-                }
+                filtered_db_tbs.insert(Self::parse_full_tb_name(line, db_type).unwrap());
             }
         }
         filtered_db_tbs
@@ -1344,16 +1431,18 @@ impl RdbTestRunner {
 
     pub async fn get_tb_cols(
         &self,
-        db_tb: &(String, String),
+        db_schema_tb: &DbSchemaTb,
         from: &str,
     ) -> anyhow::Result<Vec<String>> {
         let (conn_pool_mysql, conn_pool_pg) = self.get_conn_pool(from);
         let cols = if let Some(conn_pool) = conn_pool_mysql {
-            let tb_meta = RdbUtil::get_tb_meta_mysql(conn_pool, db_tb).await?;
+            let tb_meta = RdbUtil::get_tb_meta_mysql(conn_pool, db_schema_tb).await?;
             tb_meta.basic.cols.clone()
         } else if let Some(conn_pool) = conn_pool_pg {
-            let tb_meta = RdbUtil::get_tb_meta_pg(conn_pool, db_tb).await?;
+            let tb_meta = RdbUtil::get_tb_meta_pg(conn_pool, db_schema_tb).await?;
             tb_meta.basic.cols.clone()
+        } else if let Some(endpoint) = self.get_mssql_endpoint(from) {
+            RdbUtil::get_tb_cols_mssql(endpoint, db_schema_tb).await?
         } else {
             vec![]
         };
@@ -1365,6 +1454,14 @@ impl RdbTestRunner {
             (&self.src_conn_pool_mysql, &self.src_conn_pool_pg)
         } else {
             (&self.dst_conn_pool_mysql, &self.dst_conn_pool_pg)
+        }
+    }
+
+    fn get_mssql_endpoint(&self, from: &str) -> Option<&MssqlTestEndpoint> {
+        if from == SRC {
+            self.src_mssql_endpoint.as_ref()
+        } else {
+            self.dst_mssql_endpoint.as_ref()
         }
     }
 
@@ -1391,9 +1488,9 @@ impl RdbTestRunner {
         }
     }
 
-    pub fn get_where_sql(&self, schema: &str, tb: &str, condition: &str) -> String {
+    pub fn get_where_sql(&self, db: &str, schema: &str, tb: &str, condition: &str) -> String {
         let mut res: String = String::new();
-        if let Some(where_condition) = self.filter.get_where_condition(schema, tb) {
+        if let Some(where_condition) = self.filter.get_where_condition_with_db(db, schema, tb) {
             res = format!("WHERE {}", where_condition);
         }
 
@@ -1490,5 +1587,34 @@ mod tests {
         fs::remove_file(path).unwrap();
 
         assert!(!prepare_only);
+    }
+
+    #[test]
+    fn test_get_compare_db_tbs_from_mssql_sqls() {
+        let sqls = vec!["CREATE TABLE [sales_db].[audit].[events] (id int);".to_string()];
+
+        let db_tbs = RdbTestRunner::get_compare_db_tbs_from_sqls(&DbType::Mssql, &sqls).unwrap();
+
+        assert_eq!(
+            db_tbs,
+            vec![(
+                "sales_db".to_string(),
+                "audit".to_string(),
+                "events".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn test_parse_full_tb_name_only_requires_three_parts_for_mssql() {
+        assert_eq!(
+            RdbTestRunner::parse_full_tb_name("shop.orders", &DbType::Mysql).unwrap(),
+            (String::new(), "shop".to_string(), "orders".to_string())
+        );
+        assert_eq!(
+            RdbTestRunner::parse_full_tb_name("orders", &DbType::Mysql).unwrap(),
+            (String::new(), String::new(), "orders".to_string())
+        );
+        assert!(RdbTestRunner::parse_full_tb_name("dbo.orders", &DbType::Mssql).is_err());
     }
 }

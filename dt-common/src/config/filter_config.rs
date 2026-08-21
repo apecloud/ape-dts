@@ -1,5 +1,6 @@
 #[derive(Clone, Default, Hash)]
 pub struct FilterConfig {
+    // User-facing do_dbs/ignore_dbs map to the database-specific top-level namespace.
     pub do_schemas: String,
     pub ignore_schemas: String,
     pub do_tbs: String,

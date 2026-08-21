@@ -32,7 +32,7 @@ impl Checker for MongoChecker {
         &mut self,
         lookup_row: &RowData,
     ) -> anyhow::Result<Arc<CheckerTbMeta>> {
-        let mut meta = Self::mock_tb_meta(&lookup_row.schema, &lookup_row.tb);
+        let mut meta = Self::mock_tb_meta(&lookup_row.db, &lookup_row.schema, &lookup_row.tb);
         let first_row_cols = lookup_row.after.as_ref().or(lookup_row.before.as_ref());
         if let Some(cols) = first_row_cols {
             meta.cols = cols.keys().cloned().collect();
@@ -94,8 +94,13 @@ impl Checker for MongoChecker {
             while cursor.advance().await? {
                 let doc = cursor.deserialize_current()?;
                 if let Some(key) = MongoKey::from_doc(&doc) {
-                    let row_data =
-                        Self::build_row_data(&basic_meta.schema, &basic_meta.tb, doc, &key);
+                    let row_data = Self::build_row_data(
+                        &basic_meta.db,
+                        &basic_meta.schema,
+                        &basic_meta.tb,
+                        doc,
+                        &key,
+                    );
                     dst_row_data_vec.push(row_data);
                 } else {
                     let id = doc.get(MongoConstants::ID);
@@ -118,8 +123,9 @@ impl MongoChecker {
         MongoKey::from_doc(&doc).is_some()
     }
 
-    fn mock_tb_meta(schema: &str, tb: &str) -> RdbTbMeta {
+    fn mock_tb_meta(db: &str, schema: &str, tb: &str) -> RdbTbMeta {
         RdbTbMeta {
+            db: db.to_string(),
             schema: schema.to_string(),
             tb: tb.to_string(),
             id_cols: vec![MongoConstants::ID.to_string()],
@@ -127,7 +133,7 @@ impl MongoChecker {
         }
     }
 
-    fn build_row_data(schema: &str, tb: &str, doc: Document, key: &MongoKey) -> RowData {
+    fn build_row_data(db: &str, schema: &str, tb: &str, doc: Document, key: &MongoKey) -> RowData {
         let mut dst_after = HashMap::new();
         dst_after.insert(
             MongoConstants::ID.to_string(),
@@ -135,6 +141,7 @@ impl MongoChecker {
         );
         dst_after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
         RowData::new(
+            db.to_string(),
             schema.to_string(),
             tb.to_string(),
             0,

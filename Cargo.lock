@@ -752,6 +752,17 @@ dependencies = [
 
 [[package]]
 name = "bigdecimal"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6773ddc0eafc0e509fb60e48dff7f450f8e674a0686ae8605e8d9901bd5eefa"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "bigdecimal"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a22f228ab7a1b23027ccc6c350b72868017af7ea8356fbdf19f8d991c690013"
@@ -1724,6 +1735,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "strum",
+ "tiberius",
  "tokio",
  "tokio-postgres",
  "url",
@@ -1834,6 +1846,7 @@ dependencies = [
  "serial_test",
  "sqlx",
  "strum",
+ "tiberius",
  "tokio",
  "tokio-util 0.7.15",
 ]
@@ -1847,6 +1860,7 @@ dependencies = [
  "clickhouse",
  "concurrent-queue",
  "configparser",
+ "connection-string",
  "dotenv",
  "dt-common",
  "dt-connector",
@@ -2023,7 +2037,7 @@ version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2b0902eb36fbab51c14eda1c186bda119fcff91e5e4e7fc2dd2077298197ce8"
 dependencies = [
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "chrono",
  "deunicode",
  "dummy",
@@ -3609,7 +3623,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478b0ff3f7d67b79da2b96f56f334431aef65e15ba4b29dd74a4236e29582bdc"
 dependencies = [
  "base64 0.21.7",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bindgen",
  "bitflags 2.9.1",
  "bitvec",
@@ -5460,7 +5474,7 @@ dependencies = [
  "async-io 1.13.0",
  "async-std",
  "base64 0.22.1",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bit-vec",
  "bytes",
  "chrono",
@@ -5538,7 +5552,7 @@ source = "git+https://github.com/apecloud/sqlx?branch=release-0.8.6#3df857d1b76c
 dependencies = [
  "atoi",
  "base64 0.22.1",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bitflags 2.9.1",
  "byteorder",
  "bytes",
@@ -5583,7 +5597,7 @@ source = "git+https://github.com/apecloud/sqlx?branch=release-0.8.6#3df857d1b76c
 dependencies = [
  "atoi",
  "base64 0.22.1",
- "bigdecimal",
+ "bigdecimal 0.4.8",
  "bit-vec",
  "bitflags 2.9.1",
  "byteorder",
@@ -5883,6 +5897,7 @@ checksum = "a1446cb4198848d1562301a3340424b4f425ef79f35ef9ee034769a9dd92c10d"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
+ "bigdecimal 0.3.1",
  "byteorder",
  "bytes",
  "chrono",
@@ -5894,7 +5909,6 @@ dependencies = [
  "once_cell",
  "pin-project-lite",
  "pretty-hex",
- "rust_decimal",
  "rustls-native-certs",
  "rustls-pemfile",
  "thiserror 1.0.69",

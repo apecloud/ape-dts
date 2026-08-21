@@ -83,30 +83,38 @@ impl TaskMonitorHandle {
             .is_some_and(|task_type| task_type.kind == TaskKind::Snapshot)
     }
 
-    pub fn task_id_from_schema_tb(schema: &str, tb: &str) -> String {
+    pub fn task_id_from_db_schema_tb(db: &str, schema: &str, tb: &str) -> String {
         if schema.is_empty() || tb.is_empty() {
             String::new()
-        } else {
+        } else if db.is_empty() {
             format!("{}.{}", schema, tb)
+        } else {
+            format!("{}.{}.{}", db, schema, tb)
         }
     }
 
     pub fn task_id_from_row_data(row_data: &RowData) -> String {
-        Self::task_id_from_schema_tb(&row_data.schema, &row_data.tb)
+        Self::task_id_from_db_schema_tb(&row_data.db, &row_data.schema, &row_data.tb)
     }
 
     pub fn task_id_from_ddl_data(ddl_data: &DdlData) -> String {
-        let (schema, tb) = ddl_data.get_schema_tb();
-        Self::task_id_from_schema_tb(&schema, &tb)
+        let (db, schema, tb) = ddl_data.get_db_schema_tb();
+        Self::task_id_from_db_schema_tb(&db, &schema, &tb)
     }
 
     pub fn task_id_from_struct_data(struct_data: &StructData) -> String {
-        struct_data.schema.clone()
+        if !struct_data.tb.is_empty() {
+            Self::task_id_from_db_schema_tb(&struct_data.db, &struct_data.schema, &struct_data.tb)
+        } else if struct_data.db.is_empty() {
+            struct_data.schema.clone()
+        } else {
+            format!("{}.{}", struct_data.db, struct_data.schema)
+        }
     }
 
-    pub fn task_id_for_schema_tb(&self, schema: &str, tb: &str) -> String {
+    pub fn task_id_for_db_schema_tb(&self, db: &str, schema: &str, tb: &str) -> String {
         if self.is_snapshot_task() {
-            let task_id = Self::task_id_from_schema_tb(schema, tb);
+            let task_id = Self::task_id_from_db_schema_tb(db, schema, tb);
             if !task_id.is_empty() {
                 return task_id;
             }
@@ -124,7 +132,7 @@ impl TaskMonitorHandle {
             return self.default_task_id.clone();
         };
 
-        self.task_id_for_schema_tb(&first.schema, &first.tb)
+        self.task_id_for_db_schema_tb(&first.db, &first.schema, &first.tb)
     }
 
     pub fn ensure_snapshot_monitor(&self, task_id: &str) {
@@ -241,5 +249,22 @@ impl TaskMonitorHandle {
 impl Default for TaskMonitorHandle {
     fn default() -> Self {
         Self::noop(MonitorType::Pipeline)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskMonitorHandle;
+
+    #[test]
+    fn table_task_id_uses_db_only_when_present() {
+        assert_eq!(
+            TaskMonitorHandle::task_id_from_db_schema_tb("", "schema1", "tb1"),
+            "schema1.tb1"
+        );
+        assert_eq!(
+            TaskMonitorHandle::task_id_from_db_schema_tb("db1", "schema1", "tb1"),
+            "db1.schema1.tb1"
+        );
     }
 }

@@ -91,6 +91,7 @@ impl CheckerTbMeta {
             return Ok(mongo_cmd::build_insert_cmd(src_row_data));
         }
         let mut insert_row = RowData::new(
+            src_row_data.db.clone(),
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
             0,
@@ -111,6 +112,7 @@ impl CheckerTbMeta {
             _ => return Ok(None),
         };
         let mut delete_row = RowData::new(
+            dst_row_data.db.clone(),
             dst_row_data.schema.clone(),
             dst_row_data.tb.clone(),
             0,
@@ -157,6 +159,7 @@ impl CheckerTbMeta {
         };
 
         let mut update_row = RowData::new(
+            src_row_data.db.clone(),
             src_row_data.schema.clone(),
             src_row_data.tb.clone(),
             0,
@@ -280,11 +283,12 @@ impl CheckContext {
     }
 
     fn record_row_table_counts(&mut self, row: &RowData, checked_count: usize, skip_count: usize) {
-        self.record_table_counts(&row.schema, &row.tb, checked_count, skip_count);
+        self.record_table_counts(&row.db, &row.schema, &row.tb, checked_count, skip_count);
     }
 
     fn record_table_counts(
         &mut self,
+        target_db: &str,
         target_schema: &str,
         target_tb: &str,
         checked_count: usize,
@@ -294,14 +298,17 @@ impl CheckContext {
             return;
         }
         self.summary.checked_count += checked_count;
-        let (schema, tb) = match &self.router {
-            Some(router) => router.reverse_get_tb_map(target_schema, target_tb),
-            None => (target_schema, target_tb),
+        let (db, schema, tb) = match &self.router {
+            Some(router) => router.reverse_get_tb_map_with_db(target_db, target_schema, target_tb),
+            None => (target_db, target_schema, target_tb),
         };
-        let has_target = target_schema != schema || target_tb != tb;
+        let has_target_db = target_db != db;
+        let has_target = has_target_db || target_schema != schema || target_tb != tb;
         self.summary.merge_table(CheckTableSummaryLog {
+            db: db.to_string(),
             schema: schema.to_string(),
             tb: tb.to_string(),
+            target_db: has_target_db.then(|| target_db.to_string()),
             target_schema: has_target.then(|| target_schema.to_string()),
             target_tb: has_target.then(|| target_tb.to_string()),
             checked_count,
@@ -319,8 +326,10 @@ impl CheckContext {
             return;
         };
         self.summary.merge_table(CheckTableSummaryLog {
+            db: entry.log.db.clone(),
             schema: entry.log.schema.clone(),
             tb: entry.log.tb.clone(),
+            target_db: entry.log.target_db.clone(),
             target_schema: entry.log.target_schema.clone(),
             target_tb: entry.log.target_tb.clone(),
             miss_count,
@@ -332,14 +341,16 @@ impl CheckContext {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct CheckerStoreKey {
+    db: String,
     schema: String,
     tb: String,
     row_key: u128,
 }
 
 impl CheckerStoreKey {
-    fn new(schema: &str, tb: &str, row_key: u128) -> Self {
+    fn new(db: &str, schema: &str, tb: &str, row_key: u128) -> Self {
         Self {
+            db: db.to_string(),
             schema: schema.to_string(),
             tb: tb.to_string(),
             row_key,
@@ -358,7 +369,7 @@ pub trait Checker: Send + Sync + 'static {
     async fn refresh_meta(&mut self, _data: &[DdlData]) -> Result<()> {
         Ok(())
     }
-    async fn invalidate_meta_cache(&mut self, _schema: &str, _tb: &str) -> Result<()> {
+    async fn invalidate_meta_cache(&mut self, _db: &str, _schema: &str, _tb: &str) -> Result<()> {
         Ok(())
     }
 }
@@ -678,6 +689,8 @@ enum CheckInconsistency {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct RecheckKey {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    db: String,
     schema: String,
     tb: String,
     is_delete: bool,
@@ -713,6 +726,7 @@ impl RecheckKey {
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         Ok(Self {
+            db: row_data.db.clone(),
             schema: row_data.schema.clone(),
             tb: row_data.tb.clone(),
             is_delete: row_data.row_type == RowType::Delete,
@@ -728,6 +742,7 @@ impl RecheckKey {
             .collect::<HashMap<_, _>>();
         if self.is_delete {
             RowData::new(
+                self.db.clone(),
                 self.schema.clone(),
                 self.tb.clone(),
                 0,
@@ -737,6 +752,7 @@ impl RecheckKey {
             )
         } else {
             RowData::new(
+                self.db.clone(),
                 self.schema.clone(),
                 self.tb.clone(),
                 0,
@@ -994,23 +1010,27 @@ impl<C: Checker> DataChecker<C> {
     }
 
     async fn handle_control_item(&mut self, item: &DtItem) -> Result<()> {
-        if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { schema, tb, .. }) =
+        if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { db, schema, tb, .. }) =
             (&item.dt_data, &item.position)
         {
-            let task_id = TaskMonitorHandle::task_id_from_schema_tb(schema, tb);
+            let task_id = TaskMonitorHandle::task_id_from_db_schema_tb(db, schema, tb);
             self.ctx.monitor.unregister_monitor(&task_id);
 
             if let Some(meta_manager) = self.ctx.extractor_meta_manager.as_mut() {
-                meta_manager.invalidate_cache_for_table(schema, tb);
+                meta_manager.invalidate_cache_for_table(db, schema, tb);
             }
 
-            let (target_schema, target_tb) = match &self.ctx.router {
-                Some(router) => router.get_tb_map(schema, tb),
-                None => (schema.as_str(), tb.as_str()),
+            let (target_db, target_schema, target_tb) = match &self.ctx.router {
+                Some(router) => router.get_tb_map_with_db(db, schema, tb),
+                None => (db.as_str(), schema.as_str(), tb.as_str()),
             };
-            let (target_schema, target_tb) = (target_schema.to_string(), target_tb.to_string());
+            let (target_db, target_schema, target_tb) = (
+                target_db.to_string(),
+                target_schema.to_string(),
+                target_tb.to_string(),
+            );
             self.checker
-                .invalidate_meta_cache(&target_schema, &target_tb)
+                .invalidate_meta_cache(&target_db, &target_schema, &target_tb)
                 .await?;
         }
         Ok(())
@@ -1161,7 +1181,7 @@ mod tests {
     }
 
     struct CaptureInvalidateChecker {
-        invalidated: Arc<StdMutex<Vec<(String, String)>>>,
+        invalidated: Arc<StdMutex<Vec<(String, String, String)>>>,
     }
 
     struct RetryFailureChecker {
@@ -1204,11 +1224,12 @@ mod tests {
             unreachable!("control item test should not fetch rows")
         }
 
-        async fn invalidate_meta_cache(&mut self, schema: &str, tb: &str) -> Result<()> {
-            self.invalidated
-                .lock()
-                .unwrap()
-                .push((schema.to_string(), tb.to_string()));
+        async fn invalidate_meta_cache(&mut self, db: &str, schema: &str, tb: &str) -> Result<()> {
+            self.invalidated.lock().unwrap().push((
+                db.to_string(),
+                schema.to_string(),
+                tb.to_string(),
+            ));
             Ok(())
         }
     }
@@ -1249,6 +1270,7 @@ mod tests {
 
     fn build_row(id: i32) -> RowData {
         RowData::new(
+            String::new(),
             "s1".to_string(),
             "t1".to_string(),
             0,
@@ -1333,8 +1355,16 @@ mod tests {
         let invalidated = Arc::new(StdMutex::new(Vec::new()));
         let mut tb_map = HashMap::new();
         tb_map.insert(
-            ("src_schema".to_string(), "src_tb".to_string()),
-            ("dst_schema".to_string(), "dst_tb".to_string()),
+            (
+                String::new(),
+                "src_schema".to_string(),
+                "src_tb".to_string(),
+            ),
+            (
+                String::new(),
+                "dst_schema".to_string(),
+                "dst_tb".to_string(),
+            ),
         );
         let router =
             RdbRouter::from_maps_for_test(HashMap::new(), tb_map, HashMap::new(), HashMap::new());
@@ -1360,6 +1390,7 @@ mod tests {
             dt_data: DtData::Commit { xid: String::new() },
             position: Position::RdbSnapshotFinished {
                 db_type: "mysql".to_string(),
+                db: String::new(),
                 schema: "src_schema".to_string(),
                 tb: "src_tb".to_string(),
             },
@@ -1370,7 +1401,11 @@ mod tests {
 
         assert_eq!(
             invalidated.lock().unwrap().as_slice(),
-            &[("dst_schema".to_string(), "dst_tb".to_string())]
+            &[((
+                String::new(),
+                "dst_schema".to_string(),
+                "dst_tb".to_string(),
+            ))]
         );
     }
 

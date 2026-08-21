@@ -286,6 +286,7 @@ mod tests {
             MergeParallelizer::for_mongo(BaseParallelizer::default(), 2, sinker_basic_config);
         let row = || {
             RowData::new(
+                String::new(),
                 "schema".to_string(),
                 "table".to_string(),
                 0,

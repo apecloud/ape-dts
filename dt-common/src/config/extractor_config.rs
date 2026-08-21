@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use super::config_enums::{DbType, ExtractType};
 use crate::{
     config::{
@@ -10,11 +8,13 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+// Extractor variants use each database's physical terminology. Their output is normalized to the
+// common db/schema/tb identity represented by RowData and RdbTbMeta. MySQL, PostgreSQL and MongoDB
+// currently leave db empty and keep their existing first-level namespace in schema.
 pub enum ExtractorConfig {
     MysqlStruct {
         url: String,
         connection_auth: ConnectionAuthConfig,
-        db: String,
         dbs: Vec<String>,
         db_batch_size: usize,
     },
@@ -22,7 +22,6 @@ pub enum ExtractorConfig {
     PgStruct {
         url: String,
         connection_auth: ConnectionAuthConfig,
-        schema: String,
         schemas: Vec<String>,
         do_global_structs: bool,
         db_batch_size: usize,
@@ -31,9 +30,7 @@ pub enum ExtractorConfig {
     MysqlSnapshot {
         url: String,
         connection_auth: ConnectionAuthConfig,
-        db: String,
-        tb: String,
-        db_tbs: HashMap<String, Vec<String>>,
+        tbs: Vec<(String, String, String)>,
         sample_rate: Option<u8>,
         parallel_size: usize,
         parallel_type: RdbParallelType,
@@ -69,9 +66,7 @@ pub enum ExtractorConfig {
     PgSnapshot {
         url: String,
         connection_auth: ConnectionAuthConfig,
-        schema: String,
-        tb: String,
-        schema_tbs: HashMap<String, Vec<String>>,
+        tbs: Vec<(String, String, String)>,
         sample_rate: Option<u8>,
         parallel_size: usize,
         parallel_type: RdbParallelType,
@@ -82,9 +77,7 @@ pub enum ExtractorConfig {
     MssqlSnapshot {
         url: String,
         connection_auth: ConnectionAuthConfig,
-        schema: String,
-        tb: String,
-        schema_tbs: HashMap<String, Vec<String>>,
+        tbs: Vec<(String, String, String)>,
         parallel_size: usize,
         parallel_type: RdbParallelType,
         batch_size: usize,
@@ -118,9 +111,7 @@ pub enum ExtractorConfig {
         connection_auth: ConnectionAuthConfig,
         is_direct_connection: Option<bool>,
         app_name: String,
-        db: String,
-        tb: String,
-        db_tbs: HashMap<String, Vec<String>>,
+        tbs: Vec<(String, String, String)>,
         parallel_size: usize,
         parallel_type: RdbParallelType,
         batch_size: u32,
@@ -153,7 +144,6 @@ pub enum ExtractorConfig {
         connection_auth: ConnectionAuthConfig,
         is_direct_connection: Option<bool>,
         app_name: String,
-        db: String,
         dbs: Vec<String>,
         db_batch_size: usize,
     },

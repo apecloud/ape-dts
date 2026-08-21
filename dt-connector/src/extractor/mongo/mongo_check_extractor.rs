@@ -94,6 +94,7 @@ impl BatchCheckExtractor for MongoCheckExtractor {
             after.insert(MongoConstants::ID.to_string(), ColValue::String(id));
             after.insert(MongoConstants::DOC.to_string(), ColValue::MongoDoc(doc));
             let mut row_data = RowData::new(
+                String::new(),
                 schema.clone(),
                 tb.clone(),
                 0,

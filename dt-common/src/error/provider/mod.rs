@@ -9,4 +9,5 @@ mod redis;
 mod sqlx;
 mod system;
 
+pub use mssql::classify_mssql_error;
 pub use sqlx::classify_sqlx_error;

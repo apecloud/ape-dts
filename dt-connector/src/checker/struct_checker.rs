@@ -42,7 +42,7 @@ pub struct StructCheckerHandle {
     monitor: TaskMonitorHandle,
     monitor_task_id: String,
     src_sql_map: BTreeMap<String, String>,
-    dbs: HashSet<String>,
+    schemas: HashSet<String>,
     start_time: String,
 }
 
@@ -106,7 +106,7 @@ impl StructCheckerHandle {
             monitor,
             monitor_task_id,
             src_sql_map: BTreeMap::new(),
-            dbs: HashSet::new(),
+            schemas: HashSet::new(),
             start_time: Local::now().to_rfc3339(),
         }
     }
@@ -140,8 +140,8 @@ impl StructCheckerHandle {
         }
 
         for (key, sql) in sqls {
-            if let Some(db) = Self::schema_from_key(&key).filter(|db| !db.is_empty()) {
-                self.dbs.insert(db.to_string());
+            if let Some(schema) = Self::schema_from_key(&key).filter(|schema| !schema.is_empty()) {
+                self.schemas.insert(schema.to_string());
             }
             self.src_sql_map.insert(key, sql);
         }
@@ -150,7 +150,7 @@ impl StructCheckerHandle {
 
     async fn build_dst_sql_map(
         &self,
-        dbs: &HashSet<String>,
+        schemas: &HashSet<String>,
     ) -> anyhow::Result<BTreeMap<String, String>> {
         let mut dst_map = BTreeMap::new();
         match self.db_type {
@@ -167,7 +167,7 @@ impl StructCheckerHandle {
                     .await?;
                 let mut fetcher = MysqlStructFetcher {
                     conn_pool,
-                    dbs: dbs.clone(),
+                    dbs: schemas.clone(),
                     filter: Some(self.filter.clone()),
                     meta_manager,
                     allow_missing_databases: true,
@@ -187,7 +187,7 @@ impl StructCheckerHandle {
                     .clone();
                 let mut fetcher = PgStructFetcher {
                     conn_pool,
-                    schemas: dbs.clone(),
+                    schemas: schemas.clone(),
                     filter: Some(self.filter.clone()),
                     allow_missing_schemas: true,
                 };
@@ -225,10 +225,10 @@ impl StructCheckerHandle {
     async fn compare_once(
         &self,
         src_sql_map: &BTreeMap<String, String>,
-        dbs: &HashSet<String>,
+        schemas: &HashSet<String>,
         log_enabled: bool,
     ) -> anyhow::Result<CheckSummaryLog> {
-        let dst_map = self.build_dst_sql_map(dbs).await?;
+        let dst_map = self.build_dst_sql_map(schemas).await?;
         Ok(Self::compare_sql_maps(
             src_sql_map,
             dst_map,
@@ -321,7 +321,7 @@ impl StructCheckerHandle {
         let mut retries_left = self.max_retries;
         let summary = loop {
             let summary = self
-                .compare_once(&self.src_sql_map, &self.dbs, false)
+                .compare_once(&self.src_sql_map, &self.schemas, false)
                 .await?;
             if summary.is_consistent {
                 log_info!("Structure check passed - all structures are consistent");
@@ -329,7 +329,7 @@ impl StructCheckerHandle {
             }
             if retries_left == 0 {
                 break self
-                    .compare_once(&self.src_sql_map, &self.dbs, true)
+                    .compare_once(&self.src_sql_map, &self.schemas, true)
                     .await?;
             }
             retries_left -= 1;

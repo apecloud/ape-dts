@@ -7,6 +7,7 @@ use dt_common::{
     meta::{
         avro::avro_converter::AvroConverter,
         mongo::mongo_shard::{is_mongos, list_shard_collections},
+        mssql::mssql_meta_manager::MssqlMetaManager,
         mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager,
         rdb_meta_manager::RdbMetaManager,
@@ -33,6 +34,7 @@ use dt_connector::{
         dummy_sinker::DummySinker,
         kafka::kafka_sinker::KafkaSinker,
         mongo::{mongo_sinker::MongoSinker, mongo_struct_sinker::MongoStructSinker},
+        mssql::mssql_sinker::MssqlSinker,
         mysql::{mysql_sinker::MysqlSinker, mysql_struct_sinker::MysqlStructSinker},
         pg::{pg_sinker::PgSinker, pg_struct_sinker::PgStructSinker},
         redis::{redis_sinker::RedisSinker, redis_statistic_sinker::RedisStatisticSinker},
@@ -89,11 +91,11 @@ impl SinkerUtil {
     }
 
     async fn require_extractor_meta_manager(config: &TaskConfig) -> anyhow::Result<RdbMetaManager> {
-        Ok(ExtractorUtil::get_extractor_meta_manager(config)
+        ExtractorUtil::get_extractor_meta_manager(config)
             .await?
             .or_dt_error(DtError::InvalidConfig(
                 "the selected sinker requires relational source metadata".to_string(),
-            ))?)
+            ))
     }
 
     fn push_checkable_sinker<S: CheckableSink + Send + 'static>(
@@ -210,6 +212,33 @@ impl SinkerUtil {
                         index + 1 == parallel_size,
                         &sinker_worker_metrics,
                     );
+                }
+            }
+
+            SinkerConfig::Mssql {
+                batch_size,
+                replace,
+                ..
+            } => {
+                let router = RdbRouter::from_config(&config.router, &DbType::Mssql)?;
+                let conn_pool = match client {
+                    ConnClient::Mssql(conn_pool) => conn_pool,
+                    _ => {
+                        bail!(DtError::MissingDestinationClient);
+                    }
+                };
+                let meta_manager = MssqlMetaManager::new(conn_pool.clone()).await?;
+
+                for _ in 0..parallel_size {
+                    let sinker = MssqlSinker::new(
+                        conn_pool.clone(),
+                        meta_manager.clone(),
+                        router.clone(),
+                        batch_size,
+                        replace,
+                        BaseSinker::new(monitor.clone(), monitor_interval),
+                    );
+                    Self::push_sinker(&mut sub_sinkers, sinker, &sinker_worker_metrics);
                 }
             }
 
@@ -582,12 +611,6 @@ impl SinkerUtil {
                     extractor_meta_manager,
                 };
                 Self::push_sinker(&mut sub_sinkers, sinker, &sinker_worker_metrics);
-            }
-
-            SinkerConfig::Mssql { .. } => {
-                bail!(DtError::InvalidConfig(
-                    "MSSQL sinker is not implemented".to_string(),
-                ));
             }
 
             SinkerConfig::Sql { reverse } => {

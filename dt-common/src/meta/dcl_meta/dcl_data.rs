@@ -7,6 +7,8 @@ use crate::meta::dcl_meta::dcl_statement::DclStatement;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct DclData {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_db: String,
     pub default_schema: String,
     pub dcl_type: DclType,
     pub db_type: DbType,
@@ -31,6 +33,7 @@ impl DclData {
     pub fn get_malloc_size(&self) -> u64 {
         let mut size = 0;
 
+        size += self.default_db.len() as u64;
         size += self.default_schema.len() as u64;
         size += std::mem::size_of::<DclType>() as u64;
         size += std::mem::size_of::<DbType>() as u64;

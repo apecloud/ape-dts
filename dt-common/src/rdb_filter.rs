@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -14,16 +14,18 @@ use crate::{
     },
     error::DtError,
     meta::{
-        ddl_meta::ddl_type::DdlType, row_type::RowType,
+        ddl_meta::ddl_type::DdlType, mssql::MSSQL_DEFAULT_SCHEMA, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
     },
-    utils::sql_util::SqlUtil,
+    utils::sql_util::{CharEscapePair, SqlUtil},
 };
 
-type IgnoreCols = HashMap<(String, String), HashSet<String>>;
-type WhereConditions = HashMap<(String, String), String>;
+type DbSchemaTb = (String, String, String);
+type IgnoreCols = HashMap<DbSchemaTb, HashSet<String>>;
+type WhereConditions = HashMap<DbSchemaTb, String>;
 
 const JSON_PREFIX: &str = "json:";
+const EMPTY_DB: &str = "";
 
 const REGEX_ESCAPE_PAIR: (&str, &str) = ("r#", "#");
 
@@ -32,8 +34,8 @@ pub struct RdbFilter {
     pub db_type: DbType,
     pub do_schemas: HashSet<String>,
     pub ignore_schemas: HashSet<String>,
-    pub do_tbs: HashSet<(String, String)>,
-    pub ignore_tbs: HashSet<(String, String)>,
+    pub do_tbs: HashSet<DbSchemaTb>,
+    pub ignore_tbs: HashSet<DbSchemaTb>,
     pub ignore_cols: IgnoreCols,
     pub do_events: HashSet<String>,
     pub do_structures: HashSet<String>,
@@ -41,7 +43,7 @@ pub struct RdbFilter {
     pub do_dcls: HashSet<String>,
     pub ignore_cmds: HashSet<String>,
     pub where_conditions: WhereConditions,
-    pub cache: DashMap<(String, String), bool>,
+    pub cache: DashMap<DbSchemaTb, bool>,
 }
 
 impl RdbFilter {
@@ -50,58 +52,83 @@ impl RdbFilter {
             db_type: db_type.to_owned(),
             do_schemas: Self::parse_single_tokens(&config.do_schemas, db_type)?,
             ignore_schemas: Self::parse_single_tokens(&config.ignore_schemas, db_type)?,
-            do_tbs: Self::parse_pair_tokens(&config.do_tbs, db_type)?,
-            ignore_tbs: Self::parse_pair_tokens(&config.ignore_tbs, db_type)?,
-            ignore_cols: Self::parse_ignore_cols(&config.ignore_cols)?,
+            do_tbs: Self::parse_table_tokens(&config.do_tbs, db_type)?,
+            ignore_tbs: Self::parse_table_tokens(&config.ignore_tbs, db_type)?,
+            ignore_cols: Self::parse_ignore_cols(&config.ignore_cols, db_type)?,
             do_events: Self::parse_single_tokens(&config.do_events, db_type)?,
             do_structures: Self::parse_single_tokens(&config.do_structures, db_type)?,
             do_ddls: Self::parse_single_tokens(&config.do_ddls, db_type)?,
             do_dcls: Self::parse_single_tokens(&config.do_dcls, db_type)?,
             ignore_cmds: Self::parse_single_tokens(&config.ignore_cmds, db_type)?,
-            where_conditions: Self::parse_where_conditions(&config.where_conditions)?,
+            where_conditions: Self::parse_where_conditions(&config.where_conditions, db_type)?,
             cache: DashMap::new(),
         })
     }
 
     pub fn filter_schema(&self, schema: &str) -> bool {
-        let tb = "*";
         let escape_pairs = SqlUtil::get_escape_pairs(&self.db_type);
-        let filter = Self::contain_tb(&self.ignore_tbs, schema, tb, &escape_pairs)
-            || Self::contain_schema(&self.ignore_schemas, schema, &escape_pairs);
+        let filter = Self::contains_token(&self.ignore_schemas, schema, &escape_pairs)
+            || (!matches!(self.db_type, DbType::Mssql)
+                && Self::contains_table(&self.ignore_tbs, EMPTY_DB, schema, "*", &escape_pairs));
 
         if filter {
             return filter;
         }
 
-        let do_tb_schemas: HashSet<String> = self.do_tbs.iter().map(|(d, _)| d.clone()).collect();
-        let keep = Self::contain_schema(&self.do_schemas, schema, &escape_pairs)
-            || Self::contain_schema(&do_tb_schemas, schema, &escape_pairs);
+        let keep_by_table = self.do_tbs.iter().any(|(table_db, table_schema, _)| {
+            let table_namespace = if matches!(self.db_type, DbType::Mssql) {
+                table_db
+            } else {
+                table_schema
+            };
+            Self::match_token(table_namespace, schema, &escape_pairs)
+        });
+        let keep = Self::contains_token(&self.do_schemas, schema, &escape_pairs) || keep_by_table;
         !keep
     }
 
     pub fn filter_tb(&self, schema: &str, tb: &str) -> bool {
-        if let Some(cache) = self.cache.get(&(schema.to_string(), tb.to_string())) {
+        self.filter_tb_with_db(EMPTY_DB, schema, tb)
+    }
+
+    pub fn filter_tb_with_db(&self, db: &str, schema: &str, tb: &str) -> bool {
+        let key = Self::table_key(db, schema, tb);
+        if let Some(cache) = self.cache.get(&key) {
             return *cache;
         }
 
         let escape_pairs = SqlUtil::get_escape_pairs(&self.db_type);
-        let filter = Self::contain_tb(&self.ignore_tbs, schema, tb, &escape_pairs)
-            || Self::contain_schema(&self.ignore_schemas, schema, &escape_pairs);
-        let keep = Self::contain_tb(&self.do_tbs, schema, tb, &escape_pairs)
-            || Self::contain_schema(&self.do_schemas, schema, &escape_pairs);
+        let namespace = if matches!(self.db_type, DbType::Mssql) {
+            db
+        } else {
+            schema
+        };
+        let filter = Self::contains_table(&self.ignore_tbs, db, schema, tb, &escape_pairs)
+            || Self::contains_token(&self.ignore_schemas, namespace, &escape_pairs);
+        let keep = Self::contains_table(&self.do_tbs, db, schema, tb, &escape_pairs)
+            || Self::contains_token(&self.do_schemas, namespace, &escape_pairs);
 
         let filter = filter || !keep;
-        self.cache
-            .insert((schema.to_string(), tb.to_string()), filter);
+        self.cache.insert(key, filter);
 
         filter
     }
 
     pub fn filter_event(&self, schema: &str, tb: &str, row_type: &RowType) -> bool {
+        self.filter_event_with_db(EMPTY_DB, schema, tb, row_type)
+    }
+
+    pub fn filter_event_with_db(
+        &self,
+        db: &str,
+        schema: &str,
+        tb: &str,
+        row_type: &RowType,
+    ) -> bool {
         if !Self::match_all(&self.do_events) && !self.do_events.contains(&row_type.to_string()) {
             return true;
         }
-        self.filter_tb(schema, tb)
+        self.filter_tb_with_db(db, schema, tb)
     }
 
     pub fn filter_all_ddl(&self) -> bool {
@@ -113,14 +140,22 @@ impl RdbFilter {
     }
 
     pub fn filter_ddl(&self, schema: &str, tb: &str, ddl_type: &DdlType) -> bool {
+        self.filter_ddl_with_db(EMPTY_DB, schema, tb, ddl_type)
+    }
+
+    pub fn filter_ddl_with_db(&self, db: &str, schema: &str, tb: &str, ddl_type: &DdlType) -> bool {
         if self.filter_spec_ddl(ddl_type) {
             return true;
         }
 
         if tb.is_empty() {
-            self.filter_schema(schema)
+            if matches!(self.db_type, DbType::Mssql) {
+                self.filter_schema(db)
+            } else {
+                self.filter_schema(schema)
+            }
         } else {
-            self.filter_tb(schema, tb)
+            self.filter_tb_with_db(db, schema, tb)
         }
     }
 
@@ -142,20 +177,42 @@ impl RdbFilter {
     }
 
     pub fn get_ignore_cols(&self, schema: &str, tb: &str) -> Option<&HashSet<String>> {
-        self.ignore_cols.get(&(schema.to_string(), tb.to_string()))
+        self.get_ignore_cols_with_db(EMPTY_DB, schema, tb)
+    }
+
+    pub fn get_ignore_cols_with_db(
+        &self,
+        db: &str,
+        schema: &str,
+        tb: &str,
+    ) -> Option<&HashSet<String>> {
+        self.ignore_cols.get(&Self::table_key(db, schema, tb))
     }
 
     pub fn add_ignore_tb(&mut self, schema: &str, tb: &str) {
-        self.ignore_tbs.insert((schema.into(), tb.into()));
+        self.add_ignore_tb_with_db(EMPTY_DB, schema, tb);
+    }
+
+    pub fn add_ignore_tb_with_db(&mut self, db: &str, schema: &str, tb: &str) {
+        self.ignore_tbs.insert(Self::table_key(db, schema, tb));
+        self.cache.clear();
     }
 
     pub fn add_do_tb(&mut self, schema: &str, tb: &str) {
-        self.do_tbs.insert((schema.into(), tb.into()));
+        self.add_do_tb_with_db(EMPTY_DB, schema, tb);
+    }
+
+    pub fn add_do_tb_with_db(&mut self, db: &str, schema: &str, tb: &str) {
+        self.do_tbs.insert(Self::table_key(db, schema, tb));
+        self.cache.clear();
     }
 
     pub fn get_where_condition(&self, schema: &str, tb: &str) -> Option<&String> {
-        self.where_conditions
-            .get(&(schema.to_string(), tb.to_string()))
+        self.get_where_condition_with_db(EMPTY_DB, schema, tb)
+    }
+
+    pub fn get_where_condition_with_db(&self, db: &str, schema: &str, tb: &str) -> Option<&String> {
+        self.where_conditions.get(&Self::table_key(db, schema, tb))
     }
 
     pub fn is_pattern(pattern: &str, db_type: &DbType) -> bool {
@@ -171,15 +228,17 @@ impl RdbFilter {
         set.len() == 1 && set.contains("*")
     }
 
-    fn contain_tb(
-        set: &HashSet<(String, String)>,
+    fn contains_table(
+        set: &HashSet<DbSchemaTb>,
+        db: &str,
         schema: &str,
         tb: &str,
-        escape_pairs: &[(char, char)],
+        escape_pairs: &[CharEscapePair],
     ) -> bool {
         for i in set.iter() {
-            if Self::match_token(&i.0, schema, escape_pairs)
-                && Self::match_token(&i.1, tb, escape_pairs)
+            if Self::match_token(&i.0, db, escape_pairs)
+                && Self::match_token(&i.1, schema, escape_pairs)
+                && Self::match_token(&i.2, tb, escape_pairs)
             {
                 return true;
             }
@@ -187,7 +246,7 @@ impl RdbFilter {
         false
     }
 
-    fn contain_schema(set: &HashSet<String>, item: &str, escape_pairs: &[(char, char)]) -> bool {
+    fn contains_token(set: &HashSet<String>, item: &str, escape_pairs: &[CharEscapePair]) -> bool {
         for i in set.iter() {
             if Self::match_token(i, item, escape_pairs) {
                 return true;
@@ -196,7 +255,7 @@ impl RdbFilter {
         false
     }
 
-    fn match_token(pattern: &str, item: &str, escape_pairs: &[(char, char)]) -> bool {
+    fn match_token(pattern: &str, item: &str, escape_pairs: &[CharEscapePair]) -> bool {
         // if pattern is enclosed by escapes, it is considered as exactly match
         // example: mysql table name : `aaa*`, it can only match the table `aaa*`, it won't match `aaa_bbb`
         for escape_pair in escape_pairs.iter() {
@@ -226,16 +285,55 @@ impl RdbFilter {
         Regex::new(&pattern).is_ok_and(|regex| regex.is_match(item))
     }
 
-    fn parse_pair_tokens(
+    fn parse_table_tokens(
         config_str: &str,
         db_type: &DbType,
-    ) -> anyhow::Result<HashSet<(String, String)>> {
+    ) -> anyhow::Result<HashSet<DbSchemaTb>> {
+        if matches!(db_type, DbType::Mssql) {
+            return Self::parse_mssql_table_tokens(config_str, db_type);
+        }
+
         let mut results = HashSet::new();
         let tokens = Self::parse_config(config_str, db_type)?;
         let mut i = 0;
         while i < tokens.len() {
-            results.insert((tokens[i].to_string(), tokens[i + 1].to_string()));
+            results.insert(Self::table_key(EMPTY_DB, &tokens[i], &tokens[i + 1]));
             i += 2;
+        }
+        Ok(results)
+    }
+
+    fn parse_mssql_table_tokens(
+        config_str: &str,
+        db_type: &DbType,
+    ) -> anyhow::Result<HashSet<DbSchemaTb>> {
+        let mut results = HashSet::new();
+        if config_str.trim().is_empty() {
+            return Ok(results);
+        }
+
+        let custom_escape_pairs = Self::regex_escape_pairs();
+        let tokens = ConfigTokenParser::parse_config_with_delimiters(
+            config_str,
+            db_type,
+            &[',', '.'],
+            Some(&custom_escape_pairs),
+        )?;
+        Self::validate_regex_tokens(&tokens)?;
+        for entry in tokens.split(|token| token == ",") {
+            let key = match entry {
+                [db, dot, tb] if dot == "." => Self::table_key(db, MSSQL_DEFAULT_SCHEMA, tb),
+                [db, dot_1, schema, dot_2, tb] if dot_1 == "." && dot_2 == "." => {
+                    Self::table_key(db, schema, tb)
+                }
+                _ => {
+                    bail!(DtError::invalid_config(format!(
+                        "invalid MSSQL table pattern: {}; expected database.table or database.schema.table",
+                        entry.concat()
+                    )))
+                }
+            };
+            results.insert(key);
         }
         Ok(results)
     }
@@ -248,17 +346,26 @@ impl RdbFilter {
 
     fn parse_config(config_str: &str, db_type: &DbType) -> anyhow::Result<Vec<String>> {
         let delimiters = vec![',', '.'];
-        let custom_escape_pairs = vec![TokenEscapePair::from((
-            REGEX_ESCAPE_PAIR.0.to_string(),
-            REGEX_ESCAPE_PAIR.1.to_string(),
-        ))];
+        let custom_escape_pairs = Self::regex_escape_pairs();
         let tokens = ConfigTokenParser::parse_config(
             config_str,
             db_type,
             &delimiters,
             Some(&custom_escape_pairs),
         )?;
-        for token in &tokens {
+        Self::validate_regex_tokens(&tokens)?;
+        Ok(tokens)
+    }
+
+    fn regex_escape_pairs() -> Vec<TokenEscapePair> {
+        vec![TokenEscapePair::from((
+            REGEX_ESCAPE_PAIR.0.to_string(),
+            REGEX_ESCAPE_PAIR.1.to_string(),
+        ))]
+    }
+
+    fn validate_regex_tokens(tokens: &[String]) -> anyhow::Result<()> {
+        for token in tokens {
             if token.starts_with(REGEX_ESCAPE_PAIR.0) && token.ends_with(REGEX_ESCAPE_PAIR.1) {
                 let pattern = &token[REGEX_ESCAPE_PAIR.0.len()..token.len() - 1];
                 Regex::new(pattern).context(DtError::invalid_config(format!(
@@ -266,51 +373,87 @@ impl RdbFilter {
                 )))?;
             }
         }
-        Ok(tokens)
+        Ok(())
     }
 
-    fn parse_ignore_cols(config_str: &str) -> anyhow::Result<IgnoreCols> {
+    fn table_key(db: &str, schema: &str, tb: &str) -> DbSchemaTb {
+        (db.to_string(), schema.to_string(), tb.to_string())
+    }
+
+    fn parse_ignore_cols(config_str: &str, db_type: &DbType) -> anyhow::Result<IgnoreCols> {
         let mut results = IgnoreCols::new();
         if config_str.trim().is_empty() {
             return Ok(results);
         }
         // ignore_cols=json:[{"db":"test_db","tb":"tb_1","ignore_cols":{"f_0","f_1"}}]
         #[derive(Serialize, Deserialize)]
-        struct IgnoreColsType {
+        struct IgnoreColsConfig {
             db: String,
             tb: String,
             ignore_cols: HashSet<String>,
         }
-        let config: Vec<IgnoreColsType> =
+        let config: Vec<IgnoreColsConfig> =
             serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).context(
                 DtError::invalid_config("config [filter].ignore_cols is invalid JSON"),
             )?;
         for i in config {
-            results.insert((i.db, i.tb), i.ignore_cols);
+            let key = Self::parse_json_table_key(&i.db, &i.tb, db_type)?;
+            results.insert(key, i.ignore_cols);
         }
         Ok(results)
     }
 
-    fn parse_where_conditions(config_str: &str) -> anyhow::Result<WhereConditions> {
+    fn parse_where_conditions(
+        config_str: &str,
+        db_type: &DbType,
+    ) -> anyhow::Result<WhereConditions> {
         let mut results = WhereConditions::new();
         if config_str.trim().is_empty() {
             return Ok(results);
         }
         // where_conditions=json:[{"db":"test_db","tb":"tb_1","condition":"id > 1 and `age` > 100"}]
         #[derive(Serialize, Deserialize)]
-        struct Condition {
+        struct WhereConditionConfig {
             db: String,
             tb: String,
             condition: String,
         }
-        let config: Vec<Condition> =
+        let config: Vec<WhereConditionConfig> =
             serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX)).context(
                 DtError::invalid_config("config [filter].where_conditions is invalid JSON"),
             )?;
         for i in config {
-            results.insert((i.db, i.tb), i.condition);
+            let key = Self::parse_json_table_key(&i.db, &i.tb, db_type)?;
+            results.insert(key, i.condition);
         }
         Ok(results)
+    }
+
+    fn parse_json_table_key(db: &str, tb: &str, db_type: &DbType) -> anyhow::Result<DbSchemaTb> {
+        if !matches!(db_type, DbType::Mssql) {
+            return Ok(Self::table_key(EMPTY_DB, db, tb));
+        }
+        if db.is_empty() {
+            bail!(DtError::invalid_config(
+                "MSSQL table selector database must not be empty"
+            ));
+        }
+
+        let parts = ConfigTokenParser::parse_config(tb, db_type, &['.'], None)?;
+        let (schema, tb) = match parts.as_slice() {
+            [tb] => (MSSQL_DEFAULT_SCHEMA.to_string(), tb.clone()),
+            [schema, tb] => (schema.clone(), tb.clone()),
+            _ => {
+                bail!(DtError::invalid_config(format!(
+                    "invalid MSSQL table selector: database={db}, table={tb}"
+                )))
+            }
+        };
+        Ok(Self::table_key(
+            &SqlUtil::unescape_by_db_type(db, db_type),
+            &SqlUtil::unescape_by_db_type(&schema, db_type),
+            &SqlUtil::unescape_by_db_type(&tb, db_type),
+        ))
     }
 }
 
@@ -321,12 +464,12 @@ mod tests {
     #[test]
     fn test_parse_ignore_cols() {
         let config_str = r#"json:[{"db":"db_1","tb":"tb_1","ignore_cols":["f_2","f_3"]},{"db":"db_2","tb":"tb_2","ignore_cols":["f_3"]}]"#;
-        let ignore_cols = RdbFilter::parse_ignore_cols(config_str).unwrap();
+        let ignore_cols = RdbFilter::parse_ignore_cols(config_str, &DbType::Mysql).unwrap();
         let tb_1 = ignore_cols
-            .get(&("db_1".to_string(), "tb_1".to_string()))
+            .get(&(String::new(), "db_1".to_string(), "tb_1".to_string()))
             .unwrap();
         let tb_2 = ignore_cols
-            .get(&("db_2".to_string(), "tb_2".to_string()))
+            .get(&(String::new(), "db_2".to_string(), "tb_2".to_string()))
             .unwrap();
         assert_eq!(tb_1.len(), 2);
         assert!(tb_1.contains(&"f_2".to_string()));
@@ -702,6 +845,29 @@ mod tests {
     }
 
     #[test]
+    fn test_mssql_filter_with_escaped_right_delimiters() {
+        let config = FilterConfig {
+            do_tbs: "[db]]name].[schema]]name].[table]]name]".to_string(),
+            do_events: "insert".to_string(),
+            ..Default::default()
+        };
+        let rdb_filter = RdbFilter::from_config(&config, &DbType::Mssql).unwrap();
+
+        assert!(!rdb_filter.filter_event_with_db(
+            "db]name",
+            "schema]name",
+            "table]name",
+            &RowType::Insert
+        ));
+        assert!(rdb_filter.filter_event_with_db(
+            "db]name",
+            "schema]name",
+            "other",
+            &RowType::Insert
+        ));
+    }
+
+    #[test]
     fn test_rdb_filter_ignore_dbs_without_escapes() {
         let db_type = DbType::Mysql;
         let config = FilterConfig {
@@ -1058,5 +1224,156 @@ mod tests {
         assert!(!rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Insert));
         assert!(rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Update));
         assert!(rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Delete));
+    }
+
+    #[test]
+    fn table_filter_cache_is_isolated_by_db() {
+        let config = FilterConfig {
+            do_events: "*".to_string(),
+            ..Default::default()
+        };
+        let mut filter = RdbFilter::from_config(&config, &DbType::Mssql).unwrap();
+        filter.do_schemas.insert("*".to_string());
+        filter.add_ignore_tb_with_db("db1", "schema1", "tb1");
+
+        assert!(filter.filter_tb_with_db("db1", "schema1", "tb1"));
+        assert!(!filter.filter_tb_with_db("db2", "schema1", "tb1"));
+    }
+
+    #[test]
+    fn configured_tables_use_empty_physical_db() {
+        for db_type in [DbType::Mysql, DbType::Pg] {
+            let config = FilterConfig {
+                do_tbs: "schema1.tb1".to_string(),
+                do_events: "*".to_string(),
+                ..Default::default()
+            };
+            let filter = RdbFilter::from_config(&config, &db_type).unwrap();
+
+            assert!(filter
+                .do_tbs
+                .contains(&RdbFilter::table_key(EMPTY_DB, "schema1", "tb1")));
+            assert!(!filter.filter_tb("schema1", "tb1"));
+            assert!(filter.filter_tb_with_db("another_db", "schema1", "tb1"));
+        }
+    }
+
+    #[test]
+    fn configured_schemas_use_empty_physical_db() {
+        for db_type in [DbType::Mysql, DbType::Pg] {
+            let config = FilterConfig {
+                do_schemas: "schema1".to_string(),
+                do_events: "*".to_string(),
+                ..Default::default()
+            };
+            let filter = RdbFilter::from_config(&config, &db_type).unwrap();
+
+            assert!(filter.do_schemas.contains("schema1"));
+            assert!(!filter.filter_schema("schema1"));
+            assert!(filter.filter_schema("another_db"));
+        }
+    }
+
+    #[test]
+    fn mssql_schema_config_keeps_single_token_parsing() {
+        let tokens =
+            RdbFilter::parse_single_tokens("db.name,[db.with.dot]", &DbType::Mssql).unwrap();
+
+        assert_eq!(
+            tokens,
+            HashSet::from([
+                "db".to_string(),
+                "name".to_string(),
+                "[db.with.dot]".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn adding_table_rules_invalidates_cached_results() {
+        let mut filter = RdbFilter::from_config(
+            &FilterConfig {
+                do_schemas: "*".to_string(),
+                do_events: "*".to_string(),
+                ..Default::default()
+            },
+            &DbType::Mssql,
+        )
+        .unwrap();
+
+        assert!(!filter.filter_tb("dbo", "tb1"));
+        filter.add_ignore_tb("dbo", "tb1");
+        assert!(filter.filter_tb("dbo", "tb1"));
+
+        let mut filter = RdbFilter::from_config(
+            &FilterConfig {
+                do_events: "*".to_string(),
+                ..Default::default()
+            },
+            &DbType::Mssql,
+        )
+        .unwrap();
+
+        assert!(filter.filter_tb("dbo", "tb1"));
+        filter.add_do_tb("dbo", "tb1");
+        assert!(!filter.filter_tb("dbo", "tb1"));
+    }
+
+    #[test]
+    fn mssql_config_uses_physical_database_and_default_schema() {
+        let config = FilterConfig {
+            do_schemas: "db1,r#archive_.*#".to_string(),
+            ignore_schemas: "db3".to_string(),
+            do_tbs: "db1.*,db1.sales.orders,r#db[0-9]+#.r#schema.*#.r#table.*#".to_string(),
+            ignore_tbs: "db2.orders".to_string(),
+            do_events: "*".to_string(),
+            ..Default::default()
+        };
+
+        let filter = RdbFilter::from_config(&config, &DbType::Mssql).unwrap();
+
+        assert!(filter.do_schemas.contains("db1"));
+        assert!(filter.do_schemas.contains("r#archive_.*#"));
+        assert!(filter
+            .do_tbs
+            .contains(&RdbFilter::table_key("db1", "dbo", "*")));
+        assert!(filter
+            .do_tbs
+            .contains(&RdbFilter::table_key("db1", "sales", "orders")));
+        assert!(filter
+            .ignore_tbs
+            .contains(&RdbFilter::table_key("db2", "dbo", "orders")));
+        assert!(!filter.filter_schema("db1"));
+        assert!(!filter.filter_tb_with_db("db1", "dbo", "customers"));
+        assert!(!filter.filter_tb_with_db("db1", "sales", "orders"));
+        assert!(!filter.filter_tb_with_db("db4", "schema1", "table1"));
+        assert!(filter.filter_tb_with_db("db2", "dbo", "orders"));
+        assert!(filter.filter_tb_with_db("db3", "dbo", "orders"));
+    }
+
+    #[test]
+    fn mssql_json_table_selectors_support_default_and_explicit_schema() {
+        let ignore_cols = RdbFilter::parse_ignore_cols(
+            r#"json:[{"db":"db1","tb":"orders","ignore_cols":["id"]},{"db":"db2","tb":"[sales].[orders]","ignore_cols":["name"]}]"#,
+            &DbType::Mssql,
+        )
+        .unwrap();
+
+        assert!(ignore_cols.contains_key(&RdbFilter::table_key("db1", "dbo", "orders")));
+        assert!(ignore_cols.contains_key(&RdbFilter::table_key("db2", "sales", "orders")));
+    }
+
+    #[test]
+    fn mssql_table_patterns_reject_invalid_arity() {
+        for pattern in ["orders", "db.schema.table.extra"] {
+            let result = RdbFilter::from_config(
+                &FilterConfig {
+                    do_tbs: pattern.to_string(),
+                    ..Default::default()
+                },
+                &DbType::Mssql,
+            );
+            assert!(result.is_err(), "pattern should be rejected: {pattern}");
+        }
     }
 }

@@ -4,15 +4,17 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{mysql::MySqlRow, postgres::PgRow};
+use tiberius::Row as MssqlRow;
 
 use super::{
-    col_value::ColValue, mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta,
-    rdb_tb_meta::RdbTbMeta, row_type::RowType,
+    col_value::ColValue, mssql::mssql_tb_meta::MssqlTbMeta, mysql::mysql_tb_meta::MysqlTbMeta,
+    pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta, row_type::RowType,
 };
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtResultExt, ErrorObject},
     meta::adaptor::{
+        mssql_col_value_convertor::MssqlColValueConvertor,
         mysql_col_value_convertor::MysqlColValueConvertor,
         pg_col_value_convertor::PgColValueConvertor,
     },
@@ -20,6 +22,10 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RowData {
+    /// Physical database. Empty until database-aware extraction is enabled.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub db: String,
+    /// Existing first-level namespace. MySQL/MongoDB still store database here for compatibility.
     pub schema: String,
     pub tb: String,
     #[serde(skip)]
@@ -41,6 +47,7 @@ impl std::fmt::Display for RowData {
 
 impl RowData {
     pub fn new(
+        db: String,
         schema: String,
         tb: String,
         chunk_id: u64,
@@ -49,6 +56,7 @@ impl RowData {
         after: Option<HashMap<String, ColValue>>,
     ) -> Self {
         let mut me = Self {
+            db,
             schema,
             tb,
             chunk_id,
@@ -63,6 +71,7 @@ impl RowData {
     }
 
     pub fn new_no_origin(
+        db: String,
         schema: String,
         tb: String,
         chunk_id: u64,
@@ -70,7 +79,7 @@ impl RowData {
         before: Option<HashMap<String, ColValue>>,
         after: Option<HashMap<String, ColValue>>,
     ) -> Self {
-        let mut data = Self::new(schema, tb, chunk_id, row_type, before, after);
+        let mut data = Self::new(db, schema, tb, chunk_id, row_type, before, after);
         data.is_not_origin = true;
         data
     }
@@ -83,6 +92,7 @@ impl RowData {
         };
 
         Self {
+            db: self.db.clone(),
             schema: self.schema.clone(),
             tb: self.tb.clone(),
             chunk_id: self.chunk_id,
@@ -96,6 +106,7 @@ impl RowData {
 
     pub fn split_update_row_data(self) -> (RowData, RowData) {
         let delete = RowData::new_no_origin(
+            self.db.clone(),
             self.schema.clone(),
             self.tb.clone(),
             self.chunk_id,
@@ -105,6 +116,7 @@ impl RowData {
         );
 
         let insert = RowData::new_no_origin(
+            self.db,
             self.schema,
             self.tb,
             self.chunk_id,
@@ -181,12 +193,42 @@ impl RowData {
         Ok(Self::build_insert_row_data(after, &tb_meta.basic, chunk_id))
     }
 
+    pub fn from_mssql_row(
+        row: &MssqlRow,
+        tb_meta: &MssqlTbMeta,
+        ignore_cols: &Option<&HashSet<String>>,
+        chunk_id: Option<u64>,
+    ) -> anyhow::Result<Self> {
+        let mut after = HashMap::new();
+        for col in &tb_meta.basic.cols {
+            if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
+                continue;
+            }
+
+            let col_value =
+                MssqlColValueConvertor::from_query(row, col, tb_meta.get_col_type(col)?)
+                    .context(DtError::StatementFailed(format!(
+                        "failed to convert column {}.{}.{}",
+                        tb_meta.basic.schema, tb_meta.basic.tb, col
+                    )))
+                    .object(ErrorObject {
+                        schema: Some(tb_meta.basic.schema.clone()),
+                        table: Some(tb_meta.basic.tb.clone()),
+                        column: Some(col.clone()),
+                        ..Default::default()
+                    })?;
+            after.insert(col.clone(), col_value);
+        }
+        Ok(Self::build_insert_row_data(after, &tb_meta.basic, chunk_id))
+    }
+
     pub fn build_insert_row_data(
         after: HashMap<String, ColValue>,
         tb_meta: &RdbTbMeta,
         chunk_id: Option<u64>,
     ) -> Self {
         Self::new(
+            tb_meta.db.clone(),
             tb_meta.schema.clone(),
             tb_meta.tb.clone(),
             chunk_id.unwrap_or(0),
@@ -336,6 +378,7 @@ mod tests {
     #[test]
     fn test_convert_raw_string_prefers_utf8() {
         let mut row_data = RowData::new(
+            String::new(),
             "db".to_string(),
             "tb".to_string(),
             0,
@@ -352,6 +395,51 @@ mod tests {
         assert_eq!(
             row_data.require_after().unwrap().get("c1"),
             Some(&ColValue::String("ij".to_string()))
+        );
+    }
+
+    #[test]
+    fn legacy_json_defaults_db_to_empty() {
+        let row_data: RowData = serde_json::from_str(
+            r#"{"schema":"s1","tb":"t1","row_type":"Insert","before":null,"after":null,"data_size":0,"is_not_origin":false}"#,
+        )
+        .unwrap();
+
+        assert!(row_data.db.is_empty());
+        assert!(serde_json::to_value(&row_data).unwrap().get("db").is_none());
+
+        let mut row_data_with_db = row_data;
+        row_data_with_db.db = "db1".to_string();
+        assert_eq!(serde_json::to_value(row_data_with_db).unwrap()["db"], "db1");
+    }
+
+    #[test]
+    fn split_update_preserves_three_part_table_identity() {
+        let row_data = RowData::new(
+            "db1".to_string(),
+            "s1".to_string(),
+            "t1".to_string(),
+            0,
+            RowType::Update,
+            Some(HashMap::new()),
+            Some(HashMap::new()),
+        );
+        let (delete, insert) = row_data.split_update_row_data();
+        assert_eq!(
+            (
+                delete.db.as_str(),
+                delete.schema.as_str(),
+                delete.tb.as_str()
+            ),
+            ("db1", "s1", "t1")
+        );
+        assert_eq!(
+            (
+                insert.db.as_str(),
+                insert.schema.as_str(),
+                insert.tb.as_str()
+            ),
+            ("db1", "s1", "t1")
         );
     }
 }

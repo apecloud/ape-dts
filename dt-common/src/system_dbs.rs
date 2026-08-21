@@ -6,12 +6,14 @@ impl SystemDb {
     const MYSQL: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
     const POSTGRES: [&str; 2] = ["pg_catalog", "information_schema"];
     const MONGO: [&str; 3] = ["admin", "config", "local"];
+    const MSSQL: [&str; 3] = ["model", "msdb", "tempdb"];
 
     pub fn is_system_db(db: &str, db_type: &DbType) -> bool {
         match db_type {
             DbType::Mysql => Self::MYSQL.contains(&db),
             DbType::Pg => Self::POSTGRES.contains(&db),
             DbType::Mongo => Self::MONGO.contains(&db),
+            DbType::Mssql => Self::MSSQL.contains(&db),
             _ => false,
         }
     }
@@ -21,7 +23,21 @@ impl SystemDb {
             DbType::Mysql => Some(Self::MYSQL.to_vec()),
             DbType::Pg => Some(Self::POSTGRES.to_vec()),
             DbType::Mongo => Some(Self::MONGO.to_vec()),
+            DbType::Mssql => Some(Self::MSSQL.to_vec()),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mssql_master_is_selectable() {
+        assert!(!SystemDb::is_system_db("master", &DbType::Mssql));
+        for db in ["model", "msdb", "tempdb"] {
+            assert!(SystemDb::is_system_db(db, &DbType::Mssql));
         }
     }
 }

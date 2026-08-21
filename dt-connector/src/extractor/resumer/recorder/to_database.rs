@@ -1,8 +1,11 @@
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use dt_common::{
-    config::resumer_config::ResumerConfig, error::DtError, log_info, meta::position::Position,
-    utils::redis_util::RedisUtil,
+    config::{config_enums::DbType, resumer_config::ResumerConfig},
+    error::DtError,
+    log_info,
+    meta::position::Position,
+    utils::{redis_util::RedisUtil, sql_util::SqlUtil},
 };
 use mongodb::{
     bson::{doc, DateTime},
@@ -10,6 +13,7 @@ use mongodb::{
     IndexModel,
 };
 use sqlx::query;
+use tiberius::Query;
 
 use crate::extractor::resumer::{
     recorder::Recorder,
@@ -20,6 +24,7 @@ use crate::extractor::resumer::{
 pub struct DatabaseRecorder {
     task_id: String,
     pool: ResumerDbPool,
+    db: String,
     schema: String,
     table: String,
 }
@@ -33,12 +38,16 @@ impl DatabaseRecorder {
     ) -> anyhow::Result<Self> {
         let recorder = match resumer_config {
             ResumerConfig::FromDB {
-                table_full_name, ..
+                db_type,
+                table_full_name,
+                ..
             } => {
-                let (schema, table) = ResumerUtil::get_full_table_name(table_full_name)?;
+                let (db, schema, table) =
+                    ResumerUtil::get_checkpoint_db_schema_tb(table_full_name, db_type)?;
                 Self {
                     task_id: task_id.to_string(),
                     pool,
+                    db,
                     schema,
                     table,
                 }
@@ -55,8 +64,9 @@ impl DatabaseRecorder {
 
     async fn initialization(&self, is_init: bool, task_id: &str) -> Result<()> {
         log_info!(
-            "DatabaseRecorderInner initialized, task_id: {}, schema: {}, table: {}",
+            "DatabaseRecorderInner initialized, task_id: {}, db: {}, schema: {}, table: {}",
             self.task_id,
+            self.db,
             self.schema,
             self.table
         );
@@ -144,6 +154,75 @@ impl DatabaseRecorder {
                             "failed to delete resumer records for task_id={} with sql: {}",
                             task_id, delete_sql
                         ))?;
+                }
+                Ok(())
+            }
+            ResumerDbPool::Mssql(pool) => {
+                let mut connection = pool
+                    .get()
+                    .await
+                    .context("failed to acquire MSSQL checkpoint connection")?;
+
+                let mut create_database = Query::new(
+                    "IF DB_ID(@P1) IS NULL \
+                     BEGIN \
+                         DECLARE @database_sql nvarchar(300) = \
+                             N'CREATE DATABASE ' + QUOTENAME(@P1); \
+                         EXEC sp_executesql @database_sql; \
+                     END",
+                );
+                create_database.bind(self.db.as_str());
+                create_database
+                    .execute(connection.client_mut())
+                    .await
+                    .with_context(|| {
+                        format!("failed to create MSSQL checkpoint database: {}", self.db)
+                    })?;
+
+                let full_table_name = self.mssql_full_table_name();
+                let catalog = SqlUtil::escape_by_db_type(&self.db, &DbType::Mssql);
+                let create_table_sql = format!(
+                    r#"IF NOT EXISTS (
+                           SELECT 1
+                           FROM {catalog}.sys.tables AS t
+                           JOIN {catalog}.sys.schemas AS s ON s.schema_id = t.schema_id
+                           WHERE s.name = @P1 AND t.name = @P2
+                       )
+                       BEGIN
+                           CREATE TABLE {full_table_name} (
+                               id bigint IDENTITY(1, 1) PRIMARY KEY,
+                               task_id nvarchar(255) NOT NULL,
+                               resumer_type nvarchar(100) NOT NULL,
+                               position_key nvarchar(475) NOT NULL,
+                               position_data nvarchar(max) NULL,
+                               created_at datetime2(7) NOT NULL DEFAULT SYSUTCDATETIME(),
+                               updated_at datetime2(7) NOT NULL DEFAULT SYSUTCDATETIME(),
+                               UNIQUE (task_id, resumer_type, position_key)
+                           );
+                       END"#
+                );
+                let mut create_table = Query::new(create_table_sql);
+                create_table.bind(self.schema.as_str());
+                create_table.bind(self.table.as_str());
+                create_table
+                    .execute(connection.client_mut())
+                    .await
+                    .with_context(|| {
+                        format!("failed to create MSSQL checkpoint table: {full_table_name}")
+                    })?;
+
+                if is_init {
+                    let mut delete_records =
+                        Query::new(format!("DELETE FROM {full_table_name} WHERE task_id = @P1"));
+                    delete_records.bind(task_id);
+                    delete_records
+                        .execute(connection.client_mut())
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to delete MSSQL checkpoint records for task_id={task_id}"
+                            )
+                        })?;
                 }
                 Ok(())
             }
@@ -245,6 +324,10 @@ impl DatabaseRecorder {
             escaped_table_full_name, table_full_name, table_full_name
         )
     }
+
+    fn mssql_full_table_name(&self) -> String {
+        SqlUtil::render_rdb_table(&DbType::Mssql, &self.db, &self.schema, &self.table)
+    }
 }
 
 #[async_trait]
@@ -298,6 +381,53 @@ impl Recorder for DatabaseRecorder {
                     .execute(pool)
                     .await
                     .with_context(|| format!("failed to upsert position record with sql: {sql}"))?;
+                Ok(())
+            }
+            ResumerDbPool::Mssql(pool) => {
+                let full_table_name = self.mssql_full_table_name();
+                let sql = format!(
+                    r#"BEGIN TRY
+                           BEGIN TRANSACTION;
+                           UPDATE {full_table_name} WITH (UPDLOCK, SERIALIZABLE)
+                           SET position_data = @P4,
+                               updated_at = SYSUTCDATETIME()
+                           WHERE task_id = @P1
+                             AND resumer_type = @P2
+                             AND position_key = @P3;
+                           IF @@ROWCOUNT = 0
+                           BEGIN
+                               INSERT INTO {full_table_name}
+                                   (task_id, resumer_type, position_key, position_data)
+                               VALUES (@P1, @P2, @P3, @P4);
+                           END;
+                           COMMIT TRANSACTION;
+                       END TRY
+                       BEGIN CATCH
+                           IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+                           THROW;
+                       END CATCH"#
+                );
+                let resumer_type = resumer_type.to_string();
+                let position_key = ResumerUtil::get_key_from_position(position);
+                let position_data = position.to_string();
+                let mut query = Query::new(sql);
+                query.bind(self.task_id.as_str());
+                query.bind(resumer_type.as_str());
+                query.bind(position_key.as_str());
+                query.bind(position_data.as_str());
+
+                let mut connection = pool
+                    .get()
+                    .await
+                    .context("failed to acquire MSSQL checkpoint connection")?;
+                connection.mark_for_discard();
+                query
+                    .execute(connection.client_mut())
+                    .await
+                    .with_context(|| {
+                        format!("failed to upsert MSSQL checkpoint record in {full_table_name}")
+                    })?;
+                connection.clear_discard_mark();
                 Ok(())
             }
             ResumerDbPool::Mongo(client) => {

@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fs, io::ErrorKind};
+#[cfg(feature = "metrics")]
+use std::collections::HashMap;
+use std::{fs, io::ErrorKind};
 
 use anyhow::{bail, Error, Ok};
 
@@ -398,9 +400,7 @@ impl TaskConfig {
                 ExtractType::Snapshot => ExtractorConfig::MysqlSnapshot {
                     url,
                     connection_auth,
-                    db: String::new(),
-                    tb: String::new(),
-                    db_tbs: HashMap::new(),
+                    tbs: Vec::new(),
                     sample_rate: None,
                     parallel_size: Self::load_snapshot_parallel_size(loader)?,
                     parallel_type: loader.get_with_default(
@@ -456,7 +456,6 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::MysqlStruct {
                     url,
                     connection_auth,
-                    db: String::new(),
                     dbs: Vec::new(),
                     db_batch_size: loader.get_with_default(
                         EXTRACTOR,
@@ -471,9 +470,7 @@ impl TaskConfig {
                 ExtractType::Snapshot => ExtractorConfig::PgSnapshot {
                     url,
                     connection_auth,
-                    schema: String::new(),
-                    tb: String::new(),
-                    schema_tbs: HashMap::new(),
+                    tbs: Vec::new(),
                     sample_rate: None,
                     parallel_size: Self::load_snapshot_parallel_size(loader)?,
                     parallel_type: loader.get_with_default(
@@ -511,7 +508,6 @@ impl TaskConfig {
                 ExtractType::Struct => ExtractorConfig::PgStruct {
                     url,
                     connection_auth,
-                    schema: String::new(),
                     schemas: Vec::new(),
                     do_global_structs: false,
                     db_batch_size: loader.get_with_default(
@@ -536,9 +532,7 @@ impl TaskConfig {
                     ExtractorConfig::MssqlSnapshot {
                         url,
                         connection_auth,
-                        schema: String::new(),
-                        tb: String::new(),
-                        schema_tbs: HashMap::new(),
+                        tbs: Vec::new(),
                         parallel_size: Self::load_snapshot_parallel_size(loader)?,
                         parallel_type: loader.get_with_default(
                             EXTRACTOR,
@@ -567,9 +561,7 @@ impl TaskConfig {
                         connection_auth,
                         is_direct_connection,
                         app_name,
-                        db: String::new(),
-                        tb: String::new(),
-                        db_tbs: HashMap::new(),
+                        tbs: Vec::new(),
                         parallel_size: Self::load_snapshot_parallel_size(loader)?,
                         parallel_type: loader.get_with_default(
                             EXTRACTOR,
@@ -613,7 +605,6 @@ impl TaskConfig {
                     connection_auth,
                     is_direct_connection,
                     app_name,
-                    db: String::new(),
                     dbs: Vec::new(),
                     db_batch_size: loader.get_with_default(
                         EXTRACTOR,
@@ -832,6 +823,7 @@ impl TaskConfig {
                         url,
                         connection_auth,
                         batch_size,
+                        replace: loader.get_with_default(SINKER, REPLACE, true)?,
                     }
                 }
                 _ => bail! { not_supported_err },
@@ -1237,6 +1229,8 @@ impl TaskConfig {
     }
 
     fn load_filter_config(loader: &IniLoader) -> anyhow::Result<FilterConfig> {
+        // The public configuration uses db/tb. It currently maps db to the common schema field;
+        // the common physical db field remains empty.
         Ok(FilterConfig {
             do_schemas: loader.get_optional(FILTER, "do_dbs")?,
             ignore_schemas: loader.get_optional(FILTER, "ignore_dbs")?,
@@ -1253,6 +1247,7 @@ impl TaskConfig {
     }
 
     fn load_router_config(loader: &IniLoader) -> anyhow::Result<RouterConfig> {
+        // Keep db_map as the public key while routing on the common schema namespace internally.
         Ok(RouterConfig::Rdb {
             schema_map: loader.get_optional(ROUTER, "db_map")?,
             tb_map: loader.get_optional(ROUTER, "tb_map")?,
@@ -1486,6 +1481,7 @@ mod tests {
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
+    use crate::config::router_config::RouterConfig;
     use crate::error::{ErrorCode, ErrorReport};
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
@@ -1584,6 +1580,35 @@ parallel_type=rdb_merge
 {extra_config}
 "#
         )
+    }
+
+    #[test]
+    fn public_db_keys_map_to_internal_schema_fields() {
+        let config = load_temp_task_config(&basic_snapshot_config(
+            r#"[filter]
+do_dbs=source_namespace
+ignore_dbs=ignored_namespace
+do_tbs=source_namespace.*
+
+[router]
+db_map=source_namespace:target_namespace
+tb_map=source_namespace.source_tb:target_namespace.target_tb
+"#,
+        ))
+        .expect("db/tb configuration should map to the common schema/tb model");
+
+        assert_eq!(config.filter.do_schemas, "source_namespace");
+        assert_eq!(config.filter.ignore_schemas, "ignored_namespace");
+        assert_eq!(config.filter.do_tbs, "source_namespace.*");
+
+        let RouterConfig::Rdb {
+            schema_map, tb_map, ..
+        } = config.router;
+        assert_eq!(schema_map, "source_namespace:target_namespace");
+        assert_eq!(
+            tb_map,
+            "source_namespace.source_tb:target_namespace.target_tb"
+        );
     }
 
     #[test]
@@ -2076,7 +2101,7 @@ batch_size=0
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
-url=server=tcp:127.0.0.1,1433;database=ape_dts;User ID=url_user;Password=url_password;Encrypt=true
+url=sqlserver://url_user:url_password@127.0.0.1:1433?database=ape_dts&encrypt=true
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2090,10 +2115,11 @@ batch_size=16
 [sinker]
 db_type=mssql
 sink_type=write
-url=jdbc:sqlserver://127.0.0.1:1434;database=ape_dts;user=sa;password=Password123!;encrypt=DANGER_PLAINTEXT;ApplicationName=from-jdbc
+url=mssql://sa:Password123%21@127.0.0.1:1434?database=ape_dts&encrypt=disable&app+name=from-url
 max_connections=2
 connection_timeout_secs=9
 batch_size=8
+replace=false
 
 [parallelizer]
 parallel_type=snapshot
@@ -2126,7 +2152,10 @@ parallel_size=2
             }
             _ => panic!("expected MSSQL snapshot extractor"),
         }
-        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+        assert!(matches!(
+            config.sinker,
+            SinkerConfig::Mssql { replace: false, .. }
+        ));
     }
 
     #[test]
@@ -2135,7 +2164,7 @@ parallel_size=2
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
-url=server=tcp:127.0.0.1,1433;database=ape_dts
+url=sqlserver://127.0.0.1:1433?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2143,7 +2172,7 @@ ssl_mode=disable
 [sinker]
 db_type=mssql
 sink_type=write
-url=server=tcp:127.0.0.1,1434;database=ape_dts
+url=mssql://127.0.0.1:1434?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2161,7 +2190,10 @@ parallel_size=1
             config.extractor,
             ExtractorConfig::MssqlSnapshot { .. }
         ));
-        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+        assert!(matches!(
+            config.sinker,
+            SinkerConfig::Mssql { replace: true, .. }
+        ));
     }
 
     #[test]
@@ -2178,7 +2210,7 @@ ssl_mode=disable
 [sinker]
 db_type=mssql
 sink_type=write
-url=server=tcp:127.0.0.1,1434;database=ape_dts
+url=mssql://127.0.0.1:1434?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2200,7 +2232,7 @@ ssl_mode=disable
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
-url=server=tcp:127.0.0.1,1433;database=ape_dts
+url=sqlserver://127.0.0.1:1433?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2209,7 +2241,7 @@ connection_timeout_secs=0
 [sinker]
 db_type=mssql
 sink_type=write
-url=server=tcp:127.0.0.1,1434;database=ape_dts
+url=mssql://127.0.0.1:1434?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
