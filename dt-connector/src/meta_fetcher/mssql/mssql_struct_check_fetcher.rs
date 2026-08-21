@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 
 use dt_common::{
+    config::config_enums::DbType,
     error::{DtResultExt, ErrorCode},
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         mssql::mssql_connection_pool::MssqlConnectionPool,
     },
+    utils::sql_util::SqlUtil,
 };
 use tiberius::{Query, Row};
 
@@ -26,17 +28,17 @@ SELECT
     CONVERT(nvarchar(max), ic.is_not_for_replication) AS identity_not_for_replication,
     cc.definition AS computed_definition,
     CONVERT(nvarchar(max), cc.is_persisted) AS computed_persisted
-FROM sys.tables AS t
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.columns AS c ON c.object_id = t.object_id
-JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id
-LEFT JOIN sys.default_constraints AS dc
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.columns AS c ON c.object_id = t.object_id
+JOIN {catalog}sys.types AS ty ON ty.user_type_id = c.user_type_id
+LEFT JOIN {catalog}sys.default_constraints AS dc
   ON dc.parent_object_id = c.object_id
  AND dc.parent_column_id = c.column_id
-LEFT JOIN sys.identity_columns AS ic
+LEFT JOIN {catalog}sys.identity_columns AS ic
   ON ic.object_id = c.object_id
  AND ic.column_id = c.column_id
-LEFT JOIN sys.computed_columns AS cc
+LEFT JOIN {catalog}sys.computed_columns AS cc
   ON cc.object_id = c.object_id
  AND cc.column_id = c.column_id
 WHERE s.name = @P1
@@ -55,16 +57,16 @@ SELECT
     CONVERT(nvarchar(max), ic.is_descending_key) AS is_descending_key,
     CONVERT(nvarchar(max), NULL) AS definition,
     CONVERT(nvarchar(max), NULL) AS is_not_for_replication
-FROM sys.key_constraints AS kc
-JOIN sys.tables AS t ON t.object_id = kc.parent_object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.indexes AS i
+FROM {catalog}sys.key_constraints AS kc
+JOIN {catalog}sys.tables AS t ON t.object_id = kc.parent_object_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.indexes AS i
   ON i.object_id = kc.parent_object_id
  AND i.index_id = kc.unique_index_id
-JOIN sys.index_columns AS ic
+JOIN {catalog}sys.index_columns AS ic
   ON ic.object_id = i.object_id
  AND ic.index_id = i.index_id
-JOIN sys.columns AS c
+JOIN {catalog}sys.columns AS c
   ON c.object_id = ic.object_id
  AND c.column_id = ic.column_id
 WHERE s.name = @P1
@@ -81,9 +83,9 @@ SELECT
     CONVERT(nvarchar(max), NULL) AS is_descending_key,
     cc.definition,
     CONVERT(nvarchar(max), cc.is_not_for_replication) AS is_not_for_replication
-FROM sys.check_constraints AS cc
-JOIN sys.tables AS t ON t.object_id = cc.parent_object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+FROM {catalog}sys.check_constraints AS cc
+JOIN {catalog}sys.tables AS t ON t.object_id = cc.parent_object_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
 WHERE s.name = @P1
   AND t.name = @P2
 ORDER BY constraint_name, key_ordinal
@@ -102,13 +104,13 @@ SELECT
     CONVERT(nvarchar(max), ic.is_descending_key) AS is_descending_key,
     CONVERT(nvarchar(max), ic.is_included_column) AS is_included_column,
     CONVERT(nvarchar(max), ic.index_column_id) AS index_column_id
-FROM sys.tables AS t
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.indexes AS i ON i.object_id = t.object_id
-JOIN sys.index_columns AS ic
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.indexes AS i ON i.object_id = t.object_id
+JOIN {catalog}sys.index_columns AS ic
   ON ic.object_id = i.object_id
  AND ic.index_id = i.index_id
-JOIN sys.columns AS c
+JOIN {catalog}sys.columns AS c
   ON c.object_id = ic.object_id
  AND c.column_id = ic.column_id
 WHERE s.name = @P1
@@ -125,12 +127,12 @@ SELECT
     CONVERT(nvarchar(max), ep.minor_id) AS minor_id,
     c.name AS column_name,
     CONVERT(nvarchar(max), ep.value) AS comment
-FROM sys.extended_properties AS ep
-JOIN sys.tables AS t
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.tables AS t
   ON ep.class = 1
  AND ep.major_id = t.object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-LEFT JOIN sys.columns AS c
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+LEFT JOIN {catalog}sys.columns AS c
   ON c.object_id = t.object_id
  AND c.column_id = ep.minor_id
 WHERE s.name = @P1
@@ -154,12 +156,14 @@ pub struct MssqlStructCheckFetcher {
 impl MssqlStructCheckFetcher {
     pub async fn fetch_table(
         &self,
+        db: &str,
         schema: &str,
         table: &str,
     ) -> anyhow::Result<MssqlCheckTableInfo> {
         let columns = self
             .fetch_rows(
                 COLUMNS_SQL,
+                db,
                 schema,
                 table,
                 &[
@@ -182,7 +186,7 @@ impl MssqlStructCheckFetcher {
             )
             .await?;
         if columns.is_empty() {
-            anyhow::bail!("MSSQL table {schema}.{table} was not found");
+            anyhow::bail!("MSSQL table {db}.{schema}.{table} was not found");
         }
 
         Ok(MssqlCheckTableInfo {
@@ -190,6 +194,7 @@ impl MssqlStructCheckFetcher {
             constraints: self
                 .fetch_rows(
                     CONSTRAINTS_SQL,
+                    db,
                     schema,
                     table,
                     &[
@@ -207,6 +212,7 @@ impl MssqlStructCheckFetcher {
             indexes: self
                 .fetch_rows(
                     INDEXES_SQL,
+                    db,
                     schema,
                     table,
                     &[
@@ -227,6 +233,7 @@ impl MssqlStructCheckFetcher {
             comments: self
                 .fetch_rows(
                     COMMENTS_SQL,
+                    db,
                     schema,
                     table,
                     &["minor_id", "column_name", "comment"],
@@ -238,11 +245,12 @@ impl MssqlStructCheckFetcher {
     async fn fetch_rows(
         &self,
         sql: &str,
+        db: &str,
         schema: &str,
         table: &str,
         columns: &[&str],
     ) -> anyhow::Result<Vec<BTreeMap<String, String>>> {
-        let mut query = Query::new(sql);
+        let mut query = Query::new(Self::catalog_sql(sql, db));
         query.bind(schema);
         query.bind(table);
         let mut connection = self.connection_pool.get().await?;
@@ -256,6 +264,15 @@ impl MssqlStructCheckFetcher {
         rows.iter()
             .map(|row| Self::parse_row(row, columns))
             .collect()
+    }
+
+    fn catalog_sql(template: &str, db: &str) -> String {
+        let catalog = if db.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", SqlUtil::escape_by_db_type(db, &DbType::Mssql))
+        };
+        template.replace("{catalog}", &catalog)
     }
 
     fn parse_row(row: &Row, columns: &[&str]) -> anyhow::Result<BTreeMap<String, String>> {

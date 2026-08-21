@@ -1,23 +1,17 @@
 DECLARE @i INT = 1;
-DECLARE @schema SYSNAME;
-DECLARE @qualified NVARCHAR(517);
+DECLARE @database SYSNAME;
+DECLARE @qualified NVARCHAR(776);
 DECLARE @sql NVARCHAR(MAX);
 WHILE @i <= 5
 BEGIN
-    SET @schema = N'struct_batch_mssql2mssql_' + CONVERT(NVARCHAR(10), @i);
-    SET @qualified = QUOTENAME(@schema) + N'.expression_defaults';
-    IF OBJECT_ID(@qualified, N'U') IS NOT NULL
-    BEGIN
-        SET @sql = N'DROP TABLE ' + @qualified;
-        EXEC sys.sp_executesql @sql;
-    END;
-    IF SCHEMA_ID(@schema) IS NOT NULL
-    BEGIN
-        SET @sql = N'DROP SCHEMA ' + QUOTENAME(@schema);
-        EXEC sys.sp_executesql @sql;
-    END;
-    SET @sql = N'CREATE SCHEMA ' + QUOTENAME(@schema);
+    SET @database = N'struct_batch_mssql2mssql_' + CONVERT(NVARCHAR(10), @i);
+    SET @sql = N'IF DB_ID(N''' + @database + N''') IS NOT NULL BEGIN '
+        + N'ALTER DATABASE ' + QUOTENAME(@database) + N' SET SINGLE_USER WITH ROLLBACK IMMEDIATE; '
+        + N'DROP DATABASE ' + QUOTENAME(@database) + N'; END; '
+        + N'CREATE DATABASE ' + QUOTENAME(@database) + N';';
     EXEC sys.sp_executesql @sql;
+
+    SET @qualified = QUOTENAME(@database) + N'.dbo.expression_defaults';
     SET @sql = N'CREATE TABLE ' + @qualified + N' (
         id INT IDENTITY(1, 1) NOT NULL,
         code NVARCHAR(40) NOT NULL CONSTRAINT df_expression_defaults_code DEFAULT (N''batch''),

@@ -30,8 +30,7 @@ pub enum ExtractorConfig {
     MssqlStruct {
         url: String,
         connection_auth: ConnectionAuthConfig,
-        schema: String,
-        schemas: Vec<String>,
+        dbs: Vec<String>,
         db_batch_size: usize,
     },
 

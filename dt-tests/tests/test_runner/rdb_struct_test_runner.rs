@@ -212,7 +212,7 @@ impl RdbStructTestRunner {
         let src_check_fetcher = MssqlStructCheckFetcher {
             connection_pool: self
                 .base
-                .src_client_mssql
+                .src_mssql_endpoint
                 .as_ref()
                 .expect("MSSQL source test client is required")
                 .create_pool()
@@ -221,7 +221,7 @@ impl RdbStructTestRunner {
         let dst_check_fetcher = MssqlStructCheckFetcher {
             connection_pool: self
                 .base
-                .dst_client_mssql
+                .dst_mssql_endpoint
                 .as_ref()
                 .expect("MSSQL destination test client is required")
                 .create_pool()
@@ -235,10 +235,10 @@ impl RdbStructTestRunner {
 
         for (src_db_tb, dst_db_tb) in src_db_tbs.iter().zip(&dst_db_tbs) {
             let src_table = src_check_fetcher
-                .fetch_table(&src_db_tb.0, &src_db_tb.1)
+                .fetch_table(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2)
                 .await?;
             let dst_table = dst_check_fetcher
-                .fetch_table(&dst_db_tb.0, &dst_db_tb.1)
+                .fetch_table(&dst_db_tb.0, &dst_db_tb.1, &dst_db_tb.2)
                 .await?;
 
             println!(

@@ -1,14 +1,11 @@
-IF OBJECT_ID(N'struct_filter_mssql2mssql_2.full_index_type', N'U') IS NOT NULL
-    DROP TABLE struct_filter_mssql2mssql_2.full_index_type;
-IF OBJECT_ID(N'struct_filter_mssql2mssql_2.constraint_table', N'U') IS NOT NULL
-    DROP TABLE struct_filter_mssql2mssql_2.constraint_table;
+IF DB_ID(N'struct_filter_mssql2mssql_2') IS NOT NULL
+BEGIN
+    ALTER DATABASE [struct_filter_mssql2mssql_2] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [struct_filter_mssql2mssql_2];
+END;
+CREATE DATABASE [struct_filter_mssql2mssql_2];
 GO
-IF SCHEMA_ID(N'struct_filter_mssql2mssql_2') IS NOT NULL
-    EXEC(N'DROP SCHEMA struct_filter_mssql2mssql_2');
-GO
-EXEC(N'CREATE SCHEMA struct_filter_mssql2mssql_2');
-GO
-CREATE TABLE struct_filter_mssql2mssql_2.full_index_type (
+CREATE TABLE [struct_filter_mssql2mssql_2].dbo.full_index_type (
     id INT NOT NULL,
     unique_col VARCHAR(64) NOT NULL,
     index_col VARCHAR(255) NULL,
@@ -22,7 +19,7 @@ CREATE TABLE struct_filter_mssql2mssql_2.full_index_type (
     CONSTRAINT pk_filter_2 PRIMARY KEY CLUSTERED (id),
     CONSTRAINT uq_filter_2 UNIQUE NONCLUSTERED (unique_col)
 );
-CREATE TABLE struct_filter_mssql2mssql_2.constraint_table (
+CREATE TABLE [struct_filter_mssql2mssql_2].dbo.constraint_table (
     id INT NOT NULL,
     code NVARCHAR(40) NOT NULL,
     amount DECIMAL(12, 2) NULL,

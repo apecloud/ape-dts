@@ -554,8 +554,7 @@ impl TaskConfig {
                     ExtractorConfig::MssqlStruct {
                         url,
                         connection_auth,
-                        schema: String::new(),
-                        schemas: Vec::new(),
+                        dbs: Vec::new(),
                         db_batch_size: loader.get_with_default(
                             EXTRACTOR,
                             "db_batch_size",

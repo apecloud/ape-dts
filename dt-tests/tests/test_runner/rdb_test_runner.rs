@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     str::FromStr,
 };
 
@@ -1364,8 +1365,23 @@ impl RdbTestRunner {
             let mut seen = HashSet::new();
             src_db_tbs.retain(|db_tb| seen.insert(db_tb.clone()));
             if src_db_tbs.is_empty() {
-                anyhow::bail!(
-                    "no MSSQL CREATE TABLE statements found in src_prepare.sql or src_test.sql"
+                let compare_tbs_file = format!("{}/compare_tbs.txt", self.base.test_dir);
+                let compare_tbs = fs::read_to_string(&compare_tbs_file).map_err(|error| {
+                    anyhow::anyhow!(
+                        "no MSSQL CREATE TABLE statements found and failed to read {}: {}",
+                        compare_tbs_file,
+                        error
+                    )
+                })?;
+                src_db_tbs = compare_tbs
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                    .map(|line| Self::parse_full_tb_name(line, &db_type))
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                anyhow::ensure!(
+                    !src_db_tbs.is_empty(),
+                    "no MSSQL tables found in SQL fixtures or compare_tbs.txt"
                 );
             }
         }

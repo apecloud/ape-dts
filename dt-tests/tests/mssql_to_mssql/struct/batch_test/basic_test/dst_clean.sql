@@ -1,19 +1,14 @@
 DECLARE @i INT = 1;
-DECLARE @schema SYSNAME;
-DECLARE @qualified NVARCHAR(517);
+DECLARE @database SYSNAME;
 DECLARE @sql NVARCHAR(MAX);
 WHILE @i <= 5
 BEGIN
-    SET @schema = N'struct_batch_mssql2mssql_' + CONVERT(NVARCHAR(10), @i);
-    SET @qualified = QUOTENAME(@schema) + N'.expression_defaults';
-    IF OBJECT_ID(@qualified, N'U') IS NOT NULL
+    SET @database = N'struct_batch_mssql2mssql_' + CONVERT(NVARCHAR(10), @i);
+    IF DB_ID(@database) IS NOT NULL
     BEGIN
-        SET @sql = N'DROP TABLE ' + @qualified;
-        EXEC sys.sp_executesql @sql;
-    END;
-    IF SCHEMA_ID(@schema) IS NOT NULL
-    BEGIN
-        SET @sql = N'DROP SCHEMA ' + QUOTENAME(@schema);
+        SET @sql = N'ALTER DATABASE ' + QUOTENAME(@database)
+            + N' SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE '
+            + QUOTENAME(@database) + N';';
         EXEC sys.sp_executesql @sql;
     END;
     SET @i += 1;

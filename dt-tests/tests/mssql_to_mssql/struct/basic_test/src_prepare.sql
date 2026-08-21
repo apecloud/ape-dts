@@ -1,42 +1,13 @@
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.full_column_type_view', N'V') IS NOT NULL
-    DROP VIEW struct_it_mssql2mssql_1.full_column_type_view;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.[special_character_$1#@*_table]', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.[special_character_$1#@*_table];
-IF EXISTS (
-    SELECT 1
-    FROM sys.tables AS t
-    JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-    WHERE s.name = N'struct_it_mssql2mssql_1'
-      AND t.name = N'special_character_$1#@*].table'
-)
-    DROP TABLE struct_it_mssql2mssql_1.[special_character_$1#@*]].table];
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.rowversion_type', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.rowversion_type;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.case_sensitive_column_name', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.case_sensitive_column_name;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.special_default_and_comment', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.special_default_and_comment;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.spatial_column_type', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.spatial_column_type;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.constraint_table', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.constraint_table;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.full_index_type', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.full_index_type;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.defaults_and_generated', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.defaults_and_generated;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.full_column_type', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.full_column_type;
-IF OBJECT_ID(N'struct_it_mssql2mssql_1.[match]', N'U') IS NOT NULL
-    DROP TABLE struct_it_mssql2mssql_1.[match];
-GO
-IF SCHEMA_ID(N'struct_it_mssql2mssql_1') IS NOT NULL
-    EXEC(N'DROP SCHEMA struct_it_mssql2mssql_1');
-GO
-EXEC(N'CREATE SCHEMA struct_it_mssql2mssql_1');
+IF DB_ID(N'struct_it_mssql2mssql_1') IS NOT NULL
+BEGIN
+    ALTER DATABASE [struct_it_mssql2mssql_1] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [struct_it_mssql2mssql_1];
+END;
+CREATE DATABASE [struct_it_mssql2mssql_1];
 GO
 
 -- Align with the MySQL/PG full_column_type tables using SQL Server equivalents.
-CREATE TABLE struct_it_mssql2mssql_1.full_column_type (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.full_column_type (
     id INT IDENTITY(1, 1) NOT NULL,
     bit_col BIT NULL,
     tinyint_col TINYINT NULL,
@@ -76,7 +47,7 @@ CREATE TABLE struct_it_mssql2mssql_1.full_column_type (
 GO
 
 -- SQL Server spatial types corresponding to the spatial coverage in MySQL/PG.
-CREATE TABLE struct_it_mssql2mssql_1.spatial_column_type (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.spatial_column_type (
     id INT IDENTITY(1, 1) NOT NULL,
     geometry_col GEOMETRY NULL,
     geography_col GEOGRAPHY NULL,
@@ -85,7 +56,7 @@ CREATE TABLE struct_it_mssql2mssql_1.spatial_column_type (
 GO
 
 -- Literal/expression defaults, identity, and persisted/non-persisted computed columns.
-CREATE TABLE struct_it_mssql2mssql_1.defaults_and_generated (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.defaults_and_generated (
     id BIGINT IDENTITY(100, 5) NOT NULL,
     code NVARCHAR(40) NOT NULL
         CONSTRAINT df_defaults_and_generated_code DEFAULT (N'ape-dts'),
@@ -108,7 +79,7 @@ CREATE TABLE struct_it_mssql2mssql_1.defaults_and_generated (
 GO
 
 -- Dedicated coverage for SQL Server's non-writable rowversion type.
-CREATE TABLE struct_it_mssql2mssql_1.rowversion_type (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.rowversion_type (
     id BIGINT NOT NULL,
     row_version ROWVERSION NOT NULL,
     CONSTRAINT pk_rowversion_type PRIMARY KEY CLUSTERED (id)
@@ -116,7 +87,7 @@ CREATE TABLE struct_it_mssql2mssql_1.rowversion_type (
 GO
 
 -- Primary/unique/check/not-null coverage, excluding foreign keys by design.
-CREATE TABLE struct_it_mssql2mssql_1.constraint_table (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.constraint_table (
     id INT IDENTITY(1, 1) NOT NULL,
     username NVARCHAR(50) NOT NULL,
     email VARCHAR(100) NOT NULL,
@@ -133,7 +104,7 @@ CREATE TABLE struct_it_mssql2mssql_1.constraint_table (
 GO
 
 -- Single, composite, unique, descending, included-column, and filtered indexes.
-CREATE TABLE struct_it_mssql2mssql_1.full_index_type (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.full_index_type (
     id INT NOT NULL,
     unique_col VARCHAR(255) NOT NULL,
     index_col VARCHAR(255) NULL,
@@ -148,24 +119,24 @@ CREATE TABLE struct_it_mssql2mssql_1.full_index_type (
 );
 GO
 CREATE UNIQUE NONCLUSTERED INDEX unique_index
-    ON struct_it_mssql2mssql_1.full_index_type (unique_col ASC);
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type (unique_col ASC);
 CREATE NONCLUSTERED INDEX index_index
-    ON struct_it_mssql2mssql_1.full_index_type (index_col ASC);
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type (index_col ASC);
 CREATE NONCLUSTERED INDEX simple_index
-    ON struct_it_mssql2mssql_1.full_index_type (simple_index_col ASC);
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type (simple_index_col ASC);
 CREATE NONCLUSTERED INDEX composite_index
-    ON struct_it_mssql2mssql_1.full_index_type
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type
        (composite_index_col1 ASC, composite_index_col2 DESC, composite_index_col3 ASC);
 CREATE NONCLUSTERED INDEX included_index
-    ON struct_it_mssql2mssql_1.full_index_type (created_at DESC)
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type (created_at DESC)
     INCLUDE (status, unique_col);
 CREATE NONCLUSTERED INDEX filtered_index
-    ON struct_it_mssql2mssql_1.full_index_type (status ASC)
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type (status ASC)
     WHERE status > 0;
 GO
 
 -- Quoted Unicode defaults and table/column comments.
-CREATE TABLE struct_it_mssql2mssql_1.special_default_and_comment (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.special_default_and_comment (
     id INT IDENTITY(1, 1) NOT NULL,
     f_1 NVARCHAR(255) NOT NULL
         CONSTRAINT df_special_default_f1 DEFAULT (N'abc''中文'''),
@@ -174,7 +145,7 @@ CREATE TABLE struct_it_mssql2mssql_1.special_default_and_comment (
 GO
 
 -- Preserve case-sensitive column spelling even under a case-insensitive database collation.
-CREATE TABLE struct_it_mssql2mssql_1.case_sensitive_column_name (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.case_sensitive_column_name (
     id INT IDENTITY(1, 1) NOT NULL,
     name VARCHAR(255) NOT NULL CONSTRAINT df_case_name DEFAULT ('jack'),
     Age INT NOT NULL CONSTRAINT df_case_age DEFAULT ((100)),
@@ -184,7 +155,7 @@ CREATE TABLE struct_it_mssql2mssql_1.case_sensitive_column_name (
 GO
 
 -- Bracket escaping and dots in table, column, and constraint identifiers.
-CREATE TABLE struct_it_mssql2mssql_1.[special_character_$1#@*]].table] (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.[special_character_$1#@*]].table] (
     id INT IDENTITY(1, 1) NOT NULL,
     [column ]] with.dot] VARCHAR(255) NOT NULL,
     [unique_$#@]]] VARCHAR(255) NULL,
@@ -196,7 +167,7 @@ CREATE TABLE struct_it_mssql2mssql_1.[special_character_$1#@*]].table] (
 GO
 
 -- SQL Server keywords and indexes on quoted identifiers.
-CREATE TABLE struct_it_mssql2mssql_1.[match] (
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.[match] (
     select_id INT IDENTITY(1, 1) NOT NULL,
     [table] NVARCHAR(255) NOT NULL,
     [column] NVARCHAR(255) NOT NULL,
@@ -210,49 +181,49 @@ CREATE TABLE struct_it_mssql2mssql_1.[match] (
 );
 GO
 CREATE NONCLUSTERED INDEX idx_index_on_index
-    ON struct_it_mssql2mssql_1.[match] ([offset] ASC);
+    ON [struct_it_mssql2mssql_1].dbo.[match] ([offset] ASC);
 CREATE NONCLUSTERED INDEX idx_key_col
-    ON struct_it_mssql2mssql_1.[match] ([match] ASC);
+    ON [struct_it_mssql2mssql_1].dbo.[match] ([match] ASC);
 CREATE UNIQUE NONCLUSTERED INDEX uniq_unique_col
-    ON struct_it_mssql2mssql_1.[match] (unique_col ASC);
+    ON [struct_it_mssql2mssql_1].dbo.[match] (unique_col ASC);
 GO
 
 -- Views are intentionally outside the MSSQL struct task's table scope.
--- CREATE VIEW struct_it_mssql2mssql_1.full_column_type_view
--- AS SELECT * FROM struct_it_mssql2mssql_1.full_column_type;
+-- CREATE VIEW [struct_it_mssql2mssql_1].dbo.full_column_type_view
+-- AS SELECT * FROM [struct_it_mssql2mssql_1].dbo.full_column_type;
 -- GO
 
-EXEC sys.sp_addextendedproperty
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
     @value = N'Comment on full_column_type.',
-    @level0type = N'SCHEMA', @level0name = N'struct_it_mssql2mssql_1',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'full_column_type';
-EXEC sys.sp_addextendedproperty
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
     @value = N'Comment on full_column_type.id.',
-    @level0type = N'SCHEMA', @level0name = N'struct_it_mssql2mssql_1',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'full_column_type',
     @level2type = N'COLUMN', @level2name = N'id';
-EXEC sys.sp_addextendedproperty
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
     @value = N'Comment on full_index_type.',
-    @level0type = N'SCHEMA', @level0name = N'struct_it_mssql2mssql_1',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'full_index_type';
-EXEC sys.sp_addextendedproperty
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
     @value = N'Comment on full_index_type.id.',
-    @level0type = N'SCHEMA', @level0name = N'struct_it_mssql2mssql_1',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'full_index_type',
     @level2type = N'COLUMN', @level2name = N'id';
-EXEC sys.sp_addextendedproperty
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
     @value = N'中文注释''special_default_and_comment''',
-    @level0type = N'SCHEMA', @level0name = N'struct_it_mssql2mssql_1',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'special_default_and_comment';
-EXEC sys.sp_addextendedproperty
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
     @value = N'中文注释''f_1'' #?&^%$#@<>!',
-    @level0type = N'SCHEMA', @level0name = N'struct_it_mssql2mssql_1',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'special_default_and_comment',
     @level2type = N'COLUMN', @level2name = N'f_1';
 GO

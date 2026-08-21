@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::bail;
 use dt_common::{
@@ -30,10 +30,22 @@ use dt_common::{
 
 use crate::rdb_struct_filter::RdbStructFilter;
 
+const DATABASES_SQL: &str = r#"
+SELECT name AS database_name
+FROM sys.databases
+WHERE state_desc = 'ONLINE'
+  AND HAS_DBACCESS(name) = 1
+ORDER BY name
+"#;
+
 const SCHEMAS_SQL: &str = r#"
-SELECT s.name AS schema_name
-FROM sys.schemas AS s
-ORDER BY s.name
+SELECT
+    s.name AS schema_name,
+    t.name AS table_name
+FROM {catalog}sys.schemas AS s
+JOIN {catalog}sys.tables AS t ON t.schema_id = s.schema_id
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name, t.name
 "#;
 
 const TABLE_COLUMNS_SQL: &str = r#"
@@ -55,17 +67,17 @@ SELECT
     CONVERT(bit, COALESCE(ic.is_not_for_replication, 0)) AS identity_not_for_replication,
     cc.definition AS computed_definition,
     CONVERT(bit, COALESCE(cc.is_persisted, 0)) AS computed_persisted
-FROM sys.tables AS t
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.columns AS c ON c.object_id = t.object_id
-JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id
-LEFT JOIN sys.default_constraints AS dc
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.columns AS c ON c.object_id = t.object_id
+JOIN {catalog}sys.types AS ty ON ty.user_type_id = c.user_type_id
+LEFT JOIN {catalog}sys.default_constraints AS dc
   ON dc.parent_object_id = c.object_id
  AND dc.parent_column_id = c.column_id
-LEFT JOIN sys.identity_columns AS ic
+LEFT JOIN {catalog}sys.identity_columns AS ic
   ON ic.object_id = c.object_id
  AND ic.column_id = c.column_id
-LEFT JOIN sys.computed_columns AS cc
+LEFT JOIN {catalog}sys.computed_columns AS cc
   ON cc.object_id = c.object_id
  AND cc.column_id = c.column_id
 WHERE t.is_ms_shipped = 0
@@ -82,16 +94,16 @@ SELECT
     c.name AS column_name,
     CONVERT(bigint, ic.key_ordinal) AS key_ordinal,
     ic.is_descending_key
-FROM sys.key_constraints AS kc
-JOIN sys.tables AS t ON t.object_id = kc.parent_object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.indexes AS i
+FROM {catalog}sys.key_constraints AS kc
+JOIN {catalog}sys.tables AS t ON t.object_id = kc.parent_object_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.indexes AS i
   ON i.object_id = kc.parent_object_id
  AND i.index_id = kc.unique_index_id
-JOIN sys.index_columns AS ic
+JOIN {catalog}sys.index_columns AS ic
   ON ic.object_id = i.object_id
  AND ic.index_id = i.index_id
-JOIN sys.columns AS c
+JOIN {catalog}sys.columns AS c
   ON c.object_id = ic.object_id
  AND c.column_id = ic.column_id
 WHERE t.is_ms_shipped = 0
@@ -107,9 +119,9 @@ SELECT
     cc.name AS constraint_name,
     cc.definition,
     cc.is_not_for_replication
-FROM sys.check_constraints AS cc
-JOIN sys.tables AS t ON t.object_id = cc.parent_object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+FROM {catalog}sys.check_constraints AS cc
+JOIN {catalog}sys.tables AS t ON t.object_id = cc.parent_object_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
 WHERE t.is_ms_shipped = 0
 ORDER BY s.name, t.name, cc.name
 "#;
@@ -129,13 +141,13 @@ SELECT
     ic.is_descending_key,
     ic.is_included_column,
     CONVERT(bigint, ic.index_column_id) AS index_column_id
-FROM sys.tables AS t
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.indexes AS i ON i.object_id = t.object_id
-JOIN sys.index_columns AS ic
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.indexes AS i ON i.object_id = t.object_id
+JOIN {catalog}sys.index_columns AS ic
   ON ic.object_id = i.object_id
  AND ic.index_id = i.index_id
-JOIN sys.columns AS c
+JOIN {catalog}sys.columns AS c
   ON c.object_id = ic.object_id
  AND c.column_id = ic.column_id
 WHERE t.is_ms_shipped = 0
@@ -153,12 +165,12 @@ SELECT
     CONVERT(bigint, ep.minor_id) AS minor_id,
     c.name AS column_name,
     CONVERT(nvarchar(max), ep.value) AS comment
-FROM sys.extended_properties AS ep
-JOIN sys.tables AS t
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.tables AS t
   ON ep.class = 1
  AND ep.major_id = t.object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-LEFT JOIN sys.columns AS c
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+LEFT JOIN {catalog}sys.columns AS c
   ON c.object_id = t.object_id
  AND c.column_id = ep.minor_id
 WHERE t.is_ms_shipped = 0
@@ -166,7 +178,7 @@ WHERE t.is_ms_shipped = 0
 ORDER BY s.name, t.name, ep.minor_id
 "#;
 
-type TableKey = (String, String);
+type TableKey = (String, String, String);
 type KeyConstraintDetails = (String, String, Vec<(i64, String, bool)>);
 type IndexDetails = (
     String,
@@ -179,69 +191,50 @@ type IndexDetails = (
 
 pub struct MssqlStructFetcher {
     pub connection_pool: MssqlConnectionPool,
-    pub schemas: HashSet<String>,
+    pub dbs: HashSet<String>,
     pub filter: RdbStructFilter,
-    pub allow_missing_schemas: bool,
+    pub allow_missing_databases: bool,
 }
 
 impl MssqlStructFetcher {
     pub async fn get_create_schema_statements(
         &mut self,
-        schema: &str,
+        db: &str,
     ) -> anyhow::Result<Vec<MssqlCreateSchemaStatement>> {
-        if !schema.is_empty() && !self.schemas.contains(schema) {
-            return Ok(Vec::new());
-        }
-
-        let targets = if schema.is_empty() {
-            self.schemas.clone()
-        } else {
-            HashSet::from([schema.to_string()])
-        };
-        if targets.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut connection = self.connection_pool.get().await?;
-        let rows = connection
-            .client_mut()
-            .query(SCHEMAS_SQL, &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
-            .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
-
-        let mut found = HashSet::new();
-        for row in rows {
-            let name = MssqlColValueConvertor::from_query_required_string(&row, "schema_name")
+        let dbs = self.get_databases(db).await?;
+        let mut statements = Vec::new();
+        for database_name in dbs {
+            let sql = Self::catalog_sql(SCHEMAS_SQL, &database_name);
+            let mut connection = self.connection_pool.get().await?;
+            let rows = connection
+                .client_mut()
+                .query(&sql, &[])
+                .await
+                .code(ErrorCode::MetadataReadFailed)?
+                .into_first_result()
+                .await
                 .code(ErrorCode::MetadataReadFailed)?;
-            if targets.contains(&name) && !self.filter_schema(&name) {
-                found.insert(name);
+
+            let mut schemas = BTreeSet::new();
+            for row in rows {
+                let schema = Self::required_string(&row, "schema_name")?;
+                let table = Self::required_string(&row, "table_name")?;
+                if self
+                    .filter
+                    .filter_tb_with_db(&database_name, &schema, &table)
+                {
+                    continue;
+                }
+                schemas.insert(schema);
+            }
+            for name in schemas {
+                statements.push(MssqlCreateSchemaStatement {
+                    database_name: database_name.clone(),
+                    schema: Schema { name },
+                });
             }
         }
-
-        let mut missing = targets
-            .iter()
-            .filter(|name| !found.contains(*name) && !self.filter_schema(name))
-            .cloned()
-            .collect::<Vec<_>>();
-        missing.sort();
-        if !self.allow_missing_schemas && !missing.is_empty() {
-            bail!(DtError::DatabaseObjectNotFound(
-                DbType::Mssql,
-                format!("schemas: {} not found", missing.join(",")),
-            ));
-        }
-
-        let mut found = found.into_iter().collect::<Vec<_>>();
-        found.sort();
-        Ok(found
-            .into_iter()
-            .map(|name| MssqlCreateSchemaStatement {
-                schema: Schema { name },
-            })
-            .collect())
+        Ok(statements)
     }
 
     pub async fn get_create_table_statements(
@@ -249,29 +242,36 @@ impl MssqlStructFetcher {
         schema: &str,
         table: &str,
     ) -> anyhow::Result<Vec<MssqlCreateTableStatement>> {
-        let mut statements = self.get_tables(schema, table).await?;
-        if statements.is_empty() {
-            return Ok(Vec::new());
-        }
+        let mut all_statements = BTreeMap::new();
+        for db in self.get_databases("").await? {
+            let mut statements = self.get_tables(&db, schema, table).await?;
+            if statements.is_empty() {
+                continue;
+            }
 
-        self.attach_key_constraints(schema, table, &mut statements)
-            .await?;
-        self.attach_check_constraints(schema, table, &mut statements)
-            .await?;
-        self.attach_indexes(schema, table, &mut statements).await?;
-        self.attach_comments(schema, table, &mut statements).await?;
-        Ok(statements.into_values().collect())
+            self.attach_key_constraints(&db, schema, table, &mut statements)
+                .await?;
+            self.attach_check_constraints(&db, schema, table, &mut statements)
+                .await?;
+            self.attach_indexes(&db, schema, table, &mut statements)
+                .await?;
+            self.attach_comments(&db, schema, table, &mut statements)
+                .await?;
+            all_statements.append(&mut statements);
+        }
+        Ok(all_statements.into_values().collect())
     }
 
     async fn get_tables(
         &self,
+        db: &str,
         requested_schema: &str,
         requested_table: &str,
     ) -> anyhow::Result<BTreeMap<TableKey, MssqlCreateTableStatement>> {
         let mut connection = self.connection_pool.get().await?;
         let rows = connection
             .client_mut()
-            .query(TABLE_COLUMNS_SQL, &[])
+            .query(&Self::catalog_sql(TABLE_COLUMNS_SQL, db), &[])
             .await
             .code(ErrorCode::MetadataReadFailed)?
             .into_first_result()
@@ -285,7 +285,13 @@ impl MssqlStructFetcher {
                     .code(ErrorCode::MetadataReadFailed)?;
             let table_name = MssqlColValueConvertor::from_query_required_string(&row, "table_name")
                 .code(ErrorCode::MetadataReadFailed)?;
-            if !self.include_table(&schema_name, &table_name, requested_schema, requested_table) {
+            if !self.include_table(
+                db,
+                &schema_name,
+                &table_name,
+                requested_schema,
+                requested_table,
+            ) {
                 continue;
             }
 
@@ -306,9 +312,10 @@ impl MssqlStructFetcher {
                     .code(ErrorCode::MetadataReadFailed)?;
 
             let statement = results
-                .entry((schema_name.clone(), table_name.clone()))
+                .entry((db.to_string(), schema_name.clone(), table_name.clone()))
                 .or_insert_with(|| MssqlCreateTableStatement {
                     table: Table {
+                        database_name: db.to_string(),
                         schema_name: schema_name.clone(),
                         table_name: table_name.clone(),
                         ..Default::default()
@@ -389,6 +396,7 @@ impl MssqlStructFetcher {
 
     async fn attach_key_constraints(
         &self,
+        db: &str,
         requested_schema: &str,
         requested_table: &str,
         statements: &mut BTreeMap<TableKey, MssqlCreateTableStatement>,
@@ -396,7 +404,7 @@ impl MssqlStructFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = connection
             .client_mut()
-            .query(KEY_CONSTRAINTS_SQL, &[])
+            .query(&Self::catalog_sql(KEY_CONSTRAINTS_SQL, db), &[])
             .await
             .code(ErrorCode::MetadataReadFailed)?
             .into_first_result()
@@ -406,7 +414,7 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(&schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
                 continue;
             }
             let name = Self::required_string(&row, "constraint_name")?;
@@ -437,9 +445,11 @@ impl MssqlStructFetcher {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            if let Some(statement) = statements.get_mut(&(schema.clone(), table.clone())) {
+            if let Some(statement) =
+                statements.get_mut(&(db.to_string(), schema.clone(), table.clone()))
+            {
                 statement.constraints.push(Constraint {
-                    database_name: String::new(),
+                    database_name: db.to_string(),
                     schema_name: schema,
                     table_name: table,
                     constraint_name: name,
@@ -453,6 +463,7 @@ impl MssqlStructFetcher {
 
     async fn attach_check_constraints(
         &self,
+        db: &str,
         requested_schema: &str,
         requested_table: &str,
         statements: &mut BTreeMap<TableKey, MssqlCreateTableStatement>,
@@ -460,7 +471,7 @@ impl MssqlStructFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = connection
             .client_mut()
-            .query(CHECK_CONSTRAINTS_SQL, &[])
+            .query(&Self::catalog_sql(CHECK_CONSTRAINTS_SQL, db), &[])
             .await
             .code(ErrorCode::MetadataReadFailed)?
             .into_first_result()
@@ -469,17 +480,19 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(&schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
                 continue;
             }
-            if let Some(statement) = statements.get_mut(&(schema.clone(), table.clone())) {
+            if let Some(statement) =
+                statements.get_mut(&(db.to_string(), schema.clone(), table.clone()))
+            {
                 let not_for_replication = MssqlColValueConvertor::from_query_required_bool(
                     &row,
                     "is_not_for_replication",
                 )
                 .code(ErrorCode::MetadataReadFailed)?;
                 statement.constraints.push(Constraint {
-                    database_name: String::new(),
+                    database_name: db.to_string(),
                     schema_name: schema,
                     table_name: table,
                     constraint_name: Self::required_string(&row, "constraint_name")?,
@@ -501,6 +514,7 @@ impl MssqlStructFetcher {
 
     async fn attach_indexes(
         &self,
+        db: &str,
         requested_schema: &str,
         requested_table: &str,
         statements: &mut BTreeMap<TableKey, MssqlCreateTableStatement>,
@@ -508,7 +522,7 @@ impl MssqlStructFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = connection
             .client_mut()
-            .query(INDEXES_SQL, &[])
+            .query(&Self::catalog_sql(INDEXES_SQL, db), &[])
             .await
             .code(ErrorCode::MetadataReadFailed)?
             .into_first_result()
@@ -518,7 +532,7 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(&schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
                 continue;
             }
             let name = Self::required_string(&row, "index_name")?;
@@ -572,9 +586,12 @@ impl MssqlStructFetcher {
         ) in grouped
         {
             columns.sort_by_key(|column| column.0);
-            if let Some(statement) = statements.get_mut(&(schema.clone(), table.clone())) {
+            if let Some(statement) =
+                statements.get_mut(&(db.to_string(), schema.clone(), table.clone()))
+            {
                 statement.indexes.push(MssqlIndex {
                     index: Index {
+                        database_name: db.to_string(),
                         schema_name: schema,
                         table_name: table,
                         index_name: name,
@@ -599,6 +616,7 @@ impl MssqlStructFetcher {
 
     async fn attach_comments(
         &self,
+        db: &str,
         requested_schema: &str,
         requested_table: &str,
         statements: &mut BTreeMap<TableKey, MssqlCreateTableStatement>,
@@ -606,7 +624,7 @@ impl MssqlStructFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = connection
             .client_mut()
-            .query(COMMENTS_SQL, &[])
+            .query(&Self::catalog_sql(COMMENTS_SQL, db), &[])
             .await
             .code(ErrorCode::MetadataReadFailed)?
             .into_first_result()
@@ -615,10 +633,12 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(&schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
                 continue;
             }
-            if let Some(statement) = statements.get_mut(&(schema.clone(), table.clone())) {
+            if let Some(statement) =
+                statements.get_mut(&(db.to_string(), schema.clone(), table.clone()))
+            {
                 let minor_id = MssqlColValueConvertor::from_query_required_i64(&row, "minor_id")
                     .code(ErrorCode::MetadataReadFailed)?;
                 let column_name =
@@ -631,7 +651,7 @@ impl MssqlStructFetcher {
                     } else {
                         CommentType::Column
                     },
-                    database_name: String::new(),
+                    database_name: db.to_string(),
                     schema_name: schema,
                     table_name: table,
                     column_name,
@@ -644,19 +664,75 @@ impl MssqlStructFetcher {
 
     fn include_table(
         &self,
+        db: &str,
         schema: &str,
         table: &str,
         requested_schema: &str,
         requested_table: &str,
     ) -> bool {
-        self.schemas.contains(schema)
-            && (requested_schema.is_empty() || requested_schema == schema)
+        (requested_schema.is_empty() || requested_schema == schema)
             && (requested_table.is_empty() || requested_table == table)
-            && !self.filter.filter_tb(schema, table)
+            && !self.filter.filter_tb_with_db(db, schema, table)
     }
 
-    fn filter_schema(&self, schema: &str) -> bool {
-        self.filter.filter_schema(schema)
+    async fn get_databases(&self, requested_db: &str) -> anyhow::Result<Vec<String>> {
+        if !requested_db.is_empty() && !self.dbs.contains(requested_db) {
+            return Ok(Vec::new());
+        }
+        let targets = if requested_db.is_empty() {
+            self.dbs.clone()
+        } else {
+            HashSet::from([requested_db.to_string()])
+        };
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(DATABASES_SQL, &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+        let available = rows
+            .iter()
+            .map(|row| {
+                MssqlColValueConvertor::from_query_required_string(row, "database_name")
+                    .code(ErrorCode::MetadataReadFailed)
+            })
+            .collect::<anyhow::Result<HashSet<_>>>()?;
+
+        let mut missing = targets
+            .iter()
+            .filter(|db| !available.contains(*db) && !self.filter.filter_schema(db))
+            .cloned()
+            .collect::<Vec<_>>();
+        missing.sort();
+        if !self.allow_missing_databases && !missing.is_empty() {
+            bail!(DtError::DatabaseObjectNotFound(
+                DbType::Mssql,
+                format!("databases: {} not found", missing.join(",")),
+            ));
+        }
+
+        let mut databases = targets
+            .into_iter()
+            .filter(|db| available.contains(db) && !self.filter.filter_schema(db))
+            .collect::<Vec<_>>();
+        databases.sort();
+        Ok(databases)
+    }
+
+    fn catalog_sql(template: &str, db: &str) -> String {
+        let catalog = if db.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", SqlUtil::escape_by_db_type(db, &DbType::Mssql))
+        };
+        template.replace("{catalog}", &catalog)
     }
 
     fn required_string(row: &tiberius::Row, column: &str) -> anyhow::Result<String> {

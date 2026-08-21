@@ -558,9 +558,7 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::MssqlStruct {
-                schemas,
-                db_batch_size,
-                ..
+                dbs, db_batch_size, ..
             } => {
                 let connection_pool = match extractor_client {
                     ConnClient::Mssql(connection_pool) => connection_pool,
@@ -571,7 +569,7 @@ impl ExtractorUtil {
                     base_extractor,
                     extract_state,
                     connection_pool,
-                    schemas,
+                    dbs,
                     filter,
                     db_batch_size,
                 };

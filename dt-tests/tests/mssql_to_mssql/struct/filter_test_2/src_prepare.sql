@@ -1,14 +1,11 @@
-IF OBJECT_ID(N'struct_filter_mssql2mssql_2.full_index_type', N'U') IS NOT NULL
-    DROP TABLE struct_filter_mssql2mssql_2.full_index_type;
-IF OBJECT_ID(N'struct_filter_mssql2mssql_2.constraint_table', N'U') IS NOT NULL
-    DROP TABLE struct_filter_mssql2mssql_2.constraint_table;
+IF DB_ID(N'struct_filter_mssql2mssql_2') IS NOT NULL
+BEGIN
+    ALTER DATABASE [struct_filter_mssql2mssql_2] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [struct_filter_mssql2mssql_2];
+END;
+CREATE DATABASE [struct_filter_mssql2mssql_2];
 GO
-IF SCHEMA_ID(N'struct_filter_mssql2mssql_2') IS NOT NULL
-    EXEC(N'DROP SCHEMA struct_filter_mssql2mssql_2');
-GO
-EXEC(N'CREATE SCHEMA struct_filter_mssql2mssql_2');
-GO
-CREATE TABLE struct_filter_mssql2mssql_2.full_index_type (
+CREATE TABLE [struct_filter_mssql2mssql_2].dbo.full_index_type (
     id INT NOT NULL,
     unique_col VARCHAR(64) NOT NULL,
     index_col VARCHAR(255) NULL,
@@ -24,14 +21,14 @@ CREATE TABLE struct_filter_mssql2mssql_2.full_index_type (
     CONSTRAINT ck_filter_2 CHECK (check_col >= 0)
 );
 CREATE NONCLUSTERED INDEX index_index
-    ON struct_filter_mssql2mssql_2.full_index_type (index_col ASC);
+    ON [struct_filter_mssql2mssql_2].dbo.full_index_type (index_col ASC);
 CREATE NONCLUSTERED INDEX simple_index
-    ON struct_filter_mssql2mssql_2.full_index_type (simple_index_col ASC);
+    ON [struct_filter_mssql2mssql_2].dbo.full_index_type (simple_index_col ASC);
 CREATE NONCLUSTERED INDEX composite_index
-    ON struct_filter_mssql2mssql_2.full_index_type
+    ON [struct_filter_mssql2mssql_2].dbo.full_index_type
        (composite_index_col1 ASC, composite_index_col2 DESC, composite_index_col3 ASC);
 GO
-CREATE TABLE struct_filter_mssql2mssql_2.constraint_table (
+CREATE TABLE [struct_filter_mssql2mssql_2].dbo.constraint_table (
     id INT NOT NULL,
     code NVARCHAR(40) NOT NULL,
     amount DECIMAL(12, 2) NULL,
