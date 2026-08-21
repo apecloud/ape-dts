@@ -1,4 +1,4 @@
-INSERT INTO type_coverage.all_supported_types VALUES (
+INSERT INTO [ape_dts].type_coverage.all_supported_types VALUES (
     1, 1, 255, -32768, -2147483648, -9223372036854775808,
     -123.25, 1.23456789012345E100, -214748.3648, 123456789012.3456,
     -1234567890123456789012345678901234.5678, 12345678901234.123456,
@@ -11,7 +11,7 @@ INSERT INTO type_coverage.all_supported_types VALUES (
     '2026-08-12T12:34:56.1234567+08:00',
     N'{"string":"中文","number":1.25,"bool":true,"array":[1,null]}'
 );
-INSERT INTO type_coverage.all_supported_types (
+INSERT INTO [ape_dts].type_coverage.all_supported_types (
     id, bit_value, tinyint_value, smallint_value, int_value, bigint_value,
     real_value, float_value, smallmoney_value, money_value, decimal_value,
     numeric_value, char_value, varchar_value, nchar_value, nvarchar_value,
@@ -28,8 +28,8 @@ INSERT INTO type_coverage.all_supported_types (
     '9999-12-31T23:59:59.997', '0001-01-01T00:00:00',
     '2026-08-12T04:34:56.1234567+00:00', N'{}'
 );
-INSERT INTO type_coverage.all_supported_types (id) VALUES (3);
-INSERT INTO type_coverage.all_supported_types VALUES (
+INSERT INTO [ape_dts].type_coverage.all_supported_types (id) VALUES (3);
+INSERT INTO [ape_dts].type_coverage.all_supported_types VALUES (
     4, 1, 42, -123, 123456, -123456789012345,
     12.5, -98765.4321, 123.4567, -123456789.1234,
     1234567890123456789012345678901234.5678, 12345.678901,

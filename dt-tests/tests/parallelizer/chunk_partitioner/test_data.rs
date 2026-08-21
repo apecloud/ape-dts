@@ -26,6 +26,7 @@ pub(crate) fn sized_row(
     data_size: usize,
 ) -> RowData {
     let mut row = RowData::new(
+        String::new(),
         schema.to_string(),
         tb.to_string(),
         chunk_id,

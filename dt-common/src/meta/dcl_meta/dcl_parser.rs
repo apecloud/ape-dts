@@ -191,6 +191,7 @@ impl DclParser {
         };
 
         let dcl = DclData {
+            default_db: String::new(),
             dcl_type: DclType::Grant,
             statement: DclStatement::Grant(statement),
             db_type: self.db_type.clone(),
@@ -207,6 +208,7 @@ impl DclParser {
         };
 
         let dcl = DclData {
+            default_db: String::new(),
             dcl_type: DclType::Revoke,
             statement: DclStatement::Revoke(statement),
             db_type: self.db_type.clone(),

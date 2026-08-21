@@ -213,6 +213,7 @@ fn build_ddl(
     command: Document,
 ) -> DdlData {
     DdlData {
+        default_db: String::new(),
         default_schema: db.clone(),
         query: command_to_query(command),
         ddl_type,

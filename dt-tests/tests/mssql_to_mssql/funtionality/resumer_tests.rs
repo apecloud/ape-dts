@@ -3,7 +3,8 @@ mod test {
     use anyhow::Context;
     use dt_common::{
         config::{config_enums::DbType, resumer_config::ResumerConfig},
-        meta::{order_key::OrderKey, position::Position},
+        meta::{mssql::MSSQL_DEFAULT_SCHEMA, order_key::OrderKey, position::Position},
+        utils::sql_util::SqlUtil,
     };
     use dt_connector::extractor::resumer::{
         recorder::{to_database::DatabaseRecorder, Recorder},
@@ -16,14 +17,15 @@ mod test {
     use super::super::TASK_CONFIG_FILE;
     use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
 
-    const TEST_SCHEMA: &str = "ape_dts_resumer_test";
+    const CONNECTION_DATABASE: &str = "ape_dts";
+    const TEST_DATABASE: &str = "ape_dts_resumer_test";
     const TEST_TABLE: &str = "positions";
     const TASK_ID: &str = "mssql-resumer-'quoted-task";
 
     async fn create_resumer_pool() -> anyhow::Result<(ResumerDbPool, ResumerConfig)> {
         let endpoint =
             MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Extractor)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(CONNECTION_DATABASE).await?;
         let connection_string = endpoint.connection_string().to_string();
         let connection_auth = endpoint.connection_auth().clone();
 
@@ -39,7 +41,7 @@ mod test {
             url: connection_string,
             connection_auth,
             db_type: DbType::Mssql,
-            table_full_name: format!("{TEST_SCHEMA}.{TEST_TABLE}"),
+            table_full_name: format!("{TEST_DATABASE}.{TEST_TABLE}"),
             max_connections: 2,
             is_direct_connection: None,
         };
@@ -67,15 +69,27 @@ mod test {
     }
 
     async fn cleanup(pool: &ResumerDbPool) -> anyhow::Result<()> {
+        let database = SqlUtil::escape_by_db_type(TEST_DATABASE, &DbType::Mssql);
         execute_batch(
             pool,
             &format!(
-                "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_TABLE}];
-                 IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
-                    EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
+                "IF DB_ID(N'{TEST_DATABASE}') IS NOT NULL
+                 BEGIN
+                     ALTER DATABASE {database} SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+                     DROP DATABASE {database};
+                 END"
             ),
         )
         .await
+    }
+
+    fn checkpoint_table_name() -> String {
+        SqlUtil::render_rdb_table(
+            &DbType::Mssql,
+            TEST_DATABASE,
+            MSSQL_DEFAULT_SCHEMA,
+            TEST_TABLE,
+        )
     }
 
     async fn count_task_rows(pool: &ResumerDbPool) -> anyhow::Result<i64> {
@@ -85,8 +99,9 @@ mod test {
             .query(
                 &format!(
                     "SELECT COUNT_BIG(*) AS row_count
-                     FROM [{TEST_SCHEMA}].[{TEST_TABLE}]
-                     WHERE task_id = @P1"
+                     FROM {}
+                     WHERE task_id = @P1",
+                    checkpoint_table_name()
                 ),
                 &[&TASK_ID],
             )
@@ -104,9 +119,10 @@ mod test {
             .client_mut()
             .execute(
                 &format!(
-                    "UPDATE [{TEST_SCHEMA}].[{TEST_TABLE}]
+                    "UPDATE {}
                      SET position_data = NULL
-                     WHERE task_id = @P1 AND resumer_type = @P2"
+                     WHERE task_id = @P1 AND resumer_type = @P2",
+                    checkpoint_table_name()
                 ),
                 &[&TASK_ID, &"SnapshotFinished"],
             )
@@ -123,25 +139,28 @@ mod test {
         let result = async {
             let empty_recovery = DatabaseRecovery::new(TASK_ID, &config, pool.clone()).await?;
             assert!(empty_recovery
-                .get_snapshot_resume_position("dbo", "orders", false)
+                .get_snapshot_resume_position(CONNECTION_DATABASE, "dbo", "orders", false)
                 .await
                 .is_none());
 
             let recorder = DatabaseRecorder::new(TASK_ID, &config, pool.clone(), true).await?;
             let first_position = Position::RdbSnapshot {
                 db_type: DbType::Mssql.to_string(),
+                db: CONNECTION_DATABASE.to_string(),
                 schema: "dbo".to_string(),
                 tb: "orders".to_string(),
                 order_key: Some(OrderKey::Single(("id".to_string(), Some("1".to_string())))),
             };
             let latest_position = Position::RdbSnapshot {
                 db_type: DbType::Mssql.to_string(),
+                db: CONNECTION_DATABASE.to_string(),
                 schema: "dbo".to_string(),
                 tb: "orders".to_string(),
                 order_key: Some(OrderKey::Single(("id".to_string(), Some("2".to_string())))),
             };
             let finished_position = Position::RdbSnapshotFinished {
                 db_type: DbType::Mssql.to_string(),
+                db: CONNECTION_DATABASE.to_string(),
                 schema: "dbo".to_string(),
                 tb: "orders".to_string(),
             };
@@ -155,22 +174,26 @@ mod test {
             let recovery = DatabaseRecovery::new(TASK_ID, &config, pool.clone()).await?;
             assert_eq!(
                 recovery
-                    .get_snapshot_resume_position("dbo", "orders", false)
+                    .get_snapshot_resume_position(CONNECTION_DATABASE, "dbo", "orders", false)
                     .await,
                 Some(latest_position)
             );
-            assert!(recovery.check_snapshot_finished("dbo", "orders").await);
+            assert!(
+                recovery
+                    .check_snapshot_finished(CONNECTION_DATABASE, "dbo", "orders")
+                    .await
+            );
 
             DatabaseRecorder::new(TASK_ID, &config, pool.clone(), true).await?;
             assert_eq!(count_task_rows(&pool).await?, 0);
             let reset_recovery = DatabaseRecovery::new(TASK_ID, &config, pool.clone()).await?;
             assert!(reset_recovery
-                .get_snapshot_resume_position("dbo", "orders", false)
+                .get_snapshot_resume_position(CONNECTION_DATABASE, "dbo", "orders", false)
                 .await
                 .is_none());
             assert!(
                 !reset_recovery
-                    .check_snapshot_finished("dbo", "orders")
+                    .check_snapshot_finished(CONNECTION_DATABASE, "dbo", "orders")
                     .await
             );
             anyhow::Ok(())

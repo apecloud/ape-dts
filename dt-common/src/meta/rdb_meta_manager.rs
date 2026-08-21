@@ -58,6 +58,7 @@ impl RdbMetaManager {
 
     pub async fn get_tb_meta<'a>(
         &'a mut self,
+        db: &str,
         schema: &str,
         tb: &str,
     ) -> anyhow::Result<&'a RdbTbMeta> {
@@ -72,7 +73,7 @@ impl RdbMetaManager {
         }
 
         if let Some(mssql_meta_manager) = self.mssql_meta_manager.as_mut() {
-            let tb_meta = mssql_meta_manager.get_tb_meta(schema, tb).await?;
+            let tb_meta = mssql_meta_manager.get_tb_meta(db, schema, tb).await?;
             return Ok(&tb_meta.basic);
         }
 
@@ -92,7 +93,7 @@ impl RdbMetaManager {
         }
     }
 
-    pub fn invalidate_cache(&mut self, schema: &str, tb: &str) {
+    pub fn invalidate_cache(&mut self, db: &str, schema: &str, tb: &str) {
         if let Some(mysql_meta_manager) = &mut self.mysql_meta_manager {
             mysql_meta_manager.invalidate_cache(schema, tb);
         }
@@ -100,11 +101,11 @@ impl RdbMetaManager {
             pg_meta_manager.invalidate_cache(schema, tb);
         }
         if let Some(mssql_meta_manager) = &mut self.mssql_meta_manager {
-            mssql_meta_manager.invalidate_cache(schema, tb);
+            mssql_meta_manager.invalidate_cache(db, schema, tb);
         }
     }
 
-    pub fn invalidate_cache_for_table(&mut self, schema: &str, tb: &str) {
+    pub fn invalidate_cache_for_table(&mut self, db: &str, schema: &str, tb: &str) {
         if let Some(mysql_meta_manager) = &mut self.mysql_meta_manager {
             mysql_meta_manager.invalidate_cache_for_table(schema, tb);
         }
@@ -112,7 +113,7 @@ impl RdbMetaManager {
             pg_meta_manager.invalidate_cache_for_table(schema, tb);
         }
         if let Some(mssql_meta_manager) = &mut self.mssql_meta_manager {
-            mssql_meta_manager.invalidate_cache_for_table(schema, tb);
+            mssql_meta_manager.invalidate_cache_for_table(db, schema, tb);
         }
     }
 

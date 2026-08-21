@@ -20,12 +20,18 @@ pub enum Position {
     },
     RdbSnapshot {
         db_type: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        db: String,
+        /// Existing first-level namespace; its current physical meaning is selected by db_type.
         schema: String,
         tb: String,
         order_key: Option<OrderKey>,
     },
     RdbSnapshotFinished {
         db_type: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        db: String,
+        /// Existing first-level namespace; its current physical meaning is selected by db_type.
         schema: String,
         tb: String,
     },
@@ -167,6 +173,17 @@ mod test {
             let position = Position::from_str(str).unwrap();
             assert_eq!(expected, &position.to_string());
         }
+
+        let position = Position::RdbSnapshotFinished {
+            db_type: "mssql".to_string(),
+            db: "db1".to_string(),
+            schema: "dbo".to_string(),
+            tb: "t1".to_string(),
+        };
+        assert_eq!(
+            position.to_string(),
+            r#"{"type":"RdbSnapshotFinished","db_type":"mssql","db":"db1","schema":"dbo","tb":"t1"}"#
+        );
     }
 
     #[test]
@@ -177,11 +194,13 @@ mod test {
 
         if let Position::RdbSnapshotFinished {
             db_type,
+            db,
             schema,
             tb,
         } = Position::from_log(log1)
         {
             assert_eq!(db_type, "mysql");
+            assert!(db.is_empty());
             assert_eq!(schema, "test_db_1");
             assert_eq!(tb, "one_pk_no_uk");
         } else {
@@ -190,12 +209,14 @@ mod test {
         let _res = Position::from_log(log2);
         if let Position::RdbSnapshot {
             db_type,
+            db,
             schema,
             tb,
             order_key: Some(OrderKey::Single((order_col, Some(value)))),
         } = Position::from_log(log2)
         {
             assert_eq!(db_type, "mysql");
+            assert!(db.is_empty());
             assert_eq!(schema, "test_db_1");
             assert_eq!(tb, "one_pk_no_uk");
             assert_eq!(order_col, "f_0");
@@ -215,11 +236,13 @@ mod test {
 
         if let Position::RdbSnapshotFinished {
             db_type,
+            db,
             schema,
             tb,
         } = Position::from_log(log1)
         {
             assert_eq!(db_type, "mysql");
+            assert!(db.is_empty());
             assert_eq!(schema, "test_db_1");
             assert_eq!(tb, "one_pk_no_uk");
         } else {
@@ -228,12 +251,14 @@ mod test {
         let _res = Position::from_log(log2);
         if let Position::RdbSnapshot {
             db_type,
+            db,
             schema,
             tb,
             order_key: Some(OrderKey::Composite(order_col_values)),
         } = Position::from_log(log2)
         {
             assert_eq!(db_type, "mysql");
+            assert!(db.is_empty());
             assert_eq!(schema, "test_db_1");
             assert_eq!(tb, "one_pk_no_uk");
             assert_eq!(

@@ -8,21 +8,26 @@ use anyhow::{bail, Context};
 use dt_common::{
     config::{
         config_enums::{CheckMode, DbType, ExtractType, SinkType, TaskKind},
+        config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
     error::{DtError, DtResultExt, ErrorCode},
     meta::{
-        avro::avro_converter::AvroConverter, dt_queue::DtQueue,
-        mssql::mssql_meta_manager::MssqlMetaManager, mysql::mysql_meta_manager::MysqlMetaManager,
-        pg::pg_meta_manager::PgMetaManager, rdb_meta_manager::RdbMetaManager,
-        redis::redis_statistic_type::RedisStatisticType, syncer::Syncer,
+        avro::avro_converter::AvroConverter,
+        dt_queue::DtQueue,
+        mssql::{mssql_meta_manager::MssqlMetaManager, MSSQL_DEFAULT_SCHEMA},
+        mysql::mysql_meta_manager::MysqlMetaManager,
+        pg::pg_meta_manager::PgMetaManager,
+        rdb_meta_manager::RdbMetaManager,
+        redis::redis_statistic_type::RedisStatisticType,
+        syncer::Syncer,
     },
     monitor::task_monitor_handle::TaskMonitorHandle,
     rdb_filter::RdbFilter,
     time_filter::TimeFilter,
-    utils::redis_util::RedisUtil,
+    utils::{redis_util::RedisUtil, sql_util::SqlUtil},
 };
 use dt_connector::{
     data_marker::DataMarker,
@@ -66,7 +71,7 @@ use tokio::sync::Mutex;
 use super::task_util::TaskUtil;
 use crate::task_util::ConnClient;
 
-pub type PartitionCols = HashMap<(String, String), String>;
+pub type PartitionCols = HashMap<(String, String, String), String>;
 
 const JSON_PREFIX: &str = "json:";
 
@@ -129,7 +134,7 @@ impl ExtractorUtil {
             ExtractorConfig::MysqlSnapshot {
                 url,
                 connection_auth,
-                db_tbs,
+                tbs,
                 partition_cols,
                 parallel_size,
                 parallel_type,
@@ -157,13 +162,16 @@ impl ExtractorUtil {
                         conn_pool,
                         meta_manager,
                         filter: Arc::new(filter),
-                        partition_cols: Arc::new(Self::parse_partition_cols(&partition_cols)?),
+                        partition_cols: Arc::new(Self::parse_partition_cols(
+                            &partition_cols,
+                            &DbType::Mysql,
+                        )?),
                         batch_size,
                         parallel_type,
                         sample_rate: Self::sample_rate(config, extractor_config),
                         recovery,
                     },
-                    db_tbs,
+                    tbs,
                     parallel_size,
                     extract_state,
                 };
@@ -261,7 +269,7 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::PgSnapshot {
-                schema_tbs,
+                tbs,
                 partition_cols,
                 parallel_size,
                 parallel_type,
@@ -281,21 +289,24 @@ impl ExtractorUtil {
                         conn_pool,
                         meta_manager,
                         filter: Arc::new(filter),
-                        partition_cols: Arc::new(Self::parse_partition_cols(&partition_cols)?),
+                        partition_cols: Arc::new(Self::parse_partition_cols(
+                            &partition_cols,
+                            &DbType::Pg,
+                        )?),
                         batch_size,
                         parallel_type,
                         sample_rate: Self::sample_rate(config, extractor_config),
                         recovery,
                     },
                     parallel_size,
-                    schema_tbs,
+                    tbs,
                     extract_state,
                 };
                 Box::new(extractor)
             }
 
             ExtractorConfig::MssqlSnapshot {
-                schema_tbs,
+                tbs,
                 partition_cols,
                 parallel_size,
                 parallel_type,
@@ -313,13 +324,16 @@ impl ExtractorUtil {
                         connection_pool,
                         meta_manager,
                         filter: Arc::new(filter),
-                        partition_cols: Arc::new(Self::parse_partition_cols(&partition_cols)?),
+                        partition_cols: Arc::new(Self::parse_partition_cols(
+                            &partition_cols,
+                            &DbType::Mssql,
+                        )?),
                         batch_size,
                         parallel_type,
                         recovery,
                     },
                     parallel_size,
-                    schema_tbs,
+                    tbs,
                     extract_state,
                 };
                 Box::new(extractor)
@@ -393,7 +407,7 @@ impl ExtractorUtil {
             }
 
             ExtractorConfig::MongoSnapshot {
-                db_tbs,
+                tbs,
                 parallel_size,
                 parallel_type,
                 batch_size,
@@ -404,7 +418,7 @@ impl ExtractorUtil {
                     _ => bail!(DtError::MissingSourceClient),
                 };
                 let extractor = MongoSnapshotExtractor {
-                    db_tbs,
+                    tbs,
                     parallel_type,
                     parallel_size,
                     batch_size,
@@ -814,7 +828,10 @@ impl ExtractorUtil {
         Ok(meta_manager)
     }
 
-    pub fn parse_partition_cols(config_str: &str) -> anyhow::Result<PartitionCols> {
+    pub fn parse_partition_cols(
+        config_str: &str,
+        db_type: &DbType,
+    ) -> anyhow::Result<PartitionCols> {
         let mut results = PartitionCols::new();
         if config_str.trim().is_empty() {
             return Ok(results);
@@ -831,9 +848,57 @@ impl ExtractorUtil {
                 .code(ErrorCode::InvalidConfig)
                 .context("config [extractor].partition_cols is invalid JSON")?;
         for i in config {
-            results.insert((i.db, i.tb), i.partition_col);
+            if matches!(db_type, DbType::Mssql) {
+                let db = Self::parse_mssql_identifier(&i.db)?;
+                let raw_escape_pairs = [TokenEscapePair::String(("r#".into(), "#".into()))];
+                let parts = ConfigTokenParser::parse_config_with_delimiters(
+                    &i.tb,
+                    db_type,
+                    &['.'],
+                    Some(&raw_escape_pairs),
+                )?;
+                let (schema, tb) = match parts.as_slice() {
+                    [tb] => (
+                        MSSQL_DEFAULT_SCHEMA.to_string(),
+                        Self::parse_mssql_identifier(tb)?,
+                    ),
+                    [schema, dot, tb] if dot == "." => (
+                        Self::parse_mssql_identifier(schema)?,
+                        Self::parse_mssql_identifier(tb)?,
+                    ),
+                    _ => bail!(DtError::InvalidConfig(format!(
+                        "MSSQL partition_cols table [{}] must be table or schema.table",
+                        i.tb
+                    ))),
+                };
+                results.insert((db, schema, tb), i.partition_col);
+            } else {
+                results.insert((String::new(), i.db, i.tb), i.partition_col);
+            }
         }
         Ok(results)
+    }
+
+    fn parse_mssql_identifier(identifier: &str) -> anyhow::Result<String> {
+        if let Some(raw) = identifier
+            .strip_prefix("r#")
+            .and_then(|value| value.strip_suffix('#'))
+        {
+            if raw.is_empty() {
+                bail!(DtError::InvalidConfig(
+                    "MSSQL identifier must not be empty".to_string()
+                ));
+            }
+            return Ok(raw.to_string());
+        }
+        let tokens = ConfigTokenParser::parse_config(identifier, &DbType::Mssql, &[], None)?;
+        if tokens.len() != 1 || tokens[0].is_empty() {
+            bail!(DtError::InvalidConfig(format!(
+                "invalid MSSQL identifier [{}]",
+                identifier
+            )));
+        }
+        Ok(SqlUtil::unescape_by_db_type(&tokens[0], &DbType::Mssql))
     }
 }
 
@@ -873,13 +938,38 @@ mod tests {
     #[test]
     fn partition_cols_preserve_mssql_schema_table_chunk_key() {
         let partition_cols = ExtractorUtil::parse_partition_cols(
-            r#"json:[{"db":"dbo","tb":"basic_test","partition_col":"id"}]"#,
+            r#"json:[{"db":"test_db","tb":"dbo.basic_test","partition_col":"id"}]"#,
+            &DbType::Mssql,
         )
         .unwrap();
 
         assert_eq!(
             partition_cols
-                .get(&("dbo".to_string(), "basic_test".to_string()))
+                .get(&(
+                    "test_db".to_string(),
+                    "dbo".to_string(),
+                    "basic_test".to_string(),
+                ))
+                .map(String::as_str),
+            Some("id")
+        );
+    }
+
+    #[test]
+    fn mssql_partition_cols_default_to_dbo_and_support_raw_identifiers() {
+        let partition_cols = ExtractorUtil::parse_partition_cols(
+            r##"json:[{"db":"r#db.one#","tb":"r#table.one#","partition_col":"id"}]"##,
+            &DbType::Mssql,
+        )
+        .unwrap();
+
+        assert_eq!(
+            partition_cols
+                .get(&(
+                    "db.one".to_string(),
+                    "dbo".to_string(),
+                    "table.one".to_string(),
+                ))
                 .map(String::as_str),
             Some("id")
         );

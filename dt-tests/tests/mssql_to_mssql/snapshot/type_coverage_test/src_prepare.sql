@@ -1,6 +1,8 @@
-DROP TABLE IF EXISTS type_coverage.all_supported_types;
+USE [ape_dts];
+GO
+DROP TABLE IF EXISTS [ape_dts].type_coverage.all_supported_types;
 IF SCHEMA_ID(N'type_coverage') IS NULL EXEC(N'CREATE SCHEMA type_coverage');
-CREATE TABLE type_coverage.all_supported_types (
+CREATE TABLE [ape_dts].type_coverage.all_supported_types (
     id int NOT NULL PRIMARY KEY,
     bit_value bit NULL,
     tinyint_value tinyint NULL,

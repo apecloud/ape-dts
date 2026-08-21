@@ -288,9 +288,8 @@ impl RdbQueryBuilder<'_> {
     ) -> anyhow::Result<(RdbQueryInfo<'a>, usize)> {
         let mut data_size = 0;
         let sql = format!(
-            "DELETE FROM {}.{} WHERE {}",
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb),
+            "DELETE FROM {} WHERE {}",
+            self.table_name(),
             self.get_where_in_info(batch_size)?,
         );
 
@@ -348,9 +347,8 @@ impl RdbQueryBuilder<'_> {
         let row_values = self.get_batch_placeholders(&cols, batch_size)?;
 
         let mut sql = format!(
-            "INSERT INTO {}.{}({}) VALUES{}",
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb),
+            "INSERT INTO {}({}) VALUES{}",
+            self.table_name(),
             self.escape_cols(&cols).join(","),
             row_values
         );
@@ -399,11 +397,7 @@ impl RdbQueryBuilder<'_> {
 
     fn get_mssql_replace_sql(&self, cols: &[String], row_values: &str) -> anyhow::Result<String> {
         let key_cols = &self.rdb_tb_meta.order_cols;
-        let table = format!(
-            "{}.{}",
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb)
-        );
+        let table = self.table_name();
         let escaped_cols = self.escape_cols(&cols.to_vec());
         let insert_sql = format!(
             "INSERT INTO {table}({}) VALUES{}",
@@ -619,9 +613,8 @@ impl RdbQueryBuilder<'_> {
         }
 
         let sql = format!(
-            "INSERT INTO {}.{}({}) VALUES({})",
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb),
+            "INSERT INTO {}({}) VALUES({})",
+            self.table_name(),
             self.escape_cols(&cols).join(","),
             col_values.join(",")
         );
@@ -636,18 +629,14 @@ impl RdbQueryBuilder<'_> {
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
         let before = row_data.require_before()?;
         let (where_sql, not_null_cols) = self.get_where_info(1, before, placeholder)?;
-        let escaped_schema = self.escape(&self.rdb_tb_meta.schema);
-        let escaped_tb = self.escape(&self.rdb_tb_meta.tb);
-        let mut sql = format!(
-            "DELETE FROM {}.{} WHERE {}",
-            escaped_schema, escaped_tb, where_sql
-        );
+        let table = self.table_name();
+        let mut sql = format!("DELETE FROM {table} WHERE {where_sql}");
         if self.rdb_tb_meta.key_map.is_empty() {
             if self.db_type == DbType::Pg {
                 sql = format!(
                     "DELETE FROM {schema}.{tb} WHERE ctid IN (SELECT ctid FROM {schema}.{tb} WHERE {where_sql} LIMIT 1)",
-                    schema = escaped_schema,
-                    tb = escaped_tb,
+                    schema = self.escape(&self.rdb_tb_meta.schema),
+                    tb = self.escape(&self.rdb_tb_meta.tb),
                     where_sql = where_sql,
                 );
             } else {
@@ -702,12 +691,10 @@ impl RdbQueryBuilder<'_> {
         }
 
         let (where_sql, not_null_cols) = self.get_where_info(index, before, placeholder)?;
-        let escaped_schema = self.escape(&self.rdb_tb_meta.schema);
-        let escaped_tb = self.escape(&self.rdb_tb_meta.tb);
+        let table = self.table_name();
         let mut sql = format!(
-            "UPDATE {}.{} SET {} WHERE {}",
-            escaped_schema,
-            escaped_tb,
+            "UPDATE {} SET {} WHERE {}",
+            table,
             set_pairs.join(","),
             where_sql,
         );
@@ -715,8 +702,8 @@ impl RdbQueryBuilder<'_> {
             if self.db_type == DbType::Pg {
                 sql = format!(
                     "UPDATE {schema}.{tb} SET {set_sql} WHERE ctid IN (SELECT ctid FROM {schema}.{tb} WHERE {where_sql} LIMIT 1)",
-                    schema = escaped_schema,
-                    tb = escaped_tb,
+                    schema = self.escape(&self.rdb_tb_meta.schema),
+                    tb = self.escape(&self.rdb_tb_meta.tb),
                     set_sql = set_pairs.join(","),
                     where_sql = where_sql,
                 );
@@ -803,10 +790,9 @@ impl RdbQueryBuilder<'_> {
         };
         let (where_sql, not_null_cols) = self.get_where_info(1, id_values, true)?;
         let mut sql = format!(
-            "SELECT {} FROM {}.{} WHERE {}",
+            "SELECT {} FROM {} WHERE {}",
             self.build_extract_cols_str()?,
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb),
+            self.table_name(),
             where_sql,
         );
 
@@ -831,10 +817,9 @@ impl RdbQueryBuilder<'_> {
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
         let where_sql = self.get_where_in_info(batch_size)?;
         let sql = format!(
-            "SELECT {} FROM {}.{} WHERE {}",
+            "SELECT {} FROM {} WHERE {}",
             self.build_extract_cols_str()?,
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb),
+            self.table_name(),
             where_sql,
         );
 
@@ -1106,6 +1091,15 @@ impl RdbQueryBuilder<'_> {
         SqlUtil::escape_by_db_type(origin, &self.db_type)
     }
 
+    fn table_name(&self) -> String {
+        SqlUtil::render_rdb_table(
+            &self.db_type,
+            &self.rdb_tb_meta.db,
+            &self.rdb_tb_meta.schema,
+            &self.rdb_tb_meta.tb,
+        )
+    }
+
     fn escape_cols(&self, cols: &Vec<String>) -> Vec<String> {
         SqlUtil::escape_cols(cols, &self.db_type)
     }
@@ -1190,6 +1184,7 @@ mod tests {
 
         MysqlTbMeta {
             basic: RdbTbMeta {
+                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
@@ -1218,6 +1213,7 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
+                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
@@ -1269,6 +1265,7 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
+                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
@@ -1300,6 +1297,7 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
+                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
@@ -1323,6 +1321,7 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
+                db: String::new(),
                 schema: "public".to_string(),
                 tb: "bit_t1".to_string(),
                 cols: vec!["bits".to_string()],
@@ -1348,6 +1347,7 @@ mod tests {
 
         if is_not_origin {
             RowData::new_no_origin(
+                String::new(),
                 "public".to_string(),
                 "t1".to_string(),
                 0,
@@ -1357,6 +1357,7 @@ mod tests {
             )
         } else {
             RowData::new(
+                String::new(),
                 "public".to_string(),
                 "t1".to_string(),
                 0,
@@ -1375,6 +1376,7 @@ mod tests {
         );
 
         RowData::new_no_origin(
+            String::new(),
             "public".to_string(),
             "bit_t1".to_string(),
             0,
@@ -1396,6 +1398,7 @@ mod tests {
         after.insert("name".to_string(), ColValue::String("n2".to_string()));
 
         RowData::new(
+            String::new(),
             "public".to_string(),
             "t1".to_string(),
             0,
@@ -1420,6 +1423,7 @@ mod tests {
         after.insert("name".to_string(), ColValue::String("n2".to_string()));
 
         RowData::new(
+            String::new(),
             "public".to_string(),
             "t1".to_string(),
             0,
@@ -1441,6 +1445,7 @@ mod tests {
         after.insert("name".to_string(), ColValue::UnchangedToast);
 
         RowData::new(
+            String::new(),
             "public".to_string(),
             "t1".to_string(),
             0,
@@ -1462,6 +1467,7 @@ mod tests {
         after.insert("name".to_string(), ColValue::String("n2".to_string()));
 
         RowData::new(
+            String::new(),
             "public".to_string(),
             "t1".to_string(),
             0,
@@ -1478,6 +1484,7 @@ mod tests {
         before.insert("name".to_string(), ColValue::String("n1".to_string()));
 
         RowData::new(
+            String::new(),
             "public".to_string(),
             "t1".to_string(),
             0,
@@ -1622,6 +1629,23 @@ mod tests {
         assert_eq!(query_info.cols, tb_meta.basic.cols);
         assert_eq!(query_info.binds.len(), 6);
         let _ = builder.create_mssql_query(&query_info).unwrap();
+    }
+
+    #[test]
+    fn test_mssql_batch_insert_uses_three_part_table_name() {
+        let mut tb_meta = build_mssql_tb_meta();
+        tb_meta.basic.db = "target]db".to_string();
+        let data = vec![build_insert_row_data(false)];
+        let builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
+
+        let (query_info, _) = builder
+            .get_batch_insert_query(&data, 0, data.len(), false)
+            .unwrap();
+
+        assert_eq!(
+            query_info.sql,
+            "INSERT INTO [target]]db].[dbo].[t1]([id],[code],[name]) VALUES(@P1,@P2,@P3)"
+        );
     }
 
     #[test]

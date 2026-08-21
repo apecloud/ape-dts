@@ -107,6 +107,7 @@ mod tests {
 
     fn row(id: i32) -> RowData {
         RowData::new(
+            String::new(),
             "s1".to_string(),
             "t1".to_string(),
             0,

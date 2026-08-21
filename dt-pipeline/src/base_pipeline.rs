@@ -578,9 +578,9 @@ impl BasePipeline {
         position: &Position,
         pending_snapshot_finished: &mut HashMap<String, Position>,
     ) -> bool {
-        if let Position::RdbSnapshotFinished { schema, tb, .. } = position {
+        if let Position::RdbSnapshotFinished { db, schema, tb, .. } = position {
             pending_snapshot_finished.insert(
-                TaskMonitorHandle::task_id_from_schema_tb(schema, tb),
+                TaskMonitorHandle::task_id_from_db_schema_tb(db, schema, tb),
                 position.clone(),
             );
             true

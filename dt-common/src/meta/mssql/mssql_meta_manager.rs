@@ -17,22 +17,34 @@ use crate::{
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
     },
+    utils::sql_util::SqlUtil,
 };
+
+const DATABASES_SQL: &str = r#"
+SELECT name AS database_name
+FROM sys.databases
+WHERE state_desc = 'ONLINE'
+  AND HAS_DBACCESS(name) = 1
+ORDER BY name
+"#;
 
 const TABLE_COLUMNS_SQL: &str = r#"
 SELECT
     c.name AS column_name,
     user_type.name AS user_type_name,
-    COALESCE(TYPE_NAME(c.system_type_id), user_type.name) AS system_type_name,
+    COALESCE(system_type.name, user_type.name) AS system_type_name,
     c.max_length,
     c.is_nullable,
     c.is_identity,
     c.is_computed,
     c.generated_always_type
-FROM sys.tables AS t
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.columns AS c ON c.object_id = t.object_id
-JOIN sys.types AS user_type ON user_type.user_type_id = c.user_type_id
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.columns AS c ON c.object_id = t.object_id
+JOIN {catalog}sys.types AS user_type ON user_type.user_type_id = c.user_type_id
+LEFT JOIN {catalog}sys.types AS system_type
+  ON system_type.system_type_id = c.system_type_id
+ AND system_type.user_type_id = system_type.system_type_id
 WHERE s.name = @P1
   AND t.name = @P2
   AND t.is_ms_shipped = 0
@@ -44,13 +56,13 @@ SELECT
     i.name AS index_name,
     i.is_primary_key,
     c.name AS column_name
-FROM sys.tables AS t
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-JOIN sys.indexes AS i ON i.object_id = t.object_id
-JOIN sys.index_columns AS ic
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN {catalog}sys.indexes AS i ON i.object_id = t.object_id
+JOIN {catalog}sys.index_columns AS ic
   ON ic.object_id = i.object_id
  AND ic.index_id = i.index_id
-JOIN sys.columns AS c
+JOIN {catalog}sys.columns AS c
   ON c.object_id = ic.object_id
  AND c.column_id = ic.column_id
 WHERE s.name = @P1
@@ -67,19 +79,27 @@ ORDER BY i.index_id, ic.key_ordinal
 
 const SCHEMAS_SQL: &str = r#"
 SELECT DISTINCT s.name AS schema_name
-FROM sys.schemas AS s
-JOIN sys.tables AS t ON t.schema_id = s.schema_id
+FROM {catalog}sys.schemas AS s
+JOIN {catalog}sys.tables AS t ON t.schema_id = s.schema_id
 WHERE t.is_ms_shipped = 0
 ORDER BY s.name
 "#;
 
 const TABLES_SQL: &str = r#"
 SELECT t.name AS table_name
-FROM sys.tables AS t
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
 WHERE s.name = @P1
   AND t.is_ms_shipped = 0
 ORDER BY t.name
+"#;
+
+const SCHEMA_TABLES_SQL: &str = r#"
+SELECT s.name AS schema_name, t.name AS table_name
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name, t.name
 "#;
 
 struct ParsedColumns {
@@ -96,7 +116,7 @@ struct ParsedColumns {
 #[derive(Clone)]
 pub struct MssqlMetaManager {
     pub connection_pool: MssqlConnectionPool,
-    cache: HashMap<(String, String), MssqlTbMeta>,
+    cache: HashMap<(String, String, String), MssqlTbMeta>,
 }
 
 impl MssqlMetaManager {
@@ -109,10 +129,11 @@ impl MssqlMetaManager {
 
     pub async fn get_tb_meta<'a>(
         &'a mut self,
+        db: &str,
         schema: &str,
         tb: &str,
     ) -> anyhow::Result<&'a MssqlTbMeta> {
-        let cache_key = (schema.to_string(), tb.to_string());
+        let cache_key = (db.to_string(), schema.to_string(), tb.to_string());
         if !self.cache.contains_key(&cache_key) {
             let ParsedColumns {
                 cols,
@@ -123,18 +144,19 @@ impl MssqlMetaManager {
                 computed_cols,
                 generated_always_type_map,
                 rowversion_cols,
-            } = self.parse_cols(schema, tb).await?;
+            } = self.parse_cols(db, schema, tb).await?;
             if cols.is_empty() {
-                return Err(Self::table_not_found(schema, tb));
+                return Err(Self::table_not_found(db, schema, tb));
             }
 
-            let key_map = self.parse_keys(schema, tb).await?;
+            let key_map = self.parse_keys(db, schema, tb).await?;
             let (order_cols, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
             self.cache.insert(
                 cache_key.clone(),
                 MssqlTbMeta {
                     basic: RdbTbMeta {
+                        db: db.to_string(),
                         schema: schema.to_string(),
                         tb: tb.to_string(),
                         cols,
@@ -158,21 +180,42 @@ impl MssqlMetaManager {
 
         self.cache
             .get(&cache_key)
-            .ok_or_else(|| Self::table_not_found(schema, tb))
+            .ok_or_else(|| Self::table_not_found(db, schema, tb))
     }
 
     pub async fn get_tb_meta_by_row_data<'a>(
         &'a mut self,
         row_data: &RowData,
     ) -> anyhow::Result<&'a MssqlTbMeta> {
-        self.get_tb_meta(&row_data.schema, &row_data.tb).await
+        self.get_tb_meta(&row_data.db, &row_data.schema, &row_data.tb)
+            .await
     }
 
-    pub async fn list_schemas(&self) -> anyhow::Result<Vec<String>> {
+    pub async fn list_databases(&self) -> anyhow::Result<Vec<String>> {
         let mut connection = self.connection_pool.get().await?;
         let rows = connection
             .client_mut()
-            .query(SCHEMAS_SQL, &[])
+            .query(DATABASES_SQL, &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+
+        rows.iter()
+            .map(|row| {
+                MssqlColValueConvertor::from_query_required_string(row, "database_name")
+                    .code(ErrorCode::MetadataReadFailed)
+            })
+            .collect()
+    }
+
+    pub async fn list_schemas(&self, db: &str) -> anyhow::Result<Vec<String>> {
+        let sql = Self::catalog_sql(SCHEMAS_SQL, db);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&sql, &[])
             .await
             .code(ErrorCode::MetadataReadFailed)?
             .into_first_result()
@@ -187,8 +230,8 @@ impl MssqlMetaManager {
             .collect()
     }
 
-    pub async fn list_tables(&self, schema: &str) -> anyhow::Result<Vec<String>> {
-        let mut query = Query::new(TABLES_SQL);
+    pub async fn list_tables(&self, db: &str, schema: &str) -> anyhow::Result<Vec<String>> {
+        let mut query = Query::new(Self::catalog_sql(TABLES_SQL, db));
         query.bind(schema);
         let mut connection = self.connection_pool.get().await?;
         let rows = query
@@ -207,34 +250,60 @@ impl MssqlMetaManager {
             .collect()
     }
 
-    pub fn invalidate_cache(&mut self, schema: &str, tb: &str) {
-        if schema.is_empty() {
+    pub async fn list_schema_tables(&self, db: &str) -> anyhow::Result<Vec<(String, String)>> {
+        let sql = Self::catalog_sql(SCHEMA_TABLES_SQL, db);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&sql, &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+
+        rows.iter()
+            .map(|row| {
+                Ok((
+                    MssqlColValueConvertor::from_query_required_string(row, "schema_name")?,
+                    MssqlColValueConvertor::from_query_required_string(row, "table_name")?,
+                ))
+            })
+            .collect()
+    }
+
+    pub fn invalidate_cache(&mut self, db: &str, schema: &str, tb: &str) {
+        if db.is_empty() && schema.is_empty() {
             self.cache.clear();
+        } else if schema.is_empty() {
+            self.cache.retain(|(cached_db, _, _), _| cached_db != db);
         } else if tb.is_empty() {
-            self.cache
-                .retain(|(cached_schema, _), _| cached_schema != schema);
+            self.cache.retain(|(cached_db, cached_schema, _), _| {
+                cached_db != db || cached_schema != schema
+            });
         } else {
-            self.cache.remove(&(schema.to_string(), tb.to_string()));
+            self.cache
+                .remove(&(db.to_string(), schema.to_string(), tb.to_string()));
         }
     }
 
-    pub fn invalidate_cache_for_table(&mut self, schema: &str, tb: &str) {
+    pub fn invalidate_cache_for_table(&mut self, db: &str, schema: &str, tb: &str) {
         if !schema.is_empty() && !tb.is_empty() {
-            self.invalidate_cache(schema, tb);
+            self.invalidate_cache(db, schema, tb);
         }
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
-        let (schema, tb) = ddl_data.get_schema_tb();
-        self.invalidate_cache(&schema, &tb);
+        let (db, schema, tb) = ddl_data.get_db_schema_tb();
+        self.invalidate_cache(&db, &schema, &tb);
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {
         self.connection_pool.close().await
     }
 
-    async fn parse_cols(&self, schema: &str, tb: &str) -> anyhow::Result<ParsedColumns> {
-        let mut query = Query::new(TABLE_COLUMNS_SQL);
+    async fn parse_cols(&self, db: &str, schema: &str, tb: &str) -> anyhow::Result<ParsedColumns> {
+        let mut query = Query::new(Self::catalog_sql(TABLE_COLUMNS_SQL, db));
         query.bind(schema);
         query.bind(tb);
         let mut connection = self.connection_pool.get().await?;
@@ -330,10 +399,11 @@ impl MssqlMetaManager {
 
     async fn parse_keys(
         &self,
+        db: &str,
         schema: &str,
         tb: &str,
     ) -> anyhow::Result<HashMap<String, Vec<String>>> {
-        let mut query = Query::new(TABLE_KEYS_SQL);
+        let mut query = Query::new(Self::catalog_sql(TABLE_KEYS_SQL, db));
         query.bind(schema);
         query.bind(tb);
         let mut connection = self.connection_pool.get().await?;
@@ -366,10 +436,24 @@ impl MssqlMetaManager {
         Ok(key_map)
     }
 
-    fn table_not_found(schema: &str, tb: &str) -> anyhow::Error {
+    fn catalog_sql(template: &str, db: &str) -> String {
+        let catalog = if db.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", SqlUtil::escape_by_db_type(db, &DbType::Mssql))
+        };
+        template.replace("{catalog}", &catalog)
+    }
+
+    fn table_not_found(db: &str, schema: &str, tb: &str) -> anyhow::Error {
+        let table_name = if db.is_empty() {
+            format!("{schema}.{tb}")
+        } else {
+            format!("{db}.{schema}.{tb}")
+        };
         DtError::DatabaseObjectNotFound(
             DbType::Mssql,
-            format!("source table {schema}.{tb} was not found or is not readable"),
+            format!("source table {table_name} was not found or is not readable"),
         )
         .message("The MSSQL source table definition could not be loaded")
         .hint("Verify that the table exists and that the source account can read its metadata.")

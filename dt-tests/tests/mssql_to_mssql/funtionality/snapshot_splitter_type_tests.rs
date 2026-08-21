@@ -16,6 +16,7 @@ mod test {
     use super::super::TASK_CONFIG_FILE;
     use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
 
+    const TEST_DATABASE: &str = "ape_dts";
     const TEST_SCHEMA: &str = "ape_dts_snapshot_splitter_type_test";
     const ALL_TYPES_TABLE: &str = "all_types";
     const TIMESTAMP_TABLE: &str = "timestamp_type";
@@ -261,7 +262,7 @@ mod test {
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
             MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Extractor)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DATABASE).await?;
         endpoint.create_pool().await
     }
 
@@ -269,8 +270,9 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TIMESTAMP_TABLE}];
-                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{ALL_TYPES_TABLE}];
+                "USE [{TEST_DATABASE}];
+                 DROP TABLE IF EXISTS [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TIMESTAMP_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_DATABASE}].[{TEST_SCHEMA}].[{ALL_TYPES_TABLE}];
                  IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
                     EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
             ),
@@ -312,8 +314,8 @@ mod test {
             .collect::<Vec<_>>();
 
         format!(
-            "CREATE TABLE [{TEST_SCHEMA}].[{table}] ({}); \
-             INSERT INTO [{TEST_SCHEMA}].[{table}] ({}) \
+            "CREATE TABLE [{TEST_DATABASE}].[{TEST_SCHEMA}].[{table}] ({}); \
+             INSERT INTO [{TEST_DATABASE}].[{TEST_SCHEMA}].[{table}] ({}) \
              SELECT {} FROM (VALUES {}) AS values_to_insert(value_id);",
             definitions.join(", "),
             insert_cols.join(", "),
@@ -328,7 +330,8 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
+                "USE [{TEST_DATABASE}];
+                 EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
                  {all_types_sql}
                  {timestamp_sql}"
             ),
@@ -343,7 +346,8 @@ mod test {
     ) -> anyhow::Result<Vec<ColValue>> {
         let col_type = tb_meta.get_col_type(case.col)?;
         let sql = format!(
-            "SELECT [{0}] AS [split_value] FROM [{TEST_SCHEMA}].[{1}] \
+            "SELECT [{0}] AS [split_value] \
+             FROM [{TEST_DATABASE}].[{TEST_SCHEMA}].[{1}] \
              WHERE [{0}] IS NOT NULL ORDER BY [{0}] ASC",
             case.col, case.table,
         );
@@ -492,11 +496,11 @@ mod test {
         let result = async {
             let mut meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
             let all_types_meta = meta_manager
-                .get_tb_meta(TEST_SCHEMA, ALL_TYPES_TABLE)
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, ALL_TYPES_TABLE)
                 .await?
                 .clone();
             let timestamp_meta = meta_manager
-                .get_tb_meta(TEST_SCHEMA, TIMESTAMP_TABLE)
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, TIMESTAMP_TABLE)
                 .await?
                 .clone();
 

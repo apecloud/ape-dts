@@ -49,7 +49,7 @@ pub struct MysqlSnapshotExtractor {
     pub shared: MysqlSnapshotShared,
     pub extract_state: ExtractState,
     pub parallel_size: usize,
-    pub db_tbs: HashMap<String, Vec<String>>,
+    pub tbs: Vec<(String, String, String)>,
 }
 
 #[derive(Clone)]
@@ -58,7 +58,7 @@ pub struct MysqlSnapshotShared {
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
     pub filter: Arc<RdbFilter>,
-    pub partition_cols: Arc<HashMap<(String, String), String>>,
+    pub partition_cols: Arc<HashMap<(String, String, String), String>>,
     pub batch_size: usize,
     pub parallel_type: RdbParallelType,
     pub sample_rate: Option<u8>,
@@ -158,16 +158,14 @@ impl Extractor for MysqlSnapshotExtractor {
 
 impl MysqlSnapshotExtractor {
     fn collect_tables(&self) -> Vec<SnapshotTableId> {
-        let mut tables = Vec::new();
-        for (db, tbs) in &self.db_tbs {
-            for tb in tbs {
-                tables.push(SnapshotTableId {
-                    schema: db.clone(),
-                    tb: tb.clone(),
-                });
-            }
-        }
-        tables
+        self.tbs
+            .iter()
+            .map(|(db, schema, tb)| SnapshotTableId {
+                db: db.clone(),
+                schema: schema.clone(),
+                tb: tb.clone(),
+            })
+            .collect()
     }
 
     async fn next_work(
@@ -526,6 +524,7 @@ impl MysqlSnapshotDispatchState {
                 &mut active_table.extract_state,
                 Position::RdbSnapshotFinished {
                     db_type: DbType::Mysql.to_string(),
+                    db: table_id.db.clone(),
                     schema: schema.clone(),
                     tb: tb.clone(),
                 },
@@ -541,7 +540,11 @@ impl MysqlSnapshotDispatchState {
         let user_defined_partition_col = self
             .shared
             .partition_cols
-            .get(&(table_id.schema.clone(), table_id.tb.clone()))
+            .get(&(
+                table_id.db.clone(),
+                table_id.schema.clone(),
+                table_id.tb.clone(),
+            ))
             .cloned()
             .unwrap_or_default();
         let mut table_ctx = MysqlTableCtx {
@@ -552,6 +555,7 @@ impl MysqlSnapshotDispatchState {
         };
         let (extract_state, monitor_guard) = SnapshotDispatcher::fork_table_extract_state(
             &self.root_extract_state,
+            &table_id.db,
             &table_id.schema,
             &table_id.tb,
         )
@@ -852,7 +856,12 @@ impl MysqlTableCtx {
                 order_key: Some(order_key),
                 ..
             }) = handler
-                .get_snapshot_resume_position(&self.table_id.schema, &self.table_id.tb, check_point)
+                .get_snapshot_resume_position(
+                    &self.table_id.db,
+                    &self.table_id.schema,
+                    &self.table_id.tb,
+                    check_point,
+                )
                 .await
             {
                 if schema != self.table_id.schema || tb != self.table_id.tb {

@@ -6,3 +6,5 @@ pub mod mssql_tb_meta;
 pub mod mssql_transaction;
 
 pub use mssql_transaction::MssqlTransaction;
+
+pub const MSSQL_DEFAULT_SCHEMA: &str = "dbo";

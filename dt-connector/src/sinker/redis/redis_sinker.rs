@@ -226,7 +226,7 @@ impl RedisSinker {
         };
 
         let tb_meta = meta_manager
-            .get_tb_meta(&row_data.schema, &row_data.tb)
+            .get_tb_meta(&row_data.db, &row_data.schema, &row_data.tb)
             .await?;
 
         // no single primary / unique key exists, do not sink to redis

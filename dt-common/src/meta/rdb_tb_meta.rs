@@ -9,6 +9,10 @@ use crate::{
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RdbTbMeta {
+    /// Physical database. Empty until database-aware metadata lookup is enabled.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub db: String,
+    /// Existing first-level namespace. MySQL still stores database here for compatibility.
     pub schema: String,
     pub tb: String,
     pub cols: Vec<String>,
@@ -62,6 +66,7 @@ impl RdbTbMeta {
         };
         Position::RdbSnapshot {
             db_type: db_type.to_string(),
+            db: self.db.clone(),
             schema: self.schema.clone(),
             tb: self.tb.clone(),
             order_key,
@@ -81,6 +86,7 @@ impl RdbTbMeta {
         }
         Position::RdbSnapshot {
             db_type: db_type.to_string(),
+            db: self.db.clone(),
             schema: self.schema.clone(),
             tb: self.tb.clone(),
             order_key: Some(OrderKey::Single((

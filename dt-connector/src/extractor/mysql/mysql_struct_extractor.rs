@@ -79,7 +79,9 @@ impl MysqlStructExtractor {
 
     pub async fn push_dt_data(&mut self, statement: StructStatement) -> anyhow::Result<()> {
         let struct_data = StructData {
+            db: String::new(),
             schema: "".to_string(),
+            tb: String::new(),
             statement,
         };
         self.base_extractor

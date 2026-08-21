@@ -15,8 +15,9 @@ mod test {
     use super::super::TASK_CONFIG_FILE;
     use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
 
-    const SOURCE_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_source]";
-    const DESTINATION_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_destination]";
+    const TEST_DATABASE: &str = "ape_dts";
+    const SOURCE_TABLE: &str = "[ape_dts].[dbo].[ape_dts_col_value_conversion_source]";
+    const DESTINATION_TABLE: &str = "[ape_dts].[dbo].[ape_dts_col_value_conversion_destination]";
     const ROW_COUNT: usize = 4;
 
     struct ColumnCase {
@@ -404,7 +405,7 @@ mod test {
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
             MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Extractor)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DATABASE).await?;
         endpoint.create_pool_with(1, 15).await
     }
 

@@ -14,13 +14,19 @@ impl BasicPrechecker {
                 return true;
             }
         }
-        for (schema, table) in filter.do_tbs.iter() {
-            if RdbFilter::is_pattern(schema, &db_type) || RdbFilter::is_pattern(table, &db_type) {
+        for (db, schema, table) in filter.do_tbs.iter() {
+            if RdbFilter::is_pattern(db, &db_type)
+                || RdbFilter::is_pattern(schema, &db_type)
+                || RdbFilter::is_pattern(table, &db_type)
+            {
                 return true;
             }
         }
-        for (schema, table) in filter.ignore_tbs.iter() {
-            if RdbFilter::is_pattern(schema, &db_type) || RdbFilter::is_pattern(table, &db_type) {
+        for (db, schema, table) in filter.ignore_tbs.iter() {
+            if RdbFilter::is_pattern(db, &db_type)
+                || RdbFilter::is_pattern(schema, &db_type)
+                || RdbFilter::is_pattern(table, &db_type)
+            {
                 return true;
             }
         }

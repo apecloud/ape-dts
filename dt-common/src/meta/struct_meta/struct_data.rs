@@ -5,7 +5,11 @@ use super::statement::struct_statement::StructStatement;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructData {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub db: String,
     pub schema: String,
+    #[serde(default)]
+    pub tb: String,
     #[serde(skip)]
     pub statement: StructStatement,
 }

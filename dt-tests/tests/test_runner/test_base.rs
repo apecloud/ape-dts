@@ -12,8 +12,8 @@ use super::{
     rdb_kafka_rdb_test_runner::RdbKafkaRdbTestRunner, rdb_lua_test_runner::RdbLuaTestRunner,
     rdb_redis_test_runner::RdbRedisTestRunner, rdb_sql_test_runner::RdbSqlTestRunner,
     rdb_starrocks_test_runner::RdbStarRocksTestRunner, rdb_struct_test_runner::RdbStructTestRunner,
-    rdb_test_runner::RdbTestRunner, redis_statistic_runner::RedisStatisticTestRunner,
-    redis_test_runner::RedisTestRunner,
+    rdb_test_runner::RdbTestRunner, rdb_util::DbSchemaTb,
+    redis_statistic_runner::RedisStatisticTestRunner, redis_test_runner::RedisTestRunner,
 };
 use crate::test_runner::rdb_test_runner::DST;
 
@@ -35,7 +35,7 @@ impl TestBase {
         let runner = RdbTestRunner::new(test_dir).await.unwrap();
         runner.run_snapshot_test(false).await.unwrap();
 
-        let assert_dst_count = |db_tb: &(String, String), count: usize| {
+        let assert_dst_count = |db_tb: &DbSchemaTb, count: usize| {
             let dst_data = block_on(runner.fetch_data(db_tb, DST)).unwrap();
             println!(
                 "check dst table {:?} record count, expect: {}, actual: {}",
@@ -47,7 +47,7 @@ impl TestBase {
         };
 
         for (db_tb, count) in dst_expected_counts {
-            let db_tb = RdbTestRunner::parse_full_tb_name(db_tb, db_type);
+            let db_tb = RdbTestRunner::parse_full_tb_name(db_tb, db_type).unwrap();
             assert_dst_count(&db_tb, count);
         }
         runner.close().await.unwrap();
