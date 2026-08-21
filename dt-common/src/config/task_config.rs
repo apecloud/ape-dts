@@ -2101,7 +2101,7 @@ batch_size=0
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
-url=server=tcp:127.0.0.1,1433;database=ape_dts;User ID=url_user;Password=url_password;Encrypt=true
+url=sqlserver://url_user:url_password@127.0.0.1:1433?database=ape_dts&encrypt=true
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2115,7 +2115,7 @@ batch_size=16
 [sinker]
 db_type=mssql
 sink_type=write
-url=jdbc:sqlserver://127.0.0.1:1434;database=ape_dts;user=sa;password=Password123!;encrypt=DANGER_PLAINTEXT;ApplicationName=from-jdbc
+url=mssql://sa:Password123%21@127.0.0.1:1434?database=ape_dts&encrypt=disable&app+name=from-url
 max_connections=2
 connection_timeout_secs=9
 batch_size=8
@@ -2164,7 +2164,7 @@ parallel_size=2
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
-url=server=tcp:127.0.0.1,1433;database=ape_dts
+url=sqlserver://127.0.0.1:1433?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2172,7 +2172,7 @@ ssl_mode=disable
 [sinker]
 db_type=mssql
 sink_type=write
-url=server=tcp:127.0.0.1,1434;database=ape_dts
+url=mssql://127.0.0.1:1434?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2210,7 +2210,7 @@ ssl_mode=disable
 [sinker]
 db_type=mssql
 sink_type=write
-url=server=tcp:127.0.0.1,1434;database=ape_dts
+url=mssql://127.0.0.1:1434?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2232,7 +2232,7 @@ ssl_mode=disable
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
-url=server=tcp:127.0.0.1,1433;database=ape_dts
+url=sqlserver://127.0.0.1:1433?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
@@ -2241,7 +2241,7 @@ connection_timeout_secs=0
 [sinker]
 db_type=mssql
 sink_type=write
-url=server=tcp:127.0.0.1,1434;database=ape_dts
+url=mssql://127.0.0.1:1434?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable

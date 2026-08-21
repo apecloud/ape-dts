@@ -7,6 +7,7 @@ use tiberius::{AuthMethod, Client, Config};
 use tokio::net::TcpStream;
 use tokio_util::compat::Compat;
 
+use super::mssql_connection_url::MssqlConnectionUrl;
 use crate::{
     config::connection_auth_config::ConnectionAuthConfig,
     error::{DtError, DtResultExt},
@@ -119,15 +120,18 @@ impl MssqlConnectionPool {
             );
         }
 
-        // Keep ADO.NET as the primary format and only try JDBC after the ADO
-        // parser rejects the input.
-        let mut config = match Config::from_ado_string(connection_string) {
-            Ok(config) => config,
-            Err(_) => {
-                Config::from_jdbc_string(connection_string).dt_error(DtError::invalid_config(
-                    "MSSQL connection string must be a valid ADO.NET or JDBC string",
-                ))?
-            }
+        // URL parsing is selected by scheme. A malformed sqlserver:// or
+        // mssql:// URL must not silently fall back to an unrelated parser.
+        let mut config = match MssqlConnectionUrl::try_parse_to_config(connection_string)? {
+            Some(config) => config,
+            None => match Config::from_ado_string(connection_string) {
+                Ok(config) => config,
+                Err(_) => Config::from_jdbc_string(connection_string).dt_error(
+                    DtError::invalid_config(
+                        "MSSQL connection string must be a valid sqlserver/mssql URL, ADO.NET string, or JDBC string",
+                    ),
+                )?,
+            },
         };
 
         // Values supplied as dedicated task fields take precedence over the

@@ -20,6 +20,7 @@ mod test {
     use serial_test::serial;
     use tiberius::Row;
     use tokio::sync::Barrier;
+    use url::Url;
 
     use super::super::{JDBC_TASK_CONFIG_FILE, TASK_CONFIG_FILE};
     use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
@@ -328,13 +329,51 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn pool_accepts_ado_and_jdbc_strings_with_task_overrides() -> anyhow::Result<()> {
+    async fn pool_accepts_url_ado_and_jdbc_strings_with_task_overrides() -> anyhow::Result<()> {
         let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
         endpoint.ensure_database(TEST_DATABASE).await?;
         let auth = endpoint.connection_auth();
+
+        let mut url_only_connection_string = Url::parse(endpoint.connection_string())?;
+        url_only_connection_string
+            .set_username(endpoint.username()?)
+            .map_err(|_| anyhow::anyhow!("MSSQL test URL should accept a username"))?;
+        url_only_connection_string
+            .set_password(Some(endpoint.password()?))
+            .map_err(|_| anyhow::anyhow!("MSSQL test URL should accept a password"))?;
+        url_only_connection_string
+            .query_pairs_mut()
+            .append_pair("encrypt", "disable")
+            .append_pair("app name", "from-url-only");
+        let pool = MssqlConnectionPool::from_config(
+            url_only_connection_string.as_str(),
+            &ConnectionAuthConfig::NoAuth,
+            None,
+            1,
+            15,
+        )
+        .await?;
+        let mut connection = pool.get().await?;
+        assert_eq!(
+            query_string(&mut connection, "SELECT APP_NAME()").await?,
+            "from-url-only"
+        );
+        assert_eq!(
+            query_string(&mut connection, "SELECT DB_NAME()").await?,
+            TEST_DATABASE
+        );
+        drop(connection);
+        drop(pool);
+
+        let endpoint_url = Url::parse(endpoint.connection_string())?;
+        let host = endpoint_url
+            .host_str()
+            .context("MSSQL test URL should contain a host")?;
+        let port = endpoint_url.port().unwrap_or(1433);
+        let ado_base = format!("server=tcp:{host},{port};database={TEST_DATABASE}");
         let ado_only_connection_string = format!(
             "{};User ID={};Password={};Encrypt=DANGER_PLAINTEXT;Application Name=from-ado-only",
-            endpoint.connection_string(),
+            ado_base,
             endpoint.username()?,
             endpoint.password()?
         );
@@ -356,7 +395,7 @@ mod test {
 
         let ado_connection_string = format!(
             "{};User ID=invalid;Password=invalid;Encrypt=true;Application Name=from-ado",
-            endpoint.connection_string()
+            ado_base
         );
         let jdbc_endpoint = MssqlTestEndpoint::from_config_file(
             JDBC_TASK_CONFIG_FILE,
