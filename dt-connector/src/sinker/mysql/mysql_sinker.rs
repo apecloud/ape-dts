@@ -4,7 +4,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
-    MySql, Pool,
+    MySql, Pool, TcpKeepalive,
 };
 use tokio::{sync::RwLock, time::Instant};
 
@@ -85,7 +85,8 @@ impl Sinker for MysqlSinker {
                 self.url.as_str(),
                 &self.connection_auth,
             )?;
-            let mut conn_options = MySqlConnectOptions::from_str(final_url.as_str())?;
+            let mut conn_options = MySqlConnectOptions::from_str(final_url.as_str())?
+                .tcp_keepalive(TcpKeepalive::new());
             if !db.is_empty() {
                 match ddl_data.ddl_type {
                     DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {}
