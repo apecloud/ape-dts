@@ -91,11 +91,11 @@ impl SinkerUtil {
     }
 
     async fn require_extractor_meta_manager(config: &TaskConfig) -> anyhow::Result<RdbMetaManager> {
-        Ok(ExtractorUtil::get_extractor_meta_manager(config)
+        ExtractorUtil::get_extractor_meta_manager(config)
             .await?
             .or_dt_error(DtError::InvalidConfig(
                 "the selected sinker requires relational source metadata".to_string(),
-            ))?)
+            ))
     }
 
     fn push_checkable_sinker<S: CheckableSink + Send + 'static>(

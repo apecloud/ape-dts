@@ -452,11 +452,11 @@ impl MongoCdcExtractor {
     }
 
     fn oplog_document<'a>(value: Option<&'a Bson>, field: &str) -> anyhow::Result<&'a Document> {
-        Ok(value
+        value
             .and_then(Bson::as_document)
             .or_dt_error(DtError::mongo_statement(format!(
                 "oplog field {field} is missing or is not a document"
-            )))?)
+            )))
     }
 
     // Event example:

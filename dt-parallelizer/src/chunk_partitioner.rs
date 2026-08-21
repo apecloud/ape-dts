@@ -13,6 +13,8 @@ use dt_common::{
 
 pub struct ChunkPartitioner {}
 
+type RawPartitionKey = Option<(String, String, String, u64)>;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ChunkKey<'a> {
     pub db: &'a str,
@@ -730,8 +732,7 @@ impl ChunkPartitioner {
     }
 
     pub fn partition_raw(data: Vec<DtItem>) -> anyhow::Result<Vec<Vec<DtItem>>> {
-        let mut sub_data_map: HashMap<Option<(String, String, String, u64)>, Vec<DtItem>> =
-            HashMap::new();
+        let mut sub_data_map: HashMap<RawPartitionKey, Vec<DtItem>> = HashMap::new();
         let default_key = None;
         for item in data {
             if let DtData::Dml { row_data } = &item.dt_data {

@@ -13,6 +13,15 @@ use super::{
 use crate::checker::check_log::{CheckLog, CheckSummaryLog, CheckTableSummaryLog};
 use crate::checker::state_store::{CheckerCheckpointCommit, CheckerStateRow};
 
+type CheckTableKey = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 #[derive(Serialize)]
 struct IdentityJsonPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,17 +94,7 @@ impl<C: Checker> DataChecker<C> {
         let mut total_miss = 0usize;
         let mut total_diff = 0usize;
         let mut total_sql = 0usize;
-        let mut tables: HashMap<
-            (
-                String,
-                String,
-                String,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            ),
-            CheckTableSummaryLog,
-        > = HashMap::new();
+        let mut tables: HashMap<CheckTableKey, CheckTableSummaryLog> = HashMap::new();
         for table in &self.ctx.summary.tables {
             let mut table = table.clone();
             table.miss_count = 0;
