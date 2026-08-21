@@ -41,7 +41,7 @@ use opendal::Operator;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
-    ConnectOptions, Executor, MySql, Pool, Postgres, Row,
+    ConnectOptions, Executor, MySql, Pool, Postgres, Row, TcpKeepalive,
 };
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -92,6 +92,7 @@ impl TaskUtil {
         let mut conn_options = MySqlConnectOptions::from_str(&final_url)?;
         // The default character set is `utf8mb4`
         conn_options = conn_options
+            .tcp_keepalive(TcpKeepalive::new())
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
@@ -177,7 +178,12 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut conn_options = PgConnectOptions::from_str(&final_url)?;
+        let tcp_keepalive = conn_options
+            .get_tcp_keepalive()
+            .copied()
+            .unwrap_or_default();
         conn_options = conn_options
+            .tcp_keepalive(tcp_keepalive)
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1));
 
