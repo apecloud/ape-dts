@@ -1,9 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context};
-use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Postgres};
-use tiberius::Query as MssqlQuery;
-
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, ErrorObject},
@@ -24,6 +21,8 @@ use dt_common::{
     },
     utils::sql_util::SqlUtil,
 };
+use sqlx::{mysql::MySqlArguments, postgres::PgArguments, query::Query, MySql, Postgres};
+use tiberius::Query as MssqlQuery;
 
 pub struct RdbQueryInfo<'a> {
     pub sql: String,

@@ -1,5 +1,12 @@
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use dt_common::{
+    config::{config_enums::DbType, resumer_config::ResumerConfig},
+    error::DtError,
+    log_info,
+    meta::position::Position,
+    utils::{redis_util::RedisUtil, sql_util::SqlUtil},
+};
 use mongodb::{
     bson::{doc, DateTime},
     options::IndexOptions,
@@ -12,13 +19,6 @@ use crate::extractor::resumer::{
     recorder::Recorder,
     utils::{RedisResumerRecord, ResumerUtil},
     ResumerDbPool, ResumerType,
-};
-use dt_common::{
-    config::{config_enums::DbType, resumer_config::ResumerConfig},
-    error::DtError,
-    log_info,
-    meta::position::Position,
-    utils::{redis_util::RedisUtil, sql_util::SqlUtil},
 };
 
 pub struct DatabaseRecorder {

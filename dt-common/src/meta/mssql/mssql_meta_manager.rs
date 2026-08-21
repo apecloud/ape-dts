@@ -2,6 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use tiberius::Query;
 
+use super::{
+    mssql_col_type::{parse_mssql_col_type_with_length, MssqlColType},
+    mssql_connection_pool::MssqlConnectionPool,
+    mssql_tb_meta::MssqlTbMeta,
+};
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, DtResultExt, ErrorCode, ErrorObject},
@@ -12,12 +17,6 @@ use crate::{
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
     },
-};
-
-use super::{
-    mssql_col_type::{parse_mssql_col_type_with_length, MssqlColType},
-    mssql_connection_pool::MssqlConnectionPool,
-    mssql_tb_meta::MssqlTbMeta,
 };
 
 const TABLE_COLUMNS_SQL: &str = r#"

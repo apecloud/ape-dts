@@ -3,16 +3,6 @@ use std::str::FromStr;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures::TryStreamExt;
-use mongodb::bson::doc;
-use sqlx::{query, Error as SqlxError, Row};
-use tiberius::Query;
-
-use crate::extractor::resumer::{
-    recovery::Recovery,
-    utils::{RedisResumerRecord, ResumerUtil},
-    ResumerDbPool, ResumerType,
-};
 use dt_common::{
     config::config_enums::DbType,
     config::resumer_config::ResumerConfig,
@@ -23,6 +13,16 @@ use dt_common::{
     log_info, log_warn,
     meta::{adaptor::mssql_col_value_convertor::MssqlColValueConvertor, position::Position},
     utils::{redis_util::RedisUtil, sql_util::SqlUtil},
+};
+use futures::TryStreamExt;
+use mongodb::bson::doc;
+use sqlx::{query, Error as SqlxError, Row};
+use tiberius::Query;
+
+use crate::extractor::resumer::{
+    recovery::Recovery,
+    utils::{RedisResumerRecord, ResumerUtil},
+    ResumerDbPool, ResumerType,
 };
 
 pub struct DatabaseRecovery {

@@ -4,7 +4,6 @@ use dt_common::{
     config::config_enums::DbType,
     utils::sql_util::{CharEscapePair, InnerEscapeMode},
 };
-
 use futures::executor::block_on;
 
 use super::{

@@ -1,11 +1,10 @@
 use anyhow::bail;
 
+use super::config_enums::DbType;
 use crate::{
     error::DtError,
     utils::sql_util::{CharEscapePair, InnerEscapeMode, SqlUtil},
 };
-
-use super::config_enums::DbType;
 
 #[derive(Debug, Clone)]
 pub enum TokenEscapePair {

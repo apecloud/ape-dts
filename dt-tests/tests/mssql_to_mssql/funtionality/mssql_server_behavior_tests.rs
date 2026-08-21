@@ -5,9 +5,8 @@ mod test {
     use serial_test::serial;
     use tiberius::Query;
 
-    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
-
     use super::super::TASK_CONFIG_FILE;
+    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
 
     const NON_IDENTITY_TABLE: &str = "[dbo].[ape_dts_non_identity_behavior_test]";
     const PARAMETER_LIMIT_TABLE: &str = "[dbo].[ape_dts_parameter_limit_behavior_test]";

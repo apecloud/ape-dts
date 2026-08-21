@@ -3,13 +3,12 @@ use std::collections::{HashMap, HashSet};
 use serde::{ser::SerializeMap, Serialize, Serializer};
 use serde_json::json;
 
+use super::mssql_col_type::MssqlColType;
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, ErrorObject},
     meta::rdb_tb_meta::RdbTbMeta,
 };
-
-use super::mssql_col_type::MssqlColType;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MssqlTbMeta {

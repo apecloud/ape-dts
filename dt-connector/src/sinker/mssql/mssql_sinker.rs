@@ -1,9 +1,5 @@
 use std::{cmp, time::Instant};
 
-use crate::{
-    rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
-    Sinker,
-};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use dt_common::{
@@ -20,6 +16,11 @@ use dt_common::{
         row_type::RowType,
     },
     utils::limit_queue::LimitedQueue,
+};
+
+use crate::{
+    rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
+    Sinker,
 };
 
 #[derive(Clone)]

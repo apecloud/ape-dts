@@ -21,9 +21,8 @@ mod test {
     use tiberius::Row;
     use tokio::sync::Barrier;
 
-    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
-
     use super::super::{JDBC_TASK_CONFIG_FILE, TASK_CONFIG_FILE};
+    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
 
     const CROSS_TASK_TABLE: &str = "[dbo].[ape_dts_pool_cross_task_test]";
     const TRANSACTION_TABLE: &str = "[dbo].[ape_dts_pool_transaction_test]";

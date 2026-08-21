@@ -12,9 +12,8 @@ mod test {
     use serial_test::serial;
     use tiberius::Query;
 
-    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
-
     use super::super::TASK_CONFIG_FILE;
+    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
 
     const SOURCE_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_source]";
     const DESTINATION_TABLE: &str = "[dbo].[ape_dts_col_value_conversion_destination]";

@@ -13,9 +13,8 @@ mod test {
     };
     use serial_test::serial;
 
-    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
-
     use super::super::TASK_CONFIG_FILE;
+    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
 
     const TEST_SCHEMA: &str = "ape_dts_resumer_test";
     const TEST_TABLE: &str = "positions";

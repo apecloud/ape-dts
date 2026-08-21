@@ -29,19 +29,17 @@ use serde::de::DeserializeOwned;
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::{sync::Semaphore, task::JoinHandle};
 
-use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
-use crate::{
-    test_config_util::TestConfigUtil,
-    test_runner::mock_data::{
-        context::MockDbContext, mysql_type::MysqlType, pg_type::PgType, MockData,
-    },
-};
-
 use super::{
     base_test_runner::{BaseTestRunner, SqlLoadStrategy},
     mssql_ddl_scanner,
     mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint},
     rdb_util::RdbUtil,
+};
+use crate::{
+    test_config_util::TestConfigUtil,
+    test_runner::mock_data::{
+        context::MockDbContext, mysql_type::MysqlType, pg_type::PgType, MockData,
+    },
 };
 
 #[derive(Clone)]
