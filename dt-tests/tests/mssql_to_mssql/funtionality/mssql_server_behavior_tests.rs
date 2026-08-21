@@ -9,11 +9,12 @@ mod test {
 
     use super::super::TASK_CONFIG_FILE;
 
-    const NON_IDENTITY_TABLE: &str = "[dbo].[ape_dts_non_identity_behavior_test]";
-    const PARAMETER_LIMIT_TABLE: &str = "[dbo].[ape_dts_parameter_limit_behavior_test]";
-    const IDENTITY_ROLLBACK_TABLE_1: &str = "[dbo].[ape_dts_identity_rollback_test_1]";
-    const IDENTITY_ROLLBACK_TABLE_2: &str = "[dbo].[ape_dts_identity_rollback_test_2]";
-    const NATIVE_TYPE_TABLE: &str = "[dbo].[ape_dts_native_type_behavior_test]";
+    const TEST_DATABASE: &str = "ape_dts";
+    const NON_IDENTITY_TABLE: &str = "[ape_dts].[dbo].[ape_dts_non_identity_behavior_test]";
+    const PARAMETER_LIMIT_TABLE: &str = "[ape_dts].[dbo].[ape_dts_parameter_limit_behavior_test]";
+    const IDENTITY_ROLLBACK_TABLE_1: &str = "[ape_dts].[dbo].[ape_dts_identity_rollback_test_1]";
+    const IDENTITY_ROLLBACK_TABLE_2: &str = "[ape_dts].[dbo].[ape_dts_identity_rollback_test_2]";
+    const NATIVE_TYPE_TABLE: &str = "[ape_dts].[dbo].[ape_dts_native_type_behavior_test]";
 
     #[derive(Debug, Eq, PartialEq)]
     struct ProjectedNativeValues {
@@ -26,7 +27,7 @@ mod test {
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
             MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Sinker)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DATABASE).await?;
         endpoint.create_pool_with(1, 15).await
     }
 

@@ -9,7 +9,9 @@ use dt_connector::meta_fetcher::{
 };
 use std::collections::{HashMap, HashSet};
 
-use super::{base_test_runner::BaseTestRunner, rdb_test_runner::RdbTestRunner};
+use super::{
+    base_test_runner::BaseTestRunner, rdb_test_runner::RdbTestRunner, rdb_util::DbSchemaTb,
+};
 
 pub struct RdbStructTestRunner {
     pub base: RdbTestRunner,
@@ -56,15 +58,15 @@ impl RdbStructTestRunner {
         for i in 0..src_db_tbs.len() {
             if let Some(src_check_fetcher) = &src_check_fetcher {
                 let src_ddl_sql = src_check_fetcher
-                    .fetch_table(&src_db_tbs[i].0, &src_db_tbs[i].1)
+                    .fetch_table(&src_db_tbs[i].1, &src_db_tbs[i].2)
                     .await?;
                 println!("src_ddl_sql: {}\n", src_ddl_sql);
             }
 
             let dst_ddl_sql = dst_check_fetcher
-                .fetch_table(&dst_db_tbs[i].0, &dst_db_tbs[i].1)
+                .fetch_table(&dst_db_tbs[i].1, &dst_db_tbs[i].2)
                 .await?;
-            let key = format!("{}.{}", &dst_db_tbs[i].0, &dst_db_tbs[i].1);
+            let key = format!("{}.{}", &dst_db_tbs[i].1, &dst_db_tbs[i].2);
             let expect_ddl_sql = expect_ddl_sqls.get(&key).unwrap().to_owned();
 
             println!("dst_ddl_sql: {}\n", dst_ddl_sql);
@@ -87,24 +89,24 @@ impl RdbStructTestRunner {
         // show create database
         let mut tested_dbs = HashSet::new();
         for i in 0..src_db_tbs.len() {
-            if tested_dbs.contains(&src_db_tbs[i].0) {
+            if tested_dbs.contains(&src_db_tbs[i].1) {
                 continue;
             }
 
             if let Some(src_check_fetcher) = &src_check_fetcher {
-                let src_ddl_sql = src_check_fetcher.fetch_database(&src_db_tbs[i].0).await?;
+                let src_ddl_sql = src_check_fetcher.fetch_database(&src_db_tbs[i].1).await?;
                 println!("src_ddl_sql: {}\n", src_ddl_sql);
             }
 
-            let dst_ddl_sql = dst_check_fetcher.fetch_database(&dst_db_tbs[i].0).await?;
-            let key = dst_db_tbs[i].0.to_string();
+            let dst_ddl_sql = dst_check_fetcher.fetch_database(&dst_db_tbs[i].1).await?;
+            let key = dst_db_tbs[i].1.to_string();
             let expect_ddl_sql = expect_ddl_sqls.get(&key).unwrap().to_owned();
 
             println!("dst_ddl_sql: {}\n", dst_ddl_sql);
             println!("expect_ddl_sql: {}\n", expect_ddl_sql);
 
             assert_eq!(dst_ddl_sql, expect_ddl_sql);
-            tested_dbs.insert(&src_db_tbs[i].0);
+            tested_dbs.insert(&src_db_tbs[i].1);
         }
 
         Ok(())
@@ -127,10 +129,10 @@ impl RdbStructTestRunner {
             let dst_db_tb = &dst_db_tbs[i];
 
             let src_table = src_check_fetcher
-                .fetch_table(&src_db_tb.0, &src_db_tb.1)
+                .fetch_table(&src_db_tb.1, &src_db_tb.2)
                 .await?;
             let mut dst_table = dst_check_fetcher
-                .fetch_table(&dst_db_tb.0, &dst_db_tb.1)
+                .fetch_table(&dst_db_tb.1, &dst_db_tb.2)
                 .await?;
 
             println!(
@@ -166,12 +168,12 @@ impl RdbStructTestRunner {
                 let dst_ddl_data = parser.parse(dst_indexdef).unwrap().unwrap();
 
                 if let DdlStatement::PgCreateIndex(src) = src_ddl_data.statement {
-                    assert_eq!(src.schema, src_db_tb.0);
-                    assert_eq!(src.tb, src_db_tb.1);
+                    assert_eq!(src.schema, src_db_tb.1);
+                    assert_eq!(src.tb, src_db_tb.2);
 
                     if let DdlStatement::PgCreateIndex(dst) = dst_ddl_data.statement {
-                        assert_eq!(dst.schema, dst_db_tb.0);
-                        assert_eq!(dst.tb, dst_db_tb.1);
+                        assert_eq!(dst.schema, dst_db_tb.1);
+                        assert_eq!(dst.tb, dst_db_tb.2);
 
                         assert_eq!(src.index_name, dst.index_name);
                         assert_eq!(src.is_unique, dst.is_unique);
@@ -228,10 +230,10 @@ impl RdbStructTestRunner {
         let dst_db_tbs = self.route_db_tbs(&src_db_tbs);
         for i in 0..src_db_tbs.len() {
             let src_ddl_sql = src_check_fetcher
-                .fetch_table(&src_db_tbs[i].0, &src_db_tbs[i].1)
+                .fetch_table(&src_db_tbs[i].1, &src_db_tbs[i].2)
                 .await?;
             let dst_ddl_sql = dst_check_fetcher
-                .fetch_table(&dst_db_tbs[i].0, &dst_db_tbs[i].1)
+                .fetch_table(&dst_db_tbs[i].1, &dst_db_tbs[i].2)
                 .await?;
 
             println!(
@@ -289,15 +291,19 @@ impl RdbStructTestRunner {
         self.base.base.start_task().await
     }
 
-    fn route_db_tbs(&self, src_db_tbs: &[(String, String)]) -> Vec<(String, String)> {
+    fn route_db_tbs(&self, src_db_tbs: &[DbSchemaTb]) -> Vec<DbSchemaTb> {
         src_db_tbs
             .iter()
-            .map(|(db, tb)| match &self.base.router {
+            .map(|(db, schema, tb)| match &self.base.router {
                 Some(router) => {
-                    let (dst_db, dst_tb) = router.get_tb_map(db, tb);
-                    (dst_db.to_string(), dst_tb.to_string())
+                    let (dst_db, dst_schema, dst_tb) = router.get_tb_map_with_db(db, schema, tb);
+                    (
+                        dst_db.to_string(),
+                        dst_schema.to_string(),
+                        dst_tb.to_string(),
+                    )
                 }
-                None => (db.clone(), tb.clone()),
+                None => (db.clone(), schema.clone(), tb.clone()),
             })
             .collect()
     }
@@ -312,14 +318,14 @@ impl RdbStructTestRunner {
         &self,
         src_check_fetcher: &PgStructCheckFetcher,
         dst_check_fetcher: &PgStructCheckFetcher,
-        src_db_tb: &(String, String),
-        dst_db_tb: &(String, String),
+        src_db_tb: &DbSchemaTb,
+        dst_db_tb: &DbSchemaTb,
     ) -> anyhow::Result<()> {
         let src_table = src_check_fetcher
-            .fetch_table(&src_db_tb.0, &src_db_tb.1)
+            .fetch_table(&src_db_tb.1, &src_db_tb.2)
             .await?;
         let mut dst_table = dst_check_fetcher
-            .fetch_table(&dst_db_tb.0, &dst_db_tb.1)
+            .fetch_table(&dst_db_tb.1, &dst_db_tb.2)
             .await?;
 
         println!(
@@ -352,12 +358,12 @@ impl RdbStructTestRunner {
             let dst_ddl_data = parser.parse(dst_indexdef).unwrap().unwrap();
 
             if let DdlStatement::PgCreateIndex(src) = src_ddl_data.statement {
-                assert_eq!(src.schema, src_db_tb.0);
-                assert_eq!(src.tb, src_db_tb.1);
+                assert_eq!(src.schema, src_db_tb.1);
+                assert_eq!(src.tb, src_db_tb.2);
 
                 if let DdlStatement::PgCreateIndex(dst) = dst_ddl_data.statement {
-                    assert_eq!(dst.schema, dst_db_tb.0);
-                    assert_eq!(dst.tb, dst_db_tb.1);
+                    assert_eq!(dst.schema, dst_db_tb.1);
+                    assert_eq!(dst.tb, dst_db_tb.2);
 
                     assert_eq!(src.index_name, dst.index_name);
                     assert_eq!(src.is_unique, dst.is_unique);

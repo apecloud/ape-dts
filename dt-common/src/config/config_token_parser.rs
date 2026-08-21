@@ -73,7 +73,9 @@ impl TokenEscapePair {
 pub struct ConfigTokenParser {}
 
 impl ConfigTokenParser {
-    pub fn parse_config(
+    /// Parses tokens while retaining each delimiter as the following array item.
+    /// For example, `db.schema,other` becomes `["db", ".", "schema", ",", "other"]`.
+    pub fn parse_config_with_delimiters(
         config_str: &str,
         db_type: &DbType,
         delimiters: &[char],
@@ -88,8 +90,8 @@ impl ConfigTokenParser {
         if let Some(pairs) = custom_escape_pairs {
             token_escape_pairs.extend_from_slice(pairs);
         }
-        let tokens = Self::parse(config_str, delimiters, &token_escape_pairs);
-        for token in tokens.iter() {
+        let tokens = Self::parse_with_delimiters(config_str, delimiters, &token_escape_pairs);
+        for token in tokens.iter().step_by(2) {
             if !SqlUtil::is_valid_token(token, db_type, &escape_pairs) {
                 bail! {DtError::InvalidConfig(format!(
                     "config error near: {}, try enclose database/table/column with escapes if there are special characters other than letters and numbers",
@@ -100,7 +102,39 @@ impl ConfigTokenParser {
         Ok(tokens)
     }
 
+    pub fn parse_config(
+        config_str: &str,
+        db_type: &DbType,
+        delimiters: &[char],
+        custom_escape_pairs: Option<&[TokenEscapePair]>,
+    ) -> anyhow::Result<Vec<String>> {
+        if config_str.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        Ok(Self::parse_config_with_delimiters(
+            config_str,
+            db_type,
+            delimiters,
+            custom_escape_pairs,
+        )?
+        .into_iter()
+        .step_by(2)
+        .collect())
+    }
+
     pub fn parse(
+        config: &str,
+        delimiters: &[char],
+        escape_pairs: &[TokenEscapePair],
+    ) -> Vec<String> {
+        Self::parse_with_delimiters(config, delimiters, escape_pairs)
+            .into_iter()
+            .step_by(2)
+            .collect()
+    }
+
+    fn parse_with_delimiters(
         config: &str,
         delimiters: &[char],
         escape_pairs: &[TokenEscapePair],
@@ -122,7 +156,7 @@ impl ConfigTokenParser {
             if next_index >= chars.len() {
                 break;
             }
-            // skip the token_delimiter
+            tokens.push(chars[next_index].to_string());
             start_index = next_index + 1;
         }
 
@@ -381,6 +415,47 @@ mod tests {
         assert_eq!(
             SqlUtil::unescape_by_db_type(&tokens[1], &DbType::Mssql),
             "table.name]part"
+        );
+    }
+
+    #[test]
+    fn test_parse_config_with_delimiters_preserves_multipart_escapes() {
+        let regex_escape_pairs = [TokenEscapePair::String(("r#".into(), "#".into()))];
+        let config = "[db,1].[schema.1].[table.1],r#db,.*#.r#schema\\..*#.r#table.*#";
+
+        let tokens = ConfigTokenParser::parse_config_with_delimiters(
+            config,
+            &DbType::Mssql,
+            &[',', '.'],
+            Some(&regex_escape_pairs),
+        )
+        .unwrap();
+
+        assert_eq!(
+            tokens,
+            [
+                "[db,1]",
+                ".",
+                "[schema.1]",
+                ".",
+                "[table.1]",
+                ",",
+                "r#db,.*#",
+                ".",
+                "r#schema\\..*#",
+                ".",
+                "r#table.*#"
+            ]
+        );
+        assert_eq!(
+            ConfigTokenParser::parse_config(
+                config,
+                &DbType::Mssql,
+                &[',', '.'],
+                Some(&regex_escape_pairs),
+            )
+            .unwrap(),
+            tokens.into_iter().step_by(2).collect::<Vec<_>>()
         );
     }
 

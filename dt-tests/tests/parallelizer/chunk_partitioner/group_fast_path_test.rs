@@ -68,6 +68,7 @@ fn group_for_bench_without_fast_path(data: &[RowData]) -> (usize, usize) {
 
     for (row_index, row_data) in data.iter().enumerate() {
         let key = ChunkKey {
+            db: row_data.db.as_str(),
             schema: row_data.schema.as_str(),
             tb: row_data.tb.as_str(),
             chunk_id: row_data.chunk_id,
@@ -97,6 +98,7 @@ fn group_for_bench_with_fast_path(data: &[RowData]) -> (usize, usize) {
 
     for (row_index, row_data) in data.iter().enumerate() {
         let key = ChunkKey {
+            db: row_data.db.as_str(),
             schema: row_data.schema.as_str(),
             tb: row_data.tb.as_str(),
             chunk_id: row_data.chunk_id,

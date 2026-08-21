@@ -310,7 +310,8 @@ impl PgCdcExtractor {
         // if the tb is filtered, we won't try to get the tb_meta since we may get privilege errors,
         // but we need to keep the oid —— tb_meta map which may be used for decoding events,
         // the built-in object used by datamarker, although it is not in filter config, still needs to get tb_meta.
-        if self.filter.filter_tb(schema, tb) && !self.extract_state.is_data_marker_info(schema, tb)
+        if self.filter.filter_tb(schema, tb)
+            && !self.extract_state.is_data_marker_info("", schema, tb)
         {
             let tb_meta = Self::mock_pg_tb_meta(schema, tb, event.rel_id() as i32);
             self.meta_manager
@@ -374,6 +375,7 @@ impl PgCdcExtractor {
 
         let col_values = self.parse_row_data(&tb_meta, event.tuple().tuple_data())?;
         let row_data = RowData::new(
+            tb_meta.basic.db,
             tb_meta.basic.schema,
             tb_meta.basic.tb,
             0,
@@ -443,6 +445,7 @@ impl PgCdcExtractor {
         };
 
         let row_data = RowData::new(
+            basic.db.clone(),
             basic.schema.clone(),
             basic.tb.clone(),
             0,
@@ -476,6 +479,7 @@ impl PgCdcExtractor {
         };
 
         let row_data = RowData::new(
+            tb_meta.basic.db,
             tb_meta.basic.schema,
             tb_meta.basic.tb,
             0,
@@ -565,6 +569,7 @@ impl PgCdcExtractor {
                 unparsed: String::new(),
             });
             let ddl_data = DdlData {
+                default_db: String::new(),
                 default_schema: schema,
                 query: statement.to_sql(&DbType::Pg),
                 ddl_type: DdlType::TruncateTable,
@@ -635,7 +640,7 @@ impl PgCdcExtractor {
         let tb = &tb_meta.basic.tb;
         let filtered = self.filter.filter_event(schema, tb, &row_type);
         if filtered {
-            return !self.extract_state.is_data_marker_info(schema, tb);
+            return !self.extract_state.is_data_marker_info("", schema, tb);
         }
         filtered
     }

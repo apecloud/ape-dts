@@ -15,6 +15,7 @@ pub struct DataMarker {
     pub do_nodes: HashSet<String>,
     pub ignore_nodes: HashSet<String>,
     // mysql/pg/mongo
+    pub marker_db: String,
     pub marker_schema: String,
     pub marker_tb: String,
     // redis
@@ -74,7 +75,9 @@ impl DataMarker {
 
     pub fn is_marker_info(&self, dt_data: &DtData) -> bool {
         match dt_data {
-            DtData::Dml { row_data } => self.is_rdb_marker_info(&row_data.schema, &row_data.tb),
+            DtData::Dml { row_data } => {
+                self.is_rdb_marker_info(&row_data.db, &row_data.schema, &row_data.tb)
+            }
             DtData::Redis { entry } => self.is_redis_marker_info(entry),
             _ => false,
         }
@@ -91,8 +94,8 @@ impl DataMarker {
         entry_key == self.marker || entry_key.starts_with(&format!("{}{{", self.marker))
     }
 
-    pub fn is_rdb_marker_info(&self, schema: &str, tb: &str) -> bool {
-        self.marker_schema == schema && self.marker_tb == tb
+    pub fn is_rdb_marker_info(&self, db: &str, schema: &str, tb: &str) -> bool {
+        self.marker_db == db && self.marker_schema == schema && self.marker_tb == tb
     }
 
     pub fn refresh(&mut self, dt_data: &DtData) {

@@ -7,19 +7,20 @@ pub mod from_database;
 pub mod from_log;
 
 pub struct RecoverySnapshotCache {
-    current_tb_positions: DashMap<DbTb, Position>,
-    checkpoint_tb_positions: DashMap<DbTb, Position>,
-    finished_tbs: DashMap<DbTb, bool>,
+    current_tb_positions: DashMap<DbSchemaTb, Position>,
+    checkpoint_tb_positions: DashMap<DbSchemaTb, Position>,
+    finished_tbs: DashMap<DbSchemaTb, bool>,
 }
 
-type DbTb = (String, String);
+type DbSchemaTb = (String, String, String);
 
 #[async_trait]
 pub trait Recovery {
-    async fn check_snapshot_finished(&self, schema: &str, tb: &str) -> bool;
+    async fn check_snapshot_finished(&self, db: &str, schema: &str, tb: &str) -> bool;
 
     async fn get_snapshot_resume_position(
         &self,
+        db: &str,
         schema: &str,
         tb: &str,
         checkpoint: bool,

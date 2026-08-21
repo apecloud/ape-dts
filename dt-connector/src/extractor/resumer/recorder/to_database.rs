@@ -24,6 +24,7 @@ use dt_common::{
 pub struct DatabaseRecorder {
     task_id: String,
     pool: ResumerDbPool,
+    db: String,
     schema: String,
     table: String,
 }
@@ -37,12 +38,16 @@ impl DatabaseRecorder {
     ) -> anyhow::Result<Self> {
         let recorder = match resumer_config {
             ResumerConfig::FromDB {
-                table_full_name, ..
+                db_type,
+                table_full_name,
+                ..
             } => {
-                let (schema, table) = ResumerUtil::get_full_table_name(table_full_name)?;
+                let (db, schema, table) =
+                    ResumerUtil::get_checkpoint_db_schema_tb(table_full_name, db_type)?;
                 Self {
                     task_id: task_id.to_string(),
                     pool,
+                    db,
                     schema,
                     table,
                 }
@@ -59,8 +64,9 @@ impl DatabaseRecorder {
 
     async fn initialization(&self, is_init: bool, task_id: &str) -> Result<()> {
         log_info!(
-            "DatabaseRecorderInner initialized, task_id: {}, schema: {}, table: {}",
+            "DatabaseRecorderInner initialized, task_id: {}, db: {}, schema: {}, table: {}",
             self.task_id,
+            self.db,
             self.schema,
             self.table
         );
@@ -157,26 +163,31 @@ impl DatabaseRecorder {
                     .await
                     .context("failed to acquire MSSQL checkpoint connection")?;
 
-                let mut create_schema = Query::new(
-                    "IF SCHEMA_ID(@P1) IS NULL \
+                let mut create_database = Query::new(
+                    "IF DB_ID(@P1) IS NULL \
                      BEGIN \
-                         DECLARE @schema_sql nvarchar(300) = \
-                             N'CREATE SCHEMA ' + QUOTENAME(@P1); \
-                         EXEC sp_executesql @schema_sql; \
+                         DECLARE @database_sql nvarchar(300) = \
+                             N'CREATE DATABASE ' + QUOTENAME(@P1); \
+                         EXEC sp_executesql @database_sql; \
                      END",
                 );
-                create_schema.bind(self.schema.as_str());
-                create_schema
+                create_database.bind(self.db.as_str());
+                create_database
                     .execute(connection.client_mut())
                     .await
                     .with_context(|| {
-                        format!("failed to create MSSQL checkpoint schema: {}", self.schema)
+                        format!("failed to create MSSQL checkpoint database: {}", self.db)
                     })?;
 
                 let full_table_name = self.mssql_full_table_name();
-                let object_name = full_table_name.clone();
+                let catalog = SqlUtil::escape_by_db_type(&self.db, &DbType::Mssql);
                 let create_table_sql = format!(
-                    r#"IF OBJECT_ID(@P1, N'U') IS NULL
+                    r#"IF NOT EXISTS (
+                           SELECT 1
+                           FROM {catalog}.sys.tables AS t
+                           JOIN {catalog}.sys.schemas AS s ON s.schema_id = t.schema_id
+                           WHERE s.name = @P1 AND t.name = @P2
+                       )
                        BEGIN
                            CREATE TABLE {full_table_name} (
                                id bigint IDENTITY(1, 1) PRIMARY KEY,
@@ -191,7 +202,8 @@ impl DatabaseRecorder {
                        END"#
                 );
                 let mut create_table = Query::new(create_table_sql);
-                create_table.bind(object_name.as_str());
+                create_table.bind(self.schema.as_str());
+                create_table.bind(self.table.as_str());
                 create_table
                     .execute(connection.client_mut())
                     .await
@@ -314,11 +326,7 @@ impl DatabaseRecorder {
     }
 
     fn mssql_full_table_name(&self) -> String {
-        format!(
-            "{}.{}",
-            SqlUtil::escape_by_db_type(&self.schema, &DbType::Mssql),
-            SqlUtil::escape_by_db_type(&self.table, &DbType::Mssql)
-        )
+        SqlUtil::render_rdb_table(&DbType::Mssql, &self.db, &self.schema, &self.table)
     }
 }
 

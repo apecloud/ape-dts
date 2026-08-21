@@ -215,6 +215,7 @@ mod tests {
         DtItem {
             dt_data: DtData::Dml {
                 row_data: RowData {
+                    db: String::new(),
                     schema: "db".to_string(),
                     tb: "tb".to_string(),
                     chunk_id: 0,

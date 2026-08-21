@@ -36,7 +36,7 @@ impl RdbPartitioner {
 
         let tb_meta = self
             .meta_manager
-            .get_tb_meta(&row_data.schema, &row_data.tb)
+            .get_tb_meta(&row_data.db, &row_data.schema, &row_data.tb)
             .await?;
         let before = row_data.require_before()?;
         let after = row_data.require_after()?;
@@ -97,7 +97,7 @@ impl RdbPartitioner {
 
         let tb_meta = self
             .meta_manager
-            .get_tb_meta(&row_data.schema, &row_data.tb)
+            .get_tb_meta(&row_data.db, &row_data.schema, &row_data.tb)
             .await?;
         if let Some(partition_col_value) = col_values.get(&tb_meta.partition_col) {
             Ok(partition_col_value.hash_code()? as usize % partition_count)

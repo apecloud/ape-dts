@@ -125,13 +125,14 @@ impl MssqlSnapshotSplitter {
     }
 
     async fn estimate_row_count(&mut self, tb_meta: &RdbTbMeta) -> anyhow::Result<u64> {
-        let mut query = Query::new(
+        let catalog = Self::catalog_prefix(&tb_meta.db);
+        let mut query = Query::new(format!(
             "SELECT COALESCE(SUM(CONVERT(bigint, p.rows)), CONVERT(bigint, 0)) AS row_count \
-             FROM sys.tables AS t \
-             JOIN sys.schemas AS s ON s.schema_id = t.schema_id \
-             JOIN sys.partitions AS p ON p.object_id = t.object_id \
-             WHERE p.index_id IN (0, 1) AND s.name = @P1 AND t.name = @P2",
-        );
+             FROM {catalog}sys.tables AS t \
+             JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id \
+             JOIN {catalog}sys.partitions AS p ON p.object_id = t.object_id \
+             WHERE p.index_id IN (0, 1) AND s.name = @P1 AND t.name = @P2"
+        ));
         query.bind(tb_meta.schema.as_str());
         query.bind(tb_meta.tb.as_str());
         let mut connection = self.connection_pool.get().await?;
@@ -153,9 +154,8 @@ impl MssqlSnapshotSplitter {
         let partition_col_type = tb_meta.get_col_type(&self.partition_col)?;
         let sql = format!(
             "SELECT MIN({partition_col}) AS min_value, MAX({partition_col}) AS max_value \
-             FROM {}.{}",
-            Self::quote(&tb_meta.basic.schema),
-            Self::quote(&tb_meta.basic.tb)
+             FROM {}",
+            Self::table_name(&tb_meta.basic)
         );
         let mut connection = self.connection_pool.get().await?;
         let row = connection
@@ -236,12 +236,11 @@ impl MssqlSnapshotSplitter {
         };
         let sql = format!(
             "SELECT MAX({quoted_partition_col}) AS max_value FROM (\
-                 SELECT TOP ({}) {quoted_partition_col} FROM {}.{} {} \
+                 SELECT TOP ({}) {quoted_partition_col} FROM {} {} \
                  ORDER BY {quoted_partition_col} ASC\
              ) AS snapshot_chunk",
             self.batch_size,
-            Self::quote(&tb_meta.basic.schema),
-            Self::quote(&tb_meta.basic.tb),
+            Self::table_name(&tb_meta.basic),
             where_clause,
         );
         let mut query = Query::new(sql);
@@ -279,5 +278,17 @@ impl MssqlSnapshotSplitter {
 
     fn quote(identifier: &str) -> String {
         SqlUtil::escape_by_db_type(identifier, &DbType::Mssql)
+    }
+
+    fn catalog_prefix(db: &str) -> String {
+        if db.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", Self::quote(db))
+        }
+    }
+
+    fn table_name(tb_meta: &RdbTbMeta) -> String {
+        SqlUtil::render_rdb_table(&DbType::Mssql, &tb_meta.db, &tb_meta.schema, &tb_meta.tb)
     }
 }

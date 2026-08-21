@@ -14,6 +14,8 @@ use dt_common::{log_info, log_warn};
 
 #[derive(Serialize)]
 struct IdentityJsonPayload<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    db: Option<&'a str>,
     schema: &'a str,
     tb: &'a str,
     id_col_values: BTreeMap<&'a str, Option<&'a str>>,
@@ -21,6 +23,7 @@ struct IdentityJsonPayload<'a> {
 
 pub(super) fn build_identity_json(entry: &CheckEntry) -> anyhow::Result<String> {
     Ok(serde_json::to_string(&IdentityJsonPayload {
+        db: (!entry.log.db.is_empty()).then_some(entry.log.db.as_str()),
         schema: &entry.log.schema,
         tb: &entry.log.tb,
         id_col_values: entry
@@ -82,7 +85,14 @@ impl<C: Checker> DataChecker<C> {
         let mut total_diff = 0usize;
         let mut total_sql = 0usize;
         let mut tables: HashMap<
-            (String, String, Option<String>, Option<String>),
+            (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
             CheckTableSummaryLog,
         > = HashMap::new();
         for table in &self.ctx.summary.tables {
@@ -91,8 +101,10 @@ impl<C: Checker> DataChecker<C> {
             table.diff_count = 0;
             tables.insert(
                 (
+                    table.db.clone(),
                     table.schema.clone(),
                     table.tb.clone(),
+                    table.target_db.clone(),
                     table.target_schema.clone(),
                     table.target_tb.clone(),
                 ),
@@ -104,16 +116,20 @@ impl<C: Checker> DataChecker<C> {
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
         for (_, entry) in entries {
             let table_key = (
+                entry.log.db.clone(),
                 entry.log.schema.clone(),
                 entry.log.tb.clone(),
+                entry.log.target_db.clone(),
                 entry.log.target_schema.clone(),
                 entry.log.target_tb.clone(),
             );
             let table = tables
                 .entry(table_key)
                 .or_insert_with(|| CheckTableSummaryLog {
+                    db: entry.log.db.clone(),
                     schema: entry.log.schema.clone(),
                     tb: entry.log.tb.clone(),
+                    target_db: entry.log.target_db.clone(),
                     target_schema: entry.log.target_schema.clone(),
                     target_tb: entry.log.target_tb.clone(),
                     ..Default::default()
@@ -235,7 +251,7 @@ impl<C: Checker> DataChecker<C> {
                 )
             })?;
             let entry = self.build_restored_entry(key.clone());
-            let store_key = CheckerStoreKey::new(&key.schema, &key.tb, row.row_key);
+            let store_key = CheckerStoreKey::new(&key.db, &key.schema, &key.tb, row.row_key);
             self.store.insert(store_key, entry);
         }
         self.persisted_identity_keys = Some(persisted_identity_keys);
@@ -261,14 +277,17 @@ impl<C: Checker> DataChecker<C> {
                 .collect()
         })
         .unwrap_or_default();
+        let db_changed = source_row.db != lookup_row.db;
         let schema_changed =
-            source_row.schema != lookup_row.schema || source_row.tb != lookup_row.tb;
+            db_changed || source_row.schema != lookup_row.schema || source_row.tb != lookup_row.tb;
 
         CheckEntry {
             key,
             log: CheckLog {
+                db: source_row.db,
                 schema: source_row.schema,
                 tb: source_row.tb,
+                target_db: db_changed.then_some(lookup_row.db),
                 target_schema: schema_changed.then_some(lookup_row.schema),
                 target_tb: schema_changed.then_some(lookup_row.tb),
                 id_col_values,
@@ -298,10 +317,10 @@ impl<C: Checker> DataChecker<C> {
                 }
             })
             .collect::<Vec<_>>();
-        let mut grouped = HashMap::<(&str, &str), Vec<&RowData>>::new();
+        let mut grouped = HashMap::<(&str, &str, &str), Vec<&RowData>>::new();
         for row in &lookup_rows {
             grouped
-                .entry((row.schema.as_str(), row.tb.as_str()))
+                .entry((row.db.as_str(), row.schema.as_str(), row.tb.as_str()))
                 .or_default()
                 .push(row);
         }
@@ -367,10 +386,10 @@ impl<C: Checker> DataChecker<C> {
         );
         let batch_size = self.ctx.batch_size.max(1);
         for chunk in keys_for_recheck.chunks(batch_size) {
-            let mut grouped = HashMap::<(&str, &str), Vec<RecheckKey>>::new();
+            let mut grouped = HashMap::<(&str, &str, &str), Vec<RecheckKey>>::new();
             for key in chunk {
                 grouped
-                    .entry((key.schema.as_str(), key.tb.as_str()))
+                    .entry((key.db.as_str(), key.schema.as_str(), key.tb.as_str()))
                     .or_default()
                     .push(key.clone());
             }
@@ -710,19 +729,22 @@ mod tests {
         let op = build_memory_operator();
         let mut checker = build_cdc_checker(dir.clone(), Some((op.clone(), "prefix".to_string())));
 
-        let first_key = CheckerStoreKey::new("s1", "t1", 1);
+        let first_key = CheckerStoreKey::new("", "s1", "t1", 1);
         checker.store.insert(
             first_key,
             CheckEntry {
                 key: RecheckKey {
+                    db: String::new(),
                     schema: "s1".to_string(),
                     tb: "t1".to_string(),
                     is_delete: false,
                     pk: BTreeMap::from([("id".to_string(), ColValue::Long(1))]),
                 },
                 log: CheckLog {
+                    db: String::new(),
                     schema: "s1".to_string(),
                     tb: "t1".to_string(),
+                    target_db: None,
                     target_schema: None,
                     target_tb: None,
                     id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),
@@ -740,17 +762,20 @@ mod tests {
 
         checker.store.clear();
         checker.store.insert(
-            CheckerStoreKey::new("s1", "t1", 2),
+            CheckerStoreKey::new("", "s1", "t1", 2),
             CheckEntry {
                 key: RecheckKey {
+                    db: String::new(),
                     schema: "s1".to_string(),
                     tb: "t1".to_string(),
                     is_delete: false,
                     pk: BTreeMap::from([("id".to_string(), ColValue::Long(2))]),
                 },
                 log: CheckLog {
+                    db: String::new(),
                     schema: "s1".to_string(),
                     tb: "t1".to_string(),
+                    target_db: None,
                     target_schema: None,
                     target_tb: None,
                     id_col_values: HashMap::from([("id".to_string(), Some("2".to_string()))]),
@@ -786,17 +811,20 @@ mod tests {
             ..Default::default()
         });
         checker.store.insert(
-            CheckerStoreKey::new("s1", "t1", 1),
+            CheckerStoreKey::new("", "s1", "t1", 1),
             CheckEntry {
                 key: RecheckKey {
+                    db: String::new(),
                     schema: "s1".to_string(),
                     tb: "t1".to_string(),
                     is_delete: false,
                     pk: BTreeMap::from([("id".to_string(), ColValue::Long(1))]),
                 },
                 log: CheckLog {
+                    db: String::new(),
                     schema: "s1".to_string(),
                     tb: "t1".to_string(),
+                    target_db: None,
                     target_schema: None,
                     target_tb: None,
                     id_col_values: HashMap::from([("id".to_string(), Some("1".to_string()))]),

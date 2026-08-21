@@ -1347,13 +1347,10 @@ impl TaskRunner {
                 | ExtractorConfig::MongoSnapshot { .. }
         );
 
-        let mut schema_tbs = HashMap::new();
-        let schemas = TaskUtil::list_schemas(&extractor_client, db_type)
-            .await?
-            .iter()
-            .filter(|schema| !filter.filter_schema(schema))
-            .map(|s| s.to_owned())
-            .collect::<Vec<_>>();
+        // list_schemas returns the existing top-level namespace for each database type. For
+        // MSSQL this is the physical database. list_tbs normalizes tables to (db, schema, table).
+        let mut schemas = TaskUtil::list_schemas(&extractor_client, db_type).await?;
+        schemas.retain(|schema| !filter.filter_schema(schema));
         if schemas.is_empty() && is_snapshot_task {
             log_warn!("no schemas to extract");
             return Ok(TaskInfo {
@@ -1384,7 +1381,6 @@ impl TaskRunner {
             ExtractorConfig::MysqlStruct {
                 url,
                 connection_auth,
-                db,
                 db_batch_size,
                 ..
             } => {
@@ -1392,7 +1388,6 @@ impl TaskRunner {
                     extractor_config: ExtractorConfig::MysqlStruct {
                         url: url.clone(),
                         connection_auth: connection_auth.clone(),
-                        db: db.clone(),
                         dbs: schemas,
                         db_batch_size: *db_batch_size,
                     },
@@ -1402,7 +1397,6 @@ impl TaskRunner {
             ExtractorConfig::PgStruct {
                 url,
                 connection_auth,
-                schema,
                 db_batch_size,
                 ..
             } => {
@@ -1410,7 +1404,6 @@ impl TaskRunner {
                     extractor_config: ExtractorConfig::PgStruct {
                         url: url.clone(),
                         connection_auth: connection_auth.clone(),
-                        schema: schema.clone(),
                         schemas,
                         do_global_structs: true,
                         db_batch_size: *db_batch_size,
@@ -1423,7 +1416,6 @@ impl TaskRunner {
                 connection_auth,
                 is_direct_connection,
                 app_name,
-                db,
                 db_batch_size,
                 ..
             } => {
@@ -1433,7 +1425,6 @@ impl TaskRunner {
                         connection_auth: connection_auth.clone(),
                         is_direct_connection: *is_direct_connection,
                         app_name: app_name.clone(),
-                        db: db.clone(),
                         dbs: schemas,
                         db_batch_size: *db_batch_size,
                     },
@@ -1442,31 +1433,43 @@ impl TaskRunner {
             }
             _ => {}
         };
-        for schema in schemas.iter() {
-            // find pending tables
-            let tbs = TaskUtil::list_tbs(&extractor_client, schema, db_type).await?;
+
+        let mut planned_tbs = Vec::new();
+        for namespace in schemas {
+            let tbs = TaskUtil::list_tbs(&extractor_client, &namespace, db_type).await?;
 
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::TotalProgressCount, tbs.len() as u64);
             let mut finished_tbs = 0;
 
-            let mut tables = Vec::new();
-            for tb in tbs.iter() {
+            for (db, schema, tb) in tbs {
                 if let Some(recovery_handler) = recovery.as_ref() {
-                    if recovery_handler.check_snapshot_finished(schema, tb).await {
-                        log_info!("schema: {}, tb: {}, already finished", schema, tb);
+                    if recovery_handler
+                        .check_snapshot_finished(&db, &schema, &tb)
+                        .await
+                    {
+                        log_info!(
+                            "db: {}, schema: {}, tb: {}, already finished",
+                            db,
+                            schema,
+                            tb
+                        );
                         finished_tbs += 1;
                         continue;
                     }
                 }
 
-                if filter.filter_event(schema, tb, &RowType::Insert) {
-                    log_info!("schema: {}, tb: {}, insert events filtered", schema, tb);
+                if filter.filter_event_with_db(&db, &schema, &tb, &RowType::Insert) {
+                    log_info!(
+                        "db: {}, schema: {}, tb: {}, insert events filtered",
+                        db,
+                        schema,
+                        tb
+                    );
                     continue;
                 }
-                tables.push(tb.to_owned());
+                planned_tbs.push((db, schema, tb));
             }
-            schema_tbs.insert(schema.clone(), tables);
 
             self.task_monitor
                 .add_no_window_metrics(TaskMetricsType::FinishedProgressCount, finished_tbs as u64);
@@ -1483,9 +1486,7 @@ impl TaskRunner {
             } => ExtractorConfig::MysqlSnapshot {
                 url: url.clone(),
                 connection_auth: connection_auth.clone(),
-                db: String::new(),
-                tb: String::new(),
-                db_tbs: schema_tbs,
+                tbs: planned_tbs,
                 sample_rate: *sample_rate,
                 parallel_size: *parallel_size,
                 parallel_type: parallel_type.clone(),
@@ -1504,9 +1505,7 @@ impl TaskRunner {
             } => ExtractorConfig::PgSnapshot {
                 url: url.clone(),
                 connection_auth: connection_auth.clone(),
-                schema: String::new(),
-                tb: String::new(),
-                schema_tbs,
+                tbs: planned_tbs,
                 sample_rate: *sample_rate,
                 parallel_size: *parallel_size,
                 parallel_type: parallel_type.clone(),
@@ -1525,9 +1524,7 @@ impl TaskRunner {
             } => ExtractorConfig::MssqlSnapshot {
                 url: url.clone(),
                 connection_auth: connection_auth.clone(),
-                schema: String::new(),
-                tb: String::new(),
-                schema_tbs,
+                tbs: planned_tbs,
                 parallel_size: *parallel_size,
                 parallel_type: parallel_type.clone(),
                 batch_size: *batch_size,
@@ -1548,9 +1545,7 @@ impl TaskRunner {
                 connection_auth: connection_auth.clone(),
                 is_direct_connection: *is_direct_connection,
                 app_name: app_name.clone(),
-                db: String::new(),
-                tb: String::new(),
-                db_tbs: schema_tbs,
+                tbs: planned_tbs,
                 parallel_size: *parallel_size,
                 parallel_type: parallel_type.clone(),
                 batch_size: *batch_size,

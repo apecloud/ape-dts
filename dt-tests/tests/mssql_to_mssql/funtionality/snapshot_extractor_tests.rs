@@ -44,6 +44,8 @@ mod test {
 
     use super::super::TASK_CONFIG_FILE;
 
+    const TEST_DB: &str = "ape_dts";
+    const CROSS_DB: &str = "ape_dts_snapshot_cross_db";
     const TEST_SCHEMA: &str = "ape_dts_snapshot_extractor_test";
     const TEST_TABLE: &str = "snapshot_rows";
     const TEST_COMPOSITE_TABLE: &str = "composite_rows";
@@ -90,7 +92,7 @@ mod test {
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
             MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Extractor)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DB).await?;
         endpoint.create_pool().await
     }
 
@@ -98,13 +100,28 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}];
-                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}];
-                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}];
-                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}];
-                 DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_TABLE}];
+                "USE [{TEST_DB}];
+                 DROP TABLE IF EXISTS [{TEST_DB}].[{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_DB}].[{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_DB}].[{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_DB}].[{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_DB}].[{TEST_SCHEMA}].[{TEST_TABLE}];
                  IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
                     EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
+            ),
+        )
+        .await
+    }
+
+    async fn cleanup_cross_database(pool: &MssqlConnectionPool) -> anyhow::Result<()> {
+        MssqlTestEndpoint::execute_batch(
+            pool,
+            &format!(
+                "IF DB_ID(N'{CROSS_DB}') IS NOT NULL
+                 BEGIN
+                    ALTER DATABASE [{CROSS_DB}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+                    DROP DATABASE [{CROSS_DB}];
+                 END;"
             ),
         )
         .await
@@ -154,7 +171,11 @@ mod test {
         let partition_cols = partition_col
             .map(|col| {
                 HashMap::from([(
-                    (TEST_SCHEMA.to_string(), table.to_string()),
+                    (
+                        TEST_DB.to_string(),
+                        TEST_SCHEMA.to_string(),
+                        table.to_string(),
+                    ),
                     col.to_string(),
                 )])
             })
@@ -187,7 +208,11 @@ mod test {
                 time_filter: TimeFilter::default(),
             },
             parallel_size: 1,
-            schema_tbs: HashMap::from([(TEST_SCHEMA.to_string(), vec![table.to_string()])]),
+            tbs: vec![(
+                TEST_DB.to_string(),
+                TEST_SCHEMA.to_string(),
+                table.to_string(),
+            )],
         };
         let error = extractor
             .extract()
@@ -205,8 +230,9 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
-                "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
-                 CREATE TABLE [{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}] (
+                "USE [{TEST_DB}];
+                 EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
+                 CREATE TABLE [{TEST_DB}].[{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}] (
                     [id] int NOT NULL PRIMARY KEY,
                     [rowversion_value] rowversion NOT NULL,
                     [valid_from] datetime2 GENERATED ALWAYS AS ROW START NOT NULL
@@ -215,21 +241,21 @@ mod test {
                         DEFAULT CONVERT(datetime2, '9999-12-31 23:59:59.9999999'),
                     PERIOD FOR SYSTEM_TIME ([valid_from], [valid_to])
                  );
-                 INSERT INTO [{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}] ([id]) VALUES (1);
+                 INSERT INTO [{TEST_DB}].[{TEST_SCHEMA}].[{GENERATED_ORDER_TABLE}] ([id]) VALUES (1);
 
-                 CREATE TABLE [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] (
+                 CREATE TABLE [{TEST_DB}].[{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] (
                     [base_value] int NOT NULL,
                     [computed_value] AS ([base_value] * 2) PERSISTED
                  );
                  CREATE UNIQUE INDEX [uk_computed_order_rows]
-                    ON [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([computed_value]);
-                 INSERT INTO [{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([base_value]) VALUES (1);
+                    ON [{TEST_DB}].[{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([computed_value]);
+                 INSERT INTO [{TEST_DB}].[{TEST_SCHEMA}].[{COMPUTED_ORDER_TABLE}] ([base_value]) VALUES (1);
 
-                 CREATE TABLE [{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}] (
+                 CREATE TABLE [{TEST_DB}].[{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}] (
                     [id] int NOT NULL PRIMARY KEY,
                     [timestamp_value] timestamp NOT NULL
                  );
-                 INSERT INTO [{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}] ([id]) VALUES (1);"
+                 INSERT INTO [{TEST_DB}].[{TEST_SCHEMA}].[{TIMESTAMP_ORDER_TABLE}] ([id]) VALUES (1);"
             ),
         )
         .await?;
@@ -268,13 +294,14 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
-                "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
-                 CREATE TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] (
+                "USE [{TEST_DB}];
+                 EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
+                 CREATE TABLE [{TEST_DB}].[{TEST_SCHEMA}].[{TEST_TABLE}] (
                     [id] int NOT NULL PRIMARY KEY,
                     [split_key] int NULL,
                     [name] nvarchar(20) NOT NULL
                  );
-                 INSERT INTO [{TEST_SCHEMA}].[{TEST_TABLE}] ([id], [split_key], [name]) VALUES
+                 INSERT INTO [{TEST_DB}].[{TEST_SCHEMA}].[{TEST_TABLE}] ([id], [split_key], [name]) VALUES
                     (1, NULL, N'a'),
                     (2, NULL, N'b'),
                     (3, 10, N'c'),
@@ -282,14 +309,14 @@ mod test {
                     (5, 30, N'e'),
                     (6, 40, N'f'),
                     (7, 50, N'g');
-                 CREATE TABLE [{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}] (
+                 CREATE TABLE [{TEST_DB}].[{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}] (
                     [tenant_id] int NOT NULL,
                     [id] int NOT NULL,
                     [name] nvarchar(20) NOT NULL,
                     CONSTRAINT [pk_ape_dts_snapshot_composite]
                         PRIMARY KEY ([tenant_id], [id])
                  );
-                 INSERT INTO [{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}]
+                 INSERT INTO [{TEST_DB}].[{TEST_SCHEMA}].[{TEST_COMPOSITE_TABLE}]
                     ([tenant_id], [id], [name]) VALUES
                     (1, 1, N'a'),
                     (1, 2, N'b'),
@@ -302,7 +329,12 @@ mod test {
 
         let result = async {
             let mut meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
-            let tb_meta = Arc::new(meta_manager.get_tb_meta(TEST_SCHEMA, TEST_TABLE).await?.clone());
+            let tb_meta = Arc::new(
+                meta_manager
+                    .get_tb_meta(TEST_DB, TEST_SCHEMA, TEST_TABLE)
+                    .await?
+                    .clone(),
+            );
 
             let mut integer_splitter = MssqlSnapshotSplitter::new(
                 Arc::clone(&tb_meta),
@@ -348,7 +380,7 @@ mod test {
             let shut_down = Arc::new(AtomicBool::new(false));
             let filter_config = FilterConfig {
                 ignore_cols: format!(
-                    r#"json:[{{"db":"{TEST_SCHEMA}","tb":"{TEST_TABLE}","ignore_cols":["split_key"]}}]"#
+                    r#"json:[{{"db":"{TEST_DB}","tb":"{TEST_SCHEMA}.{TEST_TABLE}","ignore_cols":["split_key"]}}]"#
                 ),
                 ..Default::default()
             };
@@ -364,7 +396,11 @@ mod test {
                     meta_manager: MssqlTestEndpoint::create_meta_manager(pool.clone()).await?,
                     filter,
                     partition_cols: Arc::new(HashMap::from([(
-                        (TEST_SCHEMA.to_string(), TEST_TABLE.to_string()),
+                        (
+                            TEST_DB.to_string(),
+                            TEST_SCHEMA.to_string(),
+                            TEST_TABLE.to_string(),
+                        ),
                         "split_key".to_string(),
                     )])),
                     batch_size: 2,
@@ -378,10 +414,11 @@ mod test {
                     time_filter: TimeFilter::default(),
                 },
                 parallel_size: 3,
-                schema_tbs: HashMap::from([(
+                tbs: vec![(
+                    TEST_DB.to_string(),
                     TEST_SCHEMA.to_string(),
-                    vec![TEST_TABLE.to_string()],
-                )]),
+                    TEST_TABLE.to_string(),
+                )],
             };
 
             let items = collect_extractor_output(extractor, Arc::clone(&buffer)).await?;
@@ -405,9 +442,11 @@ mod test {
                             item.position,
                             Position::RdbSnapshotFinished {
                                 ref db_type,
+                                ref db,
                                 ref schema,
                                 ref tb,
                             } if db_type == &DbType::Mssql.to_string()
+                                && db == TEST_DB
                                 && schema == TEST_SCHEMA
                                 && tb == TEST_TABLE
                         ) =>
@@ -449,10 +488,11 @@ mod test {
                     time_filter: TimeFilter::default(),
                 },
                 parallel_size: 2,
-                schema_tbs: HashMap::from([(
+                tbs: vec![(
+                    TEST_DB.to_string(),
                     TEST_SCHEMA.to_string(),
-                    vec![TEST_COMPOSITE_TABLE.to_string()],
-                )]),
+                    TEST_COMPOSITE_TABLE.to_string(),
+                )],
             };
 
             let items = collect_extractor_output(extractor, Arc::clone(&buffer)).await?;
@@ -478,9 +518,11 @@ mod test {
                             item.position,
                             Position::RdbSnapshotFinished {
                                 ref db_type,
+                                ref db,
                                 ref schema,
                                 ref tb,
                             } if db_type == &DbType::Mssql.to_string()
+                                && db == TEST_DB
                                 && schema == TEST_SCHEMA
                                 && tb == TEST_COMPOSITE_TABLE
                         ) =>
@@ -498,6 +540,103 @@ mod test {
         .await;
 
         let cleanup_result = cleanup(&pool).await;
+        result?;
+        cleanup_result
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
+    async fn extracts_from_database_other_than_connection_database() -> anyhow::Result<()> {
+        let pool = create_pool().await?;
+        cleanup_cross_database(&pool).await?;
+        MssqlTestEndpoint::execute_batch(&pool, &format!("CREATE DATABASE [{CROSS_DB}];")).await?;
+        MssqlTestEndpoint::execute_batch(
+            &pool,
+            &format!(
+                "CREATE TABLE [{CROSS_DB}].[dbo].[cross_rows] (
+                    [id] int NOT NULL PRIMARY KEY,
+                    [name] nvarchar(20) NOT NULL
+                 );
+                 INSERT INTO [{CROSS_DB}].[dbo].[cross_rows] ([id], [name])
+                 VALUES (1, N'one'), (2, N'two');"
+            ),
+        )
+        .await?;
+
+        let result = async {
+            let buffer = Arc::new(DtQueue::new(32, 0, None, None));
+            let shut_down = Arc::new(AtomicBool::new(false));
+            let extractor = MssqlSnapshotExtractor {
+                shared: MssqlSnapshotShared {
+                    base_extractor: BaseExtractor {
+                        buffer: Arc::clone(&buffer),
+                        router: None,
+                        shut_down: Arc::clone(&shut_down),
+                    },
+                    connection_pool: pool.clone(),
+                    meta_manager: MssqlTestEndpoint::create_meta_manager(pool.clone()).await?,
+                    filter: Arc::new(RdbFilter::from_config(
+                        &FilterConfig::default(),
+                        &DbType::Mssql,
+                    )?),
+                    partition_cols: Arc::new(HashMap::new()),
+                    batch_size: 2,
+                    parallel_type: RdbParallelType::Table,
+                    recovery: None,
+                },
+                extract_state: ExtractState {
+                    monitor: ExtractorMonitor::new(TaskMonitorHandle::default(), String::new())
+                        .await,
+                    data_marker: None,
+                    time_filter: TimeFilter::default(),
+                },
+                parallel_size: 1,
+                tbs: vec![(
+                    CROSS_DB.to_string(),
+                    "dbo".to_string(),
+                    "cross_rows".to_string(),
+                )],
+            };
+
+            let items = collect_extractor_output(extractor, Arc::clone(&buffer)).await?;
+            assert!(shut_down.load(Ordering::Acquire));
+            let mut ids = Vec::new();
+            let mut finished = false;
+            for item in items {
+                match item.dt_data {
+                    DtData::Dml { row_data } => {
+                        assert_eq!(row_data.db, CROSS_DB);
+                        assert_eq!(row_data.schema, "dbo");
+                        assert_eq!(row_data.tb, "cross_rows");
+                        match row_data.require_after()?.get("id") {
+                            Some(ColValue::Long(id)) => ids.push(*id),
+                            value => anyhow::bail!("unexpected cross database id: {value:?}"),
+                        }
+                    }
+                    DtData::Commit { .. }
+                        if matches!(
+                            item.position,
+                            Position::RdbSnapshotFinished {
+                                ref db,
+                                ref schema,
+                                ref tb,
+                                ..
+                            } if db == CROSS_DB && schema == "dbo" && tb == "cross_rows"
+                        ) =>
+                    {
+                        finished = true;
+                    }
+                    _ => {}
+                }
+            }
+            ids.sort_unstable();
+            assert_eq!(ids, [1, 2]);
+            assert!(finished);
+            anyhow::Ok(())
+        }
+        .await;
+
+        let cleanup_result = cleanup_cross_database(&pool).await;
         result?;
         cleanup_result
     }

@@ -28,6 +28,7 @@ use dt_common::{
 pub struct DatabaseRecovery {
     task_id: String,
     pool: ResumerDbPool,
+    db: String,
     schema: String,
     table: String,
 
@@ -43,12 +44,16 @@ impl DatabaseRecovery {
     ) -> Result<Self> {
         let recovery = match resumer_config {
             ResumerConfig::FromDB {
-                table_full_name, ..
+                db_type,
+                table_full_name,
+                ..
             } => {
-                let (schema, table) = ResumerUtil::get_full_table_name(table_full_name)?;
+                let (db, schema, table) =
+                    ResumerUtil::get_checkpoint_db_schema_tb(table_full_name, db_type)?;
                 Self {
                     task_id: task_id.to_string(),
                     pool,
+                    db,
                     schema,
                     table,
                     resumer_doing: DashMap::new(),
@@ -213,11 +218,7 @@ impl DatabaseRecovery {
                 }
             }
             ResumerDbPool::Mssql(pool) => {
-                let full_table_name = format!(
-                    "{}.{}",
-                    SqlUtil::escape_by_db_type(&self.schema, &DbType::Mssql),
-                    SqlUtil::escape_by_db_type(&self.table, &DbType::Mssql)
-                );
+                let full_table_name = self.mssql_full_table_name();
                 let mut query = Query::new(format!(
                     "SELECT resumer_type, position_key, position_data \
                      FROM {full_table_name} WHERE task_id = @P1"
@@ -323,15 +324,18 @@ impl DatabaseRecovery {
         Ok(())
     }
 
+    fn mssql_full_table_name(&self) -> String {
+        SqlUtil::render_rdb_table(&DbType::Mssql, &self.db, &self.schema, &self.table)
+    }
+
     fn handle_mssql_query_error(&self, error: tiberius::error::Error) -> Result<()> {
         let is_missing_resume_store = classify_mssql_error(&error)
             .error_code()
             .is_some_and(Self::is_missing_resume_store);
         if is_missing_resume_store {
             log::info!(
-                "Resume table {}.{} does not exist, will start from beginning",
-                self.schema,
-                self.table
+                "Resume table {} does not exist, will start from beginning",
+                self.mssql_full_table_name()
             );
             return Ok(());
         }
@@ -393,9 +397,9 @@ impl DatabaseRecovery {
 
 #[async_trait]
 impl Recovery for DatabaseRecovery {
-    async fn check_snapshot_finished(&self, schema: &str, tb: &str) -> bool {
+    async fn check_snapshot_finished(&self, db: &str, schema: &str, tb: &str) -> bool {
         let resumer_key = ResumerUtil::get_key_from_base(
-            (schema.to_string(), tb.to_string()),
+            (db.to_string(), schema.to_string(), tb.to_string()),
             ResumerType::SnapshotFinished,
         );
         self.resumer_finished.contains_key(&resumer_key)
@@ -403,12 +407,13 @@ impl Recovery for DatabaseRecovery {
 
     async fn get_snapshot_resume_position(
         &self,
+        db: &str,
         schema: &str,
         tb: &str,
         _checkpoint: bool,
     ) -> Option<Position> {
         let resumer_key = ResumerUtil::get_key_from_base(
-            (schema.to_string(), tb.to_string()),
+            (db.to_string(), schema.to_string(), tb.to_string()),
             ResumerType::SnapshotDoing,
         );
         let position_str = self.resumer_doing.get(&resumer_key).map(|p| p.to_owned());
@@ -423,8 +428,10 @@ impl Recovery for DatabaseRecovery {
     }
 
     async fn get_cdc_resume_position(&self) -> Option<Position> {
-        let resumer_key =
-            ResumerUtil::get_key_from_base(("".to_string(), "".to_string()), ResumerType::CdcDoing);
+        let resumer_key = ResumerUtil::get_key_from_base(
+            (String::new(), String::new(), String::new()),
+            ResumerType::CdcDoing,
+        );
         let position_str = self.resumer_doing.get(&resumer_key).map(|p| p.to_owned());
         if let Some(position_str) = position_str {
             return Some(Position::from_log(&position_str));

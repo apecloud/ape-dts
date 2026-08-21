@@ -26,13 +26,14 @@ mod test {
 
     use super::super::TASK_CONFIG_FILE;
 
+    const TEST_DATABASE: &str = "ape_dts";
     const TEST_SCHEMA: &str = "ape_dts_sinker_test";
     const TEST_TABLE: &str = "transaction_rows";
 
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
             MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Sinker)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DATABASE).await?;
         endpoint.create_pool_with(1, 15).await
     }
 
@@ -40,7 +41,8 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_TABLE}];
+                "USE [{TEST_DATABASE}];
+                 DROP TABLE IF EXISTS [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}];
                  IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
                     EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
             ),
@@ -53,8 +55,9 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
-                 CREATE TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] (
+                "USE [{TEST_DATABASE}];
+                 EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
+                 CREATE TABLE [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}] (
                     id int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
                     code nvarchar(20) NOT NULL UNIQUE,
                     computed_code AS UPPER(code),
@@ -72,6 +75,7 @@ mod test {
 
     fn row(id: i32, code: &str) -> RowData {
         RowData::new(
+            TEST_DATABASE.to_string(),
             TEST_SCHEMA.to_string(),
             TEST_TABLE.to_string(),
             0,
@@ -102,7 +106,10 @@ mod test {
         let row = connection
             .client_mut()
             .query(
-                &format!("SELECT COUNT_BIG(*) AS row_count FROM [{TEST_SCHEMA}].[{TEST_TABLE}]"),
+                &format!(
+                    "SELECT COUNT_BIG(*) AS row_count \
+                     FROM [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}]"
+                ),
                 &[],
             )
             .await?
@@ -117,7 +124,10 @@ mod test {
         let row = connection
             .client_mut()
             .query(
-                &format!("SELECT code FROM [{TEST_SCHEMA}].[{TEST_TABLE}] WHERE id = @P1"),
+                &format!(
+                    "SELECT code FROM [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}] \
+                     WHERE id = @P1"
+                ),
                 &[&id],
             )
             .await?
@@ -156,7 +166,10 @@ mod test {
 
             MssqlTestEndpoint::execute_batch(
                 &pool,
-                &format!("INSERT INTO [{TEST_SCHEMA}].[{TEST_TABLE}] (code) VALUES (N'generated')"),
+                &format!(
+                    "INSERT INTO [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}] (code) \
+                     VALUES (N'generated')"
+                ),
             )
             .await?;
             sinker.sink_dml(vec![row(20, "explicit")], true).await?;
@@ -215,7 +228,10 @@ mod test {
 
             MssqlTestEndpoint::execute_batch(
                 &pool,
-                &format!("INSERT INTO [{TEST_SCHEMA}].[{TEST_TABLE}] (code) VALUES (N'generated')"),
+                &format!(
+                    "INSERT INTO [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}] (code) \
+                     VALUES (N'generated')"
+                ),
             )
             .await?;
             assert_eq!(row_count(&pool).await?, 4);
@@ -238,7 +254,10 @@ mod test {
             let router = RdbRouter::from_config(
                 &RouterConfig::Rdb {
                     schema_map: String::new(),
-                    tb_map: format!("source_schema.source_table:{TEST_SCHEMA}.{TEST_TABLE}"),
+                    tb_map: format!(
+                        "{TEST_DATABASE}.source_schema.source_table:\
+                         {TEST_DATABASE}.{TEST_SCHEMA}.{TEST_TABLE}"
+                    ),
                     col_map: String::new(),
                     topic_map: String::new(),
                 },
@@ -257,7 +276,7 @@ mod test {
 
             assert!(!sinker
                 .meta_manager
-                .get_tb_meta(TEST_SCHEMA, TEST_TABLE)
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, TEST_TABLE)
                 .await?
                 .basic
                 .cols
@@ -265,7 +284,8 @@ mod test {
             MssqlTestEndpoint::execute_batch(
                 &pool,
                 &format!(
-                    "ALTER TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] ADD [added_after_cache] int NULL;"
+                    "ALTER TABLE [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}] \
+                     ADD [added_after_cache] int NULL;"
                 ),
             )
             .await?;
@@ -275,6 +295,7 @@ mod test {
                     dt_data: DtData::Commit { xid: String::new() },
                     position: Position::RdbSnapshotFinished {
                         db_type: "mssql".to_string(),
+                        db: TEST_DATABASE.to_string(),
                         schema: "source_schema".to_string(),
                         tb: "source_table".to_string(),
                     },
@@ -284,7 +305,7 @@ mod test {
 
             assert!(sinker
                 .meta_manager
-                .get_tb_meta(TEST_SCHEMA, TEST_TABLE)
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, TEST_TABLE)
                 .await?
                 .basic
                 .cols

@@ -77,7 +77,9 @@ impl MongoStructExtractor {
 
     pub async fn push_dt_data(&mut self, statement: StructStatement) -> anyhow::Result<()> {
         let struct_data = StructData {
+            db: String::new(),
             schema: String::new(),
+            tb: String::new(),
             statement,
         };
         self.base_extractor

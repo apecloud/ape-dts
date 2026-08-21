@@ -255,6 +255,7 @@ impl MysqlCdcExtractor {
                         .parse_row_data(table_map_event, &w.included_columns, event)
                         .await?;
                     let row_data = RowData::new(
+                        String::new(),
                         table_map_event.database_name.clone(),
                         table_map_event.table_name.clone(),
                         0,
@@ -284,6 +285,7 @@ impl MysqlCdcExtractor {
                         .parse_row_data(table_map_event, &u.included_columns_after, &mut event.1)
                         .await?;
                     let row_data = RowData::new(
+                        String::new(),
                         table_map_event.database_name.clone(),
                         table_map_event.table_name.clone(),
                         0,
@@ -310,6 +312,7 @@ impl MysqlCdcExtractor {
                         .parse_row_data(table_map_event, &d.included_columns, event)
                         .await?;
                     let row_data = RowData::new(
+                        String::new(),
                         table_map_event.database_name.clone(),
                         table_map_event.table_name.clone(),
                         0,
@@ -474,7 +477,7 @@ impl MysqlCdcExtractor {
         let tb = &table_map_event.table_name;
         let filtered = self.filter.filter_event(db, tb, &row_type);
         if filtered {
-            return !self.extract_state.is_data_marker_info(db, tb);
+            return !self.extract_state.is_data_marker_info("", db, tb);
         }
         filtered
     }

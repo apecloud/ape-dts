@@ -1,5 +1,7 @@
 use anyhow::{bail, Context};
 
+use crate::{config::config_enums::DbType, utils::sql_util::SqlUtil};
+
 use super::{
     mssql_connection_pool::{MssqlClient, MssqlConnectionPool, MssqlPooledConnection},
     mssql_tb_meta::MssqlTbMeta,
@@ -112,10 +114,11 @@ impl<'pool, 'meta> MssqlTableSinkSession<'pool, 'meta> {
         if !tb_meta.has_identity_col() {
             return None;
         }
-        let table = format!(
-            "{}.{}",
-            escape_identifier(&tb_meta.basic.schema),
-            escape_identifier(&tb_meta.basic.tb)
+        let table = SqlUtil::render_rdb_table(
+            &DbType::Mssql,
+            &tb_meta.basic.db,
+            &tb_meta.basic.schema,
+            &tb_meta.basic.tb,
         );
         Some(format!(
             "SET IDENTITY_INSERT {table} {}",
@@ -138,10 +141,6 @@ async fn execute_control_statement(
     Ok(())
 }
 
-fn escape_identifier(identifier: &str) -> String {
-    format!("[{}]", identifier.replace(']', "]]"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +149,7 @@ mod tests {
     fn build_tb_meta(identity_col: Option<&str>) -> MssqlTbMeta {
         MssqlTbMeta {
             basic: RdbTbMeta {
+                db: "database]name".to_string(),
                 schema: "schema]name".to_string(),
                 tb: "table]name".to_string(),
                 ..Default::default()
@@ -165,11 +165,11 @@ mod tests {
 
         assert_eq!(
             MssqlTableSinkSession::identity_insert_statement(&tb_meta, true).as_deref(),
-            Some("SET IDENTITY_INSERT [schema]]name].[table]]name] ON")
+            Some("SET IDENTITY_INSERT [database]]name].[schema]]name].[table]]name] ON")
         );
         assert_eq!(
             MssqlTableSinkSession::identity_insert_statement(&tb_meta, false).as_deref(),
-            Some("SET IDENTITY_INSERT [schema]]name].[table]]name] OFF")
+            Some("SET IDENTITY_INSERT [database]]name].[schema]]name].[table]]name] OFF")
         );
     }
 

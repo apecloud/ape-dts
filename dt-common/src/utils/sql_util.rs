@@ -77,6 +77,21 @@ impl SqlUtil {
         result
     }
 
+    /// Renders the internal (db, schema, table) identity as a dialect-escaped SQL name.
+    /// `db` is an optional leading qualifier and stays empty for databases without three-part names.
+    pub fn render_rdb_table(db_type: &DbType, db: &str, schema: &str, tb: &str) -> String {
+        let mut parts = Vec::with_capacity(3);
+        if !db.is_empty() {
+            parts.push(db);
+        }
+        parts.extend([schema, tb]);
+        parts
+            .into_iter()
+            .map(|part| Self::escape_by_db_type(part, db_type))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
     pub fn unescape(token: &str, escape_pair: &CharEscapePair) -> String {
         if !Self::is_escaped(token, escape_pair) {
             return token.to_string();
@@ -430,5 +445,25 @@ mod tests {
             &DbType::Mssql,
             &SqlUtil::get_escape_pairs(&DbType::Mssql),
         ));
+    }
+
+    #[test]
+    fn test_render_rdb_table() {
+        assert_eq!(
+            "[sales]].archive].[dbo].[order]]detail]",
+            SqlUtil::render_rdb_table(&DbType::Mssql, "sales].archive", "dbo", "order]detail")
+        );
+        assert_eq!(
+            "[dbo].[orders]",
+            SqlUtil::render_rdb_table(&DbType::Mssql, "", "dbo", "orders")
+        );
+        assert_eq!(
+            "`db1`.`orders`",
+            SqlUtil::render_rdb_table(&DbType::Mysql, "", "db1", "orders")
+        );
+        assert_eq!(
+            r#""public"."orders""#,
+            SqlUtil::render_rdb_table(&DbType::Pg, "", "public", "orders")
+        );
     }
 }

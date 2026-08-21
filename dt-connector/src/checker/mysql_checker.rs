@@ -60,7 +60,12 @@ impl Checker for MysqlChecker {
         Ok(())
     }
 
-    async fn invalidate_meta_cache(&mut self, schema: &str, tb: &str) -> anyhow::Result<()> {
+    async fn invalidate_meta_cache(
+        &mut self,
+        _db: &str,
+        schema: &str,
+        tb: &str,
+    ) -> anyhow::Result<()> {
         self.meta_manager.invalidate_cache_for_table(schema, tb);
         Ok(())
     }

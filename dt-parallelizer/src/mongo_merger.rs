@@ -15,13 +15,17 @@ pub struct MongoMerger;
 #[async_trait]
 impl Merger for MongoMerger {
     async fn merge(&mut self, data: Vec<RowData>) -> anyhow::Result<Vec<TbMergedData>> {
-        let mut tb_data_map: HashMap<String, Vec<RowData>> = HashMap::new();
+        let mut tb_data_map: HashMap<(String, String, String), Vec<RowData>> = HashMap::new();
         for row_data in data {
-            let full_tb = format!("{}.{}", row_data.schema, row_data.tb);
-            if let Some(tb_data) = tb_data_map.get_mut(&full_tb) {
+            let table_key = (
+                row_data.db.clone(),
+                row_data.schema.clone(),
+                row_data.tb.clone(),
+            );
+            if let Some(tb_data) = tb_data_map.get_mut(&table_key) {
                 tb_data.push(row_data);
             } else {
-                tb_data_map.insert(full_tb, vec![row_data]);
+                tb_data_map.insert(table_key, vec![row_data]);
             }
         }
 

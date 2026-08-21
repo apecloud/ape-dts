@@ -1,5 +1,7 @@
-pub(super) fn extract_created_tables(batches: &[String]) -> anyhow::Result<Vec<(String, String)>> {
-    let mut db_tbs = Vec::new();
+pub(super) fn extract_created_tables(
+    batches: &[String],
+) -> anyhow::Result<Vec<(String, String, String)>> {
+    let mut db_schema_tbs = Vec::new();
     for batch in batches {
         let mut scanner = MssqlDdlScanner::new(batch);
         while scanner.find_keyword("create")? {
@@ -18,16 +20,26 @@ pub(super) fn extract_created_tables(batches: &[String]) -> anyhow::Result<Vec<(
                 identifiers.push(identifier);
             }
 
-            let table = identifiers.pop().unwrap();
+            let table = identifiers.last().unwrap();
             // Local and global temporary tables are connection-scoped and are not snapshot
             // migration targets.
-            if !table.starts_with('#') {
-                let schema = identifiers.pop().unwrap_or_else(|| "dbo".to_string());
-                db_tbs.push((schema, table));
+            if table.starts_with('#') {
+                continue;
             }
+
+            anyhow::ensure!(
+                identifiers.len() == 3,
+                "MSSQL test table must be explicitly qualified as database.schema.table: {}",
+                identifiers.join(".")
+            );
+            db_schema_tbs.push((
+                identifiers.remove(0),
+                identifiers.remove(0),
+                identifiers.remove(0),
+            ));
         }
     }
-    Ok(db_tbs)
+    Ok(db_schema_tbs)
 }
 
 struct MssqlDdlScanner<'a> {
@@ -226,7 +238,20 @@ impl<'a> MssqlDdlScanner<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::extract_created_tables;
+
+    fn collect_sql_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect_sql_files(&path, files);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("sql") {
+                files.push(path);
+            }
+        }
+    }
 
     #[test]
     fn extracts_created_tables_from_batches() {
@@ -234,19 +259,18 @@ mod tests {
             r#"
                 -- CREATE TABLE ignored.comment_table (id int);
                 DROP TABLE IF EXISTS dbo.orders;
-                CREATE /* comment */ TABLE dbo.orders (id int);
-                CREATE TABLE [schema.with.dot].[table with space] (id int);
+                CREATE /* comment */ TABLE database_name.dbo.orders (id int);
+                CREATE TABLE [database.with.dot].[schema.with.dot].[table with space] (id int);
                 SELECT 'CREATE TABLE ignored.string_table (id int)';
                 /* nested /* CREATE TABLE ignored.block_table (id int) */ comment */
-                CREATE TABLE [escaped]]schema].[escaped]]table] (id int);
+                CREATE TABLE [escaped]]database].[escaped]]schema].[escaped]]table] (id int);
                 [CREATE] TABLE ignored.quoted_keyword (id int);
                 CREATE [TABLE] ignored.quoted_table_keyword (id int);
                 CREATE VIEW dbo.order_view AS SELECT 1 AS id;
-                CREATE TABLE "quoted""schema"."quoted""table" (id int);
+                CREATE TABLE "quoted""database"."quoted""schema"."quoted""table" (id int);
             "#
             .to_string(),
             r#"
-                CREATE TABLE default_schema_table (id int);
                 CREATE TABLE database_name.audit.events (id int);
                 CREATE TABLE #local_temp (id int);
                 CREATE TABLE ##global_temp (id int);
@@ -258,17 +282,42 @@ mod tests {
         assert_eq!(
             db_tbs,
             vec![
-                ("dbo".to_string(), "orders".to_string()),
                 (
+                    "database_name".to_string(),
+                    "dbo".to_string(),
+                    "orders".to_string()
+                ),
+                (
+                    "database.with.dot".to_string(),
                     "schema.with.dot".to_string(),
                     "table with space".to_string()
                 ),
-                ("escaped]schema".to_string(), "escaped]table".to_string()),
-                ("quoted\"schema".to_string(), "quoted\"table".to_string()),
-                ("dbo".to_string(), "default_schema_table".to_string()),
-                ("audit".to_string(), "events".to_string()),
+                (
+                    "escaped]database".to_string(),
+                    "escaped]schema".to_string(),
+                    "escaped]table".to_string()
+                ),
+                (
+                    "quoted\"database".to_string(),
+                    "quoted\"schema".to_string(),
+                    "quoted\"table".to_string()
+                ),
+                (
+                    "database_name".to_string(),
+                    "audit".to_string(),
+                    "events".to_string()
+                ),
             ]
         );
+    }
+
+    #[test]
+    fn rejects_table_without_explicit_database_and_schema() {
+        for table in ["orders", "dbo.orders"] {
+            let error =
+                extract_created_tables(&[format!("CREATE TABLE {table} (id int);")]).unwrap_err();
+            assert!(error.to_string().contains("database.schema.table"));
+        }
     }
 
     #[test]
@@ -278,5 +327,20 @@ mod tests {
         assert!(error
             .to_string()
             .contains("unterminated bracket identifier"));
+    }
+
+    #[test]
+    fn snapshot_fixtures_use_explicit_database_schema_table() {
+        let fixture_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/mssql_to_mssql/snapshot");
+        let mut sql_files = Vec::new();
+        collect_sql_files(&fixture_root, &mut sql_files);
+        assert!(!sql_files.is_empty());
+
+        for path in sql_files {
+            let sql = fs::read_to_string(&path).unwrap();
+            extract_created_tables(&[sql])
+                .unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+        }
     }
 }

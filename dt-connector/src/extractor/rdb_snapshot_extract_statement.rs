@@ -127,11 +127,10 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
             String::new()
         };
         let mut sql = format!(
-            "SELECT {}{} FROM {}.{}",
+            "SELECT {}{} FROM {}",
             top,
             extract_cols_str,
-            self.escape(&self.rdb_tb_meta.schema),
-            self.escape(&self.rdb_tb_meta.tb)
+            self.table_name()
         );
         let mut predicates: Vec<String> = Vec::new();
         match self.where_condition {
@@ -404,9 +403,8 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
         match order_cols.len() {
             0 => Ok(String::new()),
             1 => Ok(format!(
-                "{}.{}.{} ASC",
-                self.escape(&self.rdb_tb_meta.schema),
-                self.escape(&self.rdb_tb_meta.tb),
+                "{}.{} ASC",
+                self.table_name(),
                 self.escape(&order_cols[0])
             )),
             _ => {
@@ -414,14 +412,7 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                 // (col_1, col_2, col_3) ASC does not trigger index scan sometimes
                 Ok(order_cols
                     .iter()
-                    .map(|col| {
-                        format!(
-                            "{}.{}.{} ASC",
-                            self.escape(&self.rdb_tb_meta.schema),
-                            self.escape(&self.rdb_tb_meta.tb),
-                            self.escape(col)
-                        )
-                    })
+                    .map(|col| format!("{}.{} ASC", self.table_name(), self.escape(col)))
                     .collect::<Vec<String>>()
                     .join(", "))
             }
@@ -431,6 +422,15 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
     #[inline(always)]
     fn escape(&self, token: &str) -> String {
         SqlUtil::escape_by_db_type(token, &self.db_type)
+    }
+
+    fn table_name(&self) -> String {
+        SqlUtil::render_rdb_table(
+            &self.db_type,
+            &self.rdb_tb_meta.db,
+            &self.rdb_tb_meta.schema,
+            &self.rdb_tb_meta.tb,
+        )
     }
 }
 

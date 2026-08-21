@@ -96,6 +96,7 @@ impl MysqlMetaFetcher {
             //     Self::get_foreign_keys(&self.conn_pool, &self.db_type, schema, tb).await?;
 
             let basic = RdbTbMeta {
+                db: String::new(),
                 schema: schema.to_string(),
                 tb: tb.to_string(),
                 cols,
@@ -432,9 +433,11 @@ impl MysqlMetaFetcher {
             let ref_tb = SqlUtil::try_get_mysql_string(&row, "REFERENCED_TABLE_NAME")?;
             let ref_col = SqlUtil::try_get_mysql_string(&row, "REFERENCED_COLUMN_NAME")?;
             let key = ForeignKey {
+                db: String::new(),
                 schema: my_schema,
                 tb: my_tb,
                 col: my_col,
+                ref_db: String::new(),
                 ref_schema,
                 ref_tb,
                 ref_col,

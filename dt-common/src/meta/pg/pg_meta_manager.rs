@@ -115,6 +115,7 @@ impl PgMetaManager {
             //     Self::get_foreign_keys(&self.conn_pool, schema, tb).await?;
 
             let basic = RdbTbMeta {
+                db: String::new(),
                 schema: schema.to_string(),
                 tb: tb.to_string(),
                 cols,
@@ -393,9 +394,11 @@ impl PgMetaManager {
             let ref_tb: String = row.try_get("referenced_table_name")?;
             let ref_col: String = row.try_get("referenced_column_name")?;
             let key = ForeignKey {
+                db: String::new(),
                 schema: my_schema,
                 tb: my_tb,
                 col: my_col,
+                ref_db: String::new(),
                 ref_schema,
                 ref_tb,
                 ref_col,

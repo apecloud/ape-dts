@@ -1,38 +1,40 @@
-DROP TABLE IF EXISTS dbo.basic_test;
-DROP TABLE IF EXISTS basic_test.fk_child;
-DROP TABLE IF EXISTS basic_test.fk_parent;
-DROP TABLE IF EXISTS basic_test.basic_types;
-DROP TABLE IF EXISTS basic_test.no_pk_no_uk;
-DROP TABLE IF EXISTS basic_test.one_pk_no_uk;
-DROP TABLE IF EXISTS basic_test.no_pk_one_uk;
-DROP TABLE IF EXISTS basic_test.no_pk_multi_uk;
-DROP TABLE IF EXISTS basic_test.one_pk_multi_uk;
-DROP TABLE IF EXISTS basic_test.numeric_table;
-DROP TABLE IF EXISTS basic_test.date_time_table;
-DROP TABLE IF EXISTS basic_test.string_binary_table;
-DROP TABLE IF EXISTS basic_test.[col has special character];
-DROP TABLE IF EXISTS basic_test.ignore_cols_1;
-DROP TABLE IF EXISTS basic_test.ignore_cols_2;
-DROP TABLE IF EXISTS [Upper_Case_DB].[Upper_Case_TB];
-DROP TABLE IF EXISTS basic_test.where_condition_1;
-DROP TABLE IF EXISTS basic_test.where_condition_2;
-DROP TABLE IF EXISTS basic_test.where_condition_3;
-DROP TABLE IF EXISTS basic_test.composite_pk_table;
-DROP TABLE IF EXISTS basic_test.composite_unique_key_table;
-DROP TABLE IF EXISTS basic_test.nullable_composite_unique_key_table;
-DROP TABLE IF EXISTS basic_test.multi_primary_and_single_unique_table;
-DROP TABLE IF EXISTS basic_test.all_pks;
-DROP TABLE IF EXISTS basic_test.tbl_1;
-DROP TABLE IF EXISTS basic_test.tbl_2;
-DROP TABLE IF EXISTS basic_test.tbl_3;
-DROP TABLE IF EXISTS basic_test.tbl_4;
-DROP TABLE IF EXISTS basic_test.tbl_5;
-DROP TABLE IF EXISTS basic_test.server_generated_cols;
-DROP TABLE IF EXISTS basic_test.timestamp_alias_cols;
+USE [ape_dts];
+GO
+DROP TABLE IF EXISTS [ape_dts].dbo.basic_test;
+DROP TABLE IF EXISTS [ape_dts].basic_test.fk_child;
+DROP TABLE IF EXISTS [ape_dts].basic_test.fk_parent;
+DROP TABLE IF EXISTS [ape_dts].basic_test.basic_types;
+DROP TABLE IF EXISTS [ape_dts].basic_test.no_pk_no_uk;
+DROP TABLE IF EXISTS [ape_dts].basic_test.one_pk_no_uk;
+DROP TABLE IF EXISTS [ape_dts].basic_test.no_pk_one_uk;
+DROP TABLE IF EXISTS [ape_dts].basic_test.no_pk_multi_uk;
+DROP TABLE IF EXISTS [ape_dts].basic_test.one_pk_multi_uk;
+DROP TABLE IF EXISTS [ape_dts].basic_test.numeric_table;
+DROP TABLE IF EXISTS [ape_dts].basic_test.date_time_table;
+DROP TABLE IF EXISTS [ape_dts].basic_test.string_binary_table;
+DROP TABLE IF EXISTS [ape_dts].basic_test.[col has special character];
+DROP TABLE IF EXISTS [ape_dts].basic_test.ignore_cols_1;
+DROP TABLE IF EXISTS [ape_dts].basic_test.ignore_cols_2;
+DROP TABLE IF EXISTS [ape_dts].[Upper_Case_DB].[Upper_Case_TB];
+DROP TABLE IF EXISTS [ape_dts].basic_test.where_condition_1;
+DROP TABLE IF EXISTS [ape_dts].basic_test.where_condition_2;
+DROP TABLE IF EXISTS [ape_dts].basic_test.where_condition_3;
+DROP TABLE IF EXISTS [ape_dts].basic_test.composite_pk_table;
+DROP TABLE IF EXISTS [ape_dts].basic_test.composite_unique_key_table;
+DROP TABLE IF EXISTS [ape_dts].basic_test.nullable_composite_unique_key_table;
+DROP TABLE IF EXISTS [ape_dts].basic_test.multi_primary_and_single_unique_table;
+DROP TABLE IF EXISTS [ape_dts].basic_test.all_pks;
+DROP TABLE IF EXISTS [ape_dts].basic_test.tbl_1;
+DROP TABLE IF EXISTS [ape_dts].basic_test.tbl_2;
+DROP TABLE IF EXISTS [ape_dts].basic_test.tbl_3;
+DROP TABLE IF EXISTS [ape_dts].basic_test.tbl_4;
+DROP TABLE IF EXISTS [ape_dts].basic_test.tbl_5;
+DROP TABLE IF EXISTS [ape_dts].basic_test.server_generated_cols;
+DROP TABLE IF EXISTS [ape_dts].basic_test.timestamp_alias_cols;
 IF SCHEMA_ID(N'basic_test') IS NULL EXEC(N'CREATE SCHEMA basic_test');
 IF SCHEMA_ID(N'Upper_Case_DB') IS NULL EXEC(N'CREATE SCHEMA [Upper_Case_DB]');
 
-CREATE TABLE basic_test.basic_types (
+CREATE TABLE [ape_dts].basic_test.basic_types (
     id int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
     enabled bit NOT NULL,
     amount decimal(18, 4) NOT NULL,
@@ -44,7 +46,7 @@ CREATE TABLE basic_test.basic_types (
     external_id uniqueidentifier NOT NULL
 );
 
-CREATE TABLE basic_test.no_pk_no_uk (
+CREATE TABLE [ape_dts].basic_test.no_pk_no_uk (
     tiny_value tinyint NULL,
     small_value smallint NULL,
     int_value int NULL,
@@ -61,7 +63,7 @@ CREATE TABLE basic_test.no_pk_no_uk (
     uuid_value uniqueidentifier NULL
 );
 
-CREATE TABLE basic_test.one_pk_no_uk (
+CREATE TABLE [ape_dts].basic_test.one_pk_no_uk (
     id int NOT NULL PRIMARY KEY,
     nullable_int int NULL,
     amount decimal(20, 4) NULL,
@@ -70,14 +72,14 @@ CREATE TABLE basic_test.one_pk_no_uk (
     datetime_value datetime2(7) NULL
 );
 
-CREATE TABLE basic_test.no_pk_one_uk (
+CREATE TABLE [ape_dts].basic_test.no_pk_one_uk (
     row_value int NULL,
     code nvarchar(30) NOT NULL UNIQUE,
     amount decimal(20, 4) NULL,
     text_value nvarchar(100) NULL
 );
 
-CREATE TABLE basic_test.no_pk_multi_uk (
+CREATE TABLE [ape_dts].basic_test.no_pk_multi_uk (
     row_value int NULL,
     code nvarchar(30) NOT NULL,
     external_id uniqueidentifier NOT NULL,
@@ -89,7 +91,7 @@ CREATE TABLE basic_test.no_pk_multi_uk (
     UNIQUE (group_id, sequence_id)
 );
 
-CREATE TABLE basic_test.one_pk_multi_uk (
+CREATE TABLE [ape_dts].basic_test.one_pk_multi_uk (
     id int NOT NULL PRIMARY KEY,
     code nvarchar(30) NOT NULL UNIQUE,
     external_id uniqueidentifier NOT NULL UNIQUE,
@@ -99,7 +101,7 @@ CREATE TABLE basic_test.one_pk_multi_uk (
     UNIQUE (group_id, sequence_id)
 );
 
-CREATE TABLE basic_test.numeric_table (
+CREATE TABLE [ape_dts].basic_test.numeric_table (
     id int NOT NULL PRIMARY KEY,
     bit_value bit NULL,
     tiny_value tinyint NULL,
@@ -114,7 +116,7 @@ CREATE TABLE basic_test.numeric_table (
     numeric_value numeric(20, 6) NULL
 );
 
-CREATE TABLE basic_test.date_time_table (
+CREATE TABLE [ape_dts].basic_test.date_time_table (
     id int NOT NULL PRIMARY KEY,
     date_value date NULL,
     time_value time(7) NULL,
@@ -124,7 +126,7 @@ CREATE TABLE basic_test.date_time_table (
     datetimeoffset_value datetimeoffset(7) NULL
 );
 
-CREATE TABLE basic_test.string_binary_table (
+CREATE TABLE [ape_dts].basic_test.string_binary_table (
     id int NOT NULL PRIMARY KEY,
     char_value char(8) NULL,
     varchar_value varchar(100) NULL,
@@ -137,7 +139,7 @@ CREATE TABLE basic_test.string_binary_table (
     json_value nvarchar(max) NULL CHECK (json_value IS NULL OR ISJSON(json_value) = 1)
 );
 
-CREATE TABLE basic_test.[col has special character] (
+CREATE TABLE [ape_dts].basic_test.[col has special character] (
     [p:k] int NOT NULL PRIMARY KEY,
     [select] nvarchar(100) NULL,
     [col,2] nvarchar(100) NULL,
@@ -146,20 +148,20 @@ CREATE TABLE basic_test.[col has special character] (
     [col]]5] nvarchar(100) NULL
 );
 
-CREATE TABLE basic_test.ignore_cols_1 (
+CREATE TABLE [ape_dts].basic_test.ignore_cols_1 (
     id int NOT NULL PRIMARY KEY,
     keep_value int NULL,
     ignored_value_1 int NULL,
     ignored_value_2 int NULL
 );
-CREATE TABLE basic_test.ignore_cols_2 (
+CREATE TABLE [ape_dts].basic_test.ignore_cols_2 (
     id int NOT NULL PRIMARY KEY,
     keep_value int NULL,
     also_keep_value int NULL,
     ignored_value int NULL
 );
 
-CREATE TABLE [Upper_Case_DB].[Upper_Case_TB] (
+CREATE TABLE [ape_dts].[Upper_Case_DB].[Upper_Case_TB] (
     [Id] int NOT NULL PRIMARY KEY,
     [FIELD_1] int NOT NULL,
     [field_2] int NOT NULL,
@@ -168,42 +170,42 @@ CREATE TABLE [Upper_Case_DB].[Upper_Case_TB] (
     UNIQUE ([FIELD_1], [field_2], [Field_3])
 );
 
-CREATE TABLE basic_test.where_condition_1 (id int NOT NULL PRIMARY KEY, value int NOT NULL);
-CREATE TABLE basic_test.where_condition_2 (id int NOT NULL PRIMARY KEY, value int NOT NULL);
-CREATE TABLE basic_test.where_condition_3 (id int NOT NULL PRIMARY KEY, value int NOT NULL);
+CREATE TABLE [ape_dts].basic_test.where_condition_1 (id int NOT NULL PRIMARY KEY, value int NOT NULL);
+CREATE TABLE [ape_dts].basic_test.where_condition_2 (id int NOT NULL PRIMARY KEY, value int NOT NULL);
+CREATE TABLE [ape_dts].basic_test.where_condition_3 (id int NOT NULL PRIMARY KEY, value int NOT NULL);
 
-CREATE TABLE basic_test.fk_parent (
+CREATE TABLE [ape_dts].basic_test.fk_parent (
     id int NOT NULL PRIMARY KEY,
     code int NOT NULL UNIQUE,
     value nvarchar(30) NULL
 );
-CREATE TABLE basic_test.fk_child (
+CREATE TABLE [ape_dts].basic_test.fk_child (
     id int NOT NULL PRIMARY KEY,
     parent_code int NOT NULL,
     value nvarchar(30) NULL,
     CONSTRAINT fk_basic_child_parent FOREIGN KEY (parent_code)
-        REFERENCES basic_test.fk_parent (code)
+        REFERENCES [ape_dts].basic_test.fk_parent (code)
 );
 
-CREATE TABLE basic_test.composite_pk_table (
+CREATE TABLE [ape_dts].basic_test.composite_pk_table (
     pk1 int NOT NULL,
     pk2 nvarchar(10) NOT NULL,
     value int NULL,
     PRIMARY KEY (pk1, pk2)
 );
-CREATE TABLE basic_test.composite_unique_key_table (
+CREATE TABLE [ape_dts].basic_test.composite_unique_key_table (
     uk1 int NOT NULL,
     uk2 nvarchar(10) NOT NULL,
     value int NULL,
     UNIQUE (uk1, uk2)
 );
-CREATE TABLE basic_test.nullable_composite_unique_key_table (
+CREATE TABLE [ape_dts].basic_test.nullable_composite_unique_key_table (
     value int NULL,
     uk2 nvarchar(10) NULL,
     uk1 int NULL,
     UNIQUE (uk1, uk2)
 );
-CREATE TABLE basic_test.multi_primary_and_single_unique_table (
+CREATE TABLE [ape_dts].basic_test.multi_primary_and_single_unique_table (
     pk1 int NOT NULL,
     pk2 nvarchar(10) NOT NULL,
     uk1 int NOT NULL UNIQUE,
@@ -211,40 +213,40 @@ CREATE TABLE basic_test.multi_primary_and_single_unique_table (
     value int NULL,
     PRIMARY KEY (pk1, pk2)
 );
-CREATE TABLE basic_test.all_pks (
+CREATE TABLE [ape_dts].basic_test.all_pks (
     pk1 int NOT NULL,
     pk2 int NOT NULL,
     pk3 int NOT NULL,
     PRIMARY KEY (pk1, pk2, pk3)
 );
 
-CREATE TABLE basic_test.tbl_1 (
+CREATE TABLE [ape_dts].basic_test.tbl_1 (
     id bigint NOT NULL PRIMARY KEY,
     code varchar(50) NOT NULL,
     name nvarchar(100) NULL
 );
-CREATE UNIQUE INDEX tbl_1_code_uidx ON basic_test.tbl_1 (code);
-CREATE TABLE basic_test.tbl_2 (
+CREATE UNIQUE INDEX tbl_1_code_uidx ON [ape_dts].basic_test.tbl_1 (code);
+CREATE TABLE [ape_dts].basic_test.tbl_2 (
     code varchar(21) NULL,
     name nvarchar(30) NOT NULL
 );
-CREATE UNIQUE INDEX tbl_2_name_uidx ON basic_test.tbl_2 (name);
-CREATE TABLE basic_test.tbl_3 (
+CREATE UNIQUE INDEX tbl_2_name_uidx ON [ape_dts].basic_test.tbl_2 (name);
+CREATE TABLE [ape_dts].basic_test.tbl_3 (
     id int NOT NULL PRIMARY KEY,
     code varchar(21) NOT NULL,
     name nvarchar(30) NULL,
     CONSTRAINT tbl_3_code_uk UNIQUE (code)
 );
-CREATE TABLE basic_test.tbl_4 (
+CREATE TABLE [ape_dts].basic_test.tbl_4 (
     code varchar(21) NOT NULL,
     name nvarchar(30) NOT NULL,
     CONSTRAINT tbl_4_code_name_uk UNIQUE (code, name)
 );
-CREATE TABLE basic_test.tbl_5 (
+CREATE TABLE [ape_dts].basic_test.tbl_5 (
     code varchar(21) NULL,
     name nvarchar(30) NULL
 );
-CREATE TABLE basic_test.server_generated_cols (
+CREATE TABLE [ape_dts].basic_test.server_generated_cols (
     id int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
     base_value int NOT NULL,
     computed_value AS (base_value * 2),
@@ -255,7 +257,7 @@ CREATE TABLE basic_test.server_generated_cols (
     row_version rowversion NOT NULL,
     PERIOD FOR SYSTEM_TIME (valid_from, valid_to)
 );
-CREATE TABLE basic_test.timestamp_alias_cols (
+CREATE TABLE [ape_dts].basic_test.timestamp_alias_cols (
     id int NOT NULL PRIMARY KEY,
     value nvarchar(30) NOT NULL,
     legacy_version timestamp NOT NULL

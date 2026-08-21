@@ -11,13 +11,14 @@ mod test {
 
     use super::super::TASK_CONFIG_FILE;
 
+    const TEST_DATABASE: &str = "ape_dts";
     const TEST_SCHEMA: &str = "ape_dts_meta_manager_test";
     const TEST_TABLE: &str = "catalog_types";
 
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
             MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, TaskConfigEndpoint::Extractor)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DATABASE).await?;
         endpoint.create_pool_with(1, 15).await
     }
 
@@ -25,7 +26,8 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             pool,
             &format!(
-                "DROP TABLE IF EXISTS [{TEST_SCHEMA}].[{TEST_TABLE}];
+                "USE [{TEST_DATABASE}];
+                 DROP TABLE IF EXISTS [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}];
                  IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
                     EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
             ),
@@ -41,8 +43,9 @@ mod test {
         MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
-                "EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
-                 CREATE TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] (
+                "USE [{TEST_DATABASE}];
+                 EXEC(N'CREATE SCHEMA [{TEST_SCHEMA}]');
+                 CREATE TABLE [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}] (
                     [tenant_id] int NOT NULL,
                     [id] bigint IDENTITY(1, 1) NOT NULL,
                     [optional_name] nvarchar(100) NULL,
@@ -86,12 +89,21 @@ mod test {
             drop(connection);
 
             assert!(manager
-                .list_schemas()
+                .list_schemas(TEST_DATABASE)
                 .await?
                 .contains(&TEST_SCHEMA.to_string()));
-            assert_eq!(manager.list_tables(TEST_SCHEMA).await?, vec![TEST_TABLE]);
+            assert_eq!(
+                manager.list_tables(TEST_DATABASE, TEST_SCHEMA).await?,
+                vec![TEST_TABLE]
+            );
+            assert!(manager
+                .list_schema_tables(TEST_DATABASE)
+                .await?
+                .contains(&(TEST_SCHEMA.to_string(), TEST_TABLE.to_string())));
 
-            let meta = manager.get_tb_meta(TEST_SCHEMA, TEST_TABLE).await?;
+            let meta = manager
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, TEST_TABLE)
+                .await?;
             assert_eq!(
                 meta.basic.cols,
                 [
@@ -106,6 +118,7 @@ mod test {
                     "version"
                 ]
             );
+            assert_eq!(meta.basic.db, TEST_DATABASE);
             assert_eq!(meta.basic.schema, TEST_SCHEMA);
             assert_eq!(meta.basic.tb, TEST_TABLE);
             assert!(meta.basic.nullable_cols.contains("optional_name"));
@@ -142,27 +155,30 @@ mod test {
 
             MssqlTestEndpoint::execute_batch(
                 &pool,
-                &format!("ALTER TABLE [{TEST_SCHEMA}].[{TEST_TABLE}] ADD [added_later] int NULL;"),
+                &format!(
+                    "ALTER TABLE [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}] \
+                     ADD [added_later] int NULL;"
+                ),
             )
             .await?;
 
             assert!(!manager
-                .get_tb_meta(TEST_SCHEMA, TEST_TABLE)
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, TEST_TABLE)
                 .await?
                 .basic
                 .cols
                 .contains(&"added_later".to_string()));
 
-            manager.invalidate_cache_for_table(TEST_SCHEMA, TEST_TABLE);
+            manager.invalidate_cache_for_table(TEST_DATABASE, TEST_SCHEMA, TEST_TABLE);
             assert!(manager
-                .get_tb_meta(TEST_SCHEMA, TEST_TABLE)
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, TEST_TABLE)
                 .await?
                 .basic
                 .cols
                 .contains(&"added_later".to_string()));
 
             assert!(manager
-                .get_tb_meta(TEST_SCHEMA, "table_does_not_exist")
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, "table_does_not_exist")
                 .await
                 .is_err());
             anyhow::Ok(())

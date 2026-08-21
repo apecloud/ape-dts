@@ -1,3 +1,3 @@
-2026-08-12 01:00:00.000001 | current_position | {"type":"RdbSnapshot","db_type":"mssql","schema":"resume_log_test","tb":"resume_rows","order_key":{"single":["id","3"]}}
-2026-08-12 01:00:00.000002 | current_position | {"type":"RdbSnapshot","db_type":"mssql","schema":"resume_log_test","tb":"resume table.*","order_key":{"single":["p.k","1"]}}
-2026-08-12 01:00:00.000003 | current_position | {"type":"RdbSnapshot","db_type":"mssql","schema":"resume_log_test","tb":"string_key_rows","order_key":{"single":["code","b"]}}
+2026-08-12 01:00:00.000001 | current_position | {"type":"RdbSnapshot","db_type":"mssql","db":"ape_dts","schema":"resume_log_test","tb":"resume_rows","order_key":{"single":["id","3"]}}
+2026-08-12 01:00:00.000002 | current_position | {"type":"RdbSnapshot","db_type":"mssql","db":"ape_dts","schema":"resume_log_test","tb":"resume table.*","order_key":{"single":["p.k","1"]}}
+2026-08-12 01:00:00.000003 | current_position | {"type":"RdbSnapshot","db_type":"mssql","db":"ape_dts","schema":"resume_log_test","tb":"string_key_rows","order_key":{"single":["code","b"]}}

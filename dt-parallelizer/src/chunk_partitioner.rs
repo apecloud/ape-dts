@@ -15,6 +15,7 @@ pub struct ChunkPartitioner {}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ChunkKey<'a> {
+    pub db: &'a str,
     pub schema: &'a str,
     pub tb: &'a str,
     pub chunk_id: u64,
@@ -91,7 +92,10 @@ impl MergedGroupPlan {
     }
 
     fn can_append(&self, last_key: ChunkKey<'_>, key: ChunkKey<'_>) -> bool {
-        last_key.schema == key.schema && last_key.tb == key.tb && self.last_chunk_id < key.chunk_id
+        last_key.db == key.db
+            && last_key.schema == key.schema
+            && last_key.tb == key.tb
+            && self.last_chunk_id < key.chunk_id
     }
 
     fn append(&mut self, group_index: usize, key: ChunkKey<'_>, group_rows: usize) {
@@ -302,6 +306,7 @@ impl ChunkPartitioner {
         for (row_index, row_data) in data.iter().enumerate() {
             // Keep each logical snapshot chunk together before any strategy-specific rebalance.
             let key = ChunkKey {
+                db: row_data.db.as_str(),
                 schema: row_data.schema.as_str(),
                 tb: row_data.tb.as_str(),
                 chunk_id: row_data.chunk_id,
@@ -405,7 +410,8 @@ impl ChunkPartitioner {
         sorted_group_indexes.sort_by(|left, right| {
             let left_key = group_keys[*left];
             let right_key = group_keys[*right];
-            (left_key.schema, left_key.tb, left_key.chunk_id).cmp(&(
+            (left_key.db, left_key.schema, left_key.tb, left_key.chunk_id).cmp(&(
+                right_key.db,
                 right_key.schema,
                 right_key.tb,
                 right_key.chunk_id,
@@ -724,16 +730,21 @@ impl ChunkPartitioner {
     }
 
     pub fn partition_raw(data: Vec<DtItem>) -> anyhow::Result<Vec<Vec<DtItem>>> {
-        let mut sub_data_map: HashMap<String, Vec<DtItem>> = HashMap::new();
-        let default_key = "default".to_string();
+        let mut sub_data_map: HashMap<Option<(String, String, String, u64)>, Vec<DtItem>> =
+            HashMap::new();
+        let default_key = None;
         for item in data {
             if let DtData::Dml { row_data } = &item.dt_data {
-                let sch_tb_chunk =
-                    format!("{}.{}.{}", row_data.schema, row_data.tb, row_data.chunk_id);
-                if let Some(sub_data) = sub_data_map.get_mut(&sch_tb_chunk) {
+                let table_chunk = Some((
+                    row_data.db.clone(),
+                    row_data.schema.clone(),
+                    row_data.tb.clone(),
+                    row_data.chunk_id,
+                ));
+                if let Some(sub_data) = sub_data_map.get_mut(&table_chunk) {
                     sub_data.push(item);
                 } else {
-                    sub_data_map.insert(sch_tb_chunk, vec![item]);
+                    sub_data_map.insert(table_chunk, vec![item]);
                 }
             } else if let Some(sub_data) = sub_data_map.get_mut(&default_key) {
                 sub_data.push(item);
@@ -774,6 +785,7 @@ mod tests {
         data_size: usize,
     ) -> RowData {
         let mut row = RowData::new(
+            String::new(),
             schema.to_string(),
             tb.to_string(),
             chunk_id,

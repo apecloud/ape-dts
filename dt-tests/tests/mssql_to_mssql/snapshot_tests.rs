@@ -12,7 +12,7 @@ mod test {
         let runner = RdbTestRunner::new(test_dir).await.unwrap();
         runner.run_snapshot_test(false).await.unwrap();
         for (table, expected_count) in expected_counts {
-            let db_tb = RdbTestRunner::parse_full_tb_name(table, &DbType::Mssql);
+            let db_tb = RdbTestRunner::parse_full_tb_name(table, &DbType::Mssql).unwrap();
             let rows = runner.fetch_data(&db_tb, DST).await.unwrap();
             assert_eq!(
                 rows.len(),
@@ -101,18 +101,18 @@ mod test {
         run_resume_test(
             "mssql_to_mssql/snapshot/resume_log_test",
             &[
-                ("resume_log_test.resume_rows", 5),
-                ("resume_log_test.config_rows", 4),
-                ("resume_log_test.composite_rows", 4),
-                ("resume_log_test.binary_key_rows", 4),
-                ("[resume_log_test].[resume table.*]", 3),
-                ("resume_log_test.nullable_composite_unique_rows", 6),
-                ("resume_log_test.string_key_rows", 5),
-                ("resume_log_test.date_key_rows", 5),
-                ("resume_log_test.no_key_rows", 4),
-                ("resume_log_test.fresh_rows", 3),
-                ("resume_log_test.finished_config_rows", 0),
-                ("resume_log_test.finished_log_rows", 0),
+                ("ape_dts.resume_log_test.resume_rows", 5),
+                ("ape_dts.resume_log_test.config_rows", 4),
+                ("ape_dts.resume_log_test.composite_rows", 4),
+                ("ape_dts.resume_log_test.binary_key_rows", 4),
+                ("ape_dts.[resume_log_test].[resume table.*]", 3),
+                ("ape_dts.resume_log_test.nullable_composite_unique_rows", 6),
+                ("ape_dts.resume_log_test.string_key_rows", 5),
+                ("ape_dts.resume_log_test.date_key_rows", 5),
+                ("ape_dts.resume_log_test.no_key_rows", 4),
+                ("ape_dts.resume_log_test.fresh_rows", 3),
+                ("ape_dts.resume_log_test.finished_config_rows", 0),
+                ("ape_dts.resume_log_test.finished_log_rows", 0),
             ],
         )
         .await;
@@ -124,15 +124,15 @@ mod test {
         run_resume_test(
             "mssql_to_mssql/snapshot/resume_db_test",
             &[
-                ("resume_test.resume_rows", 5),
-                ("resume_test.composite_rows", 4),
-                ("resume_test.binary_key_rows", 4),
-                ("[resume_test].[resume table.*]", 3),
-                ("resume_test.nullable_composite_unique_rows", 6),
-                ("resume_test.string_key_rows", 5),
-                ("resume_test.fresh_rows", 3),
-                ("resume_test.finished_rows", 0),
-                ("resume_test.finished_rows_2", 0),
+                ("ape_dts.resume_test.resume_rows", 5),
+                ("ape_dts.resume_test.composite_rows", 4),
+                ("ape_dts.resume_test.binary_key_rows", 4),
+                ("ape_dts.[resume_test].[resume table.*]", 3),
+                ("ape_dts.resume_test.nullable_composite_unique_rows", 6),
+                ("ape_dts.resume_test.string_key_rows", 5),
+                ("ape_dts.resume_test.fresh_rows", 3),
+                ("ape_dts.resume_test.finished_rows", 0),
+                ("ape_dts.resume_test.finished_rows_2", 0),
             ],
         )
         .await;
@@ -144,18 +144,18 @@ mod test {
         run_resume_test(
             "mssql_to_mssql/snapshot/parallel_resume_log_test",
             &[
-                ("parallel_resume_log.integer_rows", 12),
-                ("parallel_resume_log.nullable_rows", 11),
-                ("[parallel_resume_log].[string rows.*]", 8),
-                ("parallel_resume_log.composite_rows", 8),
-                ("parallel_resume_log.binary_rows", 8),
-                ("parallel_resume_log.decimal_rows", 8),
-                ("parallel_resume_log.date_rows", 8),
-                ("parallel_resume_log.no_key_rows", 8),
-                ("parallel_resume_log.unique_rows", 8),
-                ("parallel_resume_log.position_log_rows", 8),
-                ("parallel_resume_log.finished_rows", 0),
-                ("parallel_resume_log.finished_config_rows", 0),
+                ("ape_dts.parallel_resume_log.integer_rows", 12),
+                ("ape_dts.parallel_resume_log.nullable_rows", 11),
+                ("ape_dts.[parallel_resume_log].[string rows.*]", 8),
+                ("ape_dts.parallel_resume_log.composite_rows", 8),
+                ("ape_dts.parallel_resume_log.binary_rows", 8),
+                ("ape_dts.parallel_resume_log.decimal_rows", 8),
+                ("ape_dts.parallel_resume_log.date_rows", 8),
+                ("ape_dts.parallel_resume_log.no_key_rows", 8),
+                ("ape_dts.parallel_resume_log.unique_rows", 8),
+                ("ape_dts.parallel_resume_log.position_log_rows", 8),
+                ("ape_dts.parallel_resume_log.finished_rows", 0),
+                ("ape_dts.parallel_resume_log.finished_config_rows", 0),
             ],
         )
         .await;
@@ -167,16 +167,16 @@ mod test {
         run_resume_test(
             "mssql_to_mssql/snapshot/parallel_resume_db_test",
             &[
-                ("parallel_resume_db.integer_rows", 12),
-                ("parallel_resume_db.nullable_rows", 11),
-                ("[parallel_resume_db].[string rows.*]", 8),
-                ("parallel_resume_db.composite_rows", 8),
-                ("parallel_resume_db.binary_rows", 8),
-                ("parallel_resume_db.decimal_rows", 8),
-                ("parallel_resume_db.date_rows", 8),
-                ("parallel_resume_db.no_key_rows", 8),
-                ("parallel_resume_db.unique_rows", 8),
-                ("parallel_resume_db.finished_rows", 0),
+                ("ape_dts.parallel_resume_db.integer_rows", 12),
+                ("ape_dts.parallel_resume_db.nullable_rows", 11),
+                ("ape_dts.[parallel_resume_db].[string rows.*]", 8),
+                ("ape_dts.parallel_resume_db.composite_rows", 8),
+                ("ape_dts.parallel_resume_db.binary_rows", 8),
+                ("ape_dts.parallel_resume_db.decimal_rows", 8),
+                ("ape_dts.parallel_resume_db.date_rows", 8),
+                ("ape_dts.parallel_resume_db.no_key_rows", 8),
+                ("ape_dts.parallel_resume_db.unique_rows", 8),
+                ("ape_dts.parallel_resume_db.finished_rows", 0),
             ],
         )
         .await;

@@ -72,13 +72,13 @@ impl LogRecovery {
         };
         let position = Position::from_log(line);
         match &position {
-            Position::RdbSnapshot { schema, tb, .. } => {
-                tb_positions.insert((schema.clone(), tb.clone()), position);
+            Position::RdbSnapshot { db, schema, tb, .. } => {
+                tb_positions.insert((db.clone(), schema.clone(), tb.clone()), position);
             }
-            Position::RdbSnapshotFinished { schema, tb, .. } => {
+            Position::RdbSnapshotFinished { db, schema, tb, .. } => {
                 self.snapshot_cache
                     .finished_tbs
-                    .insert((schema.clone(), tb.clone()), true);
+                    .insert((db.clone(), schema.clone(), tb.clone()), true);
             }
 
             _ => {}
@@ -225,19 +225,22 @@ impl LogRecovery {
 
 #[async_trait]
 impl Recovery for LogRecovery {
-    async fn check_snapshot_finished(&self, schema: &str, tb: &str) -> bool {
-        self.snapshot_cache
-            .finished_tbs
-            .contains_key(&(schema.to_string(), tb.to_string()))
+    async fn check_snapshot_finished(&self, db: &str, schema: &str, tb: &str) -> bool {
+        self.snapshot_cache.finished_tbs.contains_key(&(
+            db.to_string(),
+            schema.to_string(),
+            tb.to_string(),
+        ))
     }
 
     async fn get_snapshot_resume_position(
         &self,
+        db: &str,
         schema: &str,
         tb: &str,
         checkpoint: bool,
     ) -> Option<Position> {
-        let key = (schema.to_string(), tb.to_string());
+        let key = (db.to_string(), schema.to_string(), tb.to_string());
         let tb_positions =
             if !checkpoint && self.snapshot_cache.current_tb_positions.contains_key(&key) {
                 &self.snapshot_cache.current_tb_positions

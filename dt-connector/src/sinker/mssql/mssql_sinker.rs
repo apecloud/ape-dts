@@ -238,16 +238,16 @@ impl Sinker for MssqlSinker {
     }
 
     async fn handle_control_item(&mut self, item: &DtItem) -> anyhow::Result<()> {
-        if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { schema, tb, .. }) =
+        if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { db, schema, tb, .. }) =
             (&item.dt_data, &item.position)
         {
-            let (routed_schema, routed_tb) = if let Some(router) = &self.router {
-                router.get_tb_map(schema, tb)
+            let (routed_db, routed_schema, routed_tb) = if let Some(router) = &self.router {
+                router.get_tb_map_with_db(db, schema, tb)
             } else {
-                (schema.as_str(), tb.as_str())
+                (db.as_str(), schema.as_str(), tb.as_str())
             };
             self.meta_manager
-                .invalidate_cache_for_table(routed_schema, routed_tb);
+                .invalidate_cache_for_table(routed_db, routed_schema, routed_tb);
         }
         Ok(())
     }

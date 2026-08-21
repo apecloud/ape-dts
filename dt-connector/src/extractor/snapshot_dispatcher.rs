@@ -145,10 +145,11 @@ impl SnapshotDispatcher {
 
     pub async fn fork_table_extract_state(
         extract_state: &ExtractState,
+        db: &str,
         schema: &str,
         tb: &str,
     ) -> (ExtractState, TableMonitorGuard) {
-        let task_id = TaskMonitorHandle::task_id_from_schema_tb(schema, tb);
+        let task_id = TaskMonitorHandle::task_id_from_db_schema_tb(db, schema, tb);
         let monitor_handle = extract_state.monitor.monitor.clone();
         let monitor = monitor_handle.build_monitor("extractor", &task_id);
         monitor_handle.register_monitor(&task_id, monitor);

@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use anyhow::{bail, Context};
-use connection_string::{AdoNetString, JdbcString};
 use dt_common::{
     config::{
         config_enums::DbType, connection_auth_config::ConnectionAuthConfig, task_config::TaskConfig,
@@ -36,7 +35,6 @@ pub struct MssqlTestEndpoint {
 struct MssqlEndpointConfig {
     connection_string: String,
     connection_auth: ConnectionAuthConfig,
-    database: String,
     app_name: Option<String>,
     max_connections: u32,
     connection_timeout_secs: u64,
@@ -83,7 +81,6 @@ impl MssqlTestEndpoint {
             db_type == DbType::Mssql,
             "MSSQL test endpoint requires an MSSQL endpoint, got {db_type:?}"
         );
-        let database = Self::database_from_connection_string(&connection_string)?;
         MssqlConnectionPool::build_client_config(
             &connection_string,
             &connection_auth,
@@ -94,7 +91,6 @@ impl MssqlTestEndpoint {
             config: MssqlEndpointConfig {
                 connection_string,
                 connection_auth,
-                database,
                 app_name,
                 max_connections,
                 connection_timeout_secs: timeout,
@@ -106,23 +102,17 @@ impl MssqlTestEndpoint {
         connection_string: &str,
         connection_auth: ConnectionAuthConfig,
     ) -> anyhow::Result<Self> {
-        let database = Self::database_from_connection_string(connection_string)?;
         MssqlConnectionPool::build_client_config(connection_string, &connection_auth, None)?;
 
         Ok(Self {
             config: MssqlEndpointConfig {
                 connection_string: connection_string.to_string(),
                 connection_auth,
-                database,
                 app_name: None,
                 max_connections: 2,
                 connection_timeout_secs: 15,
             },
         })
-    }
-
-    pub fn database(&self) -> &str {
-        &self.config.database
     }
 
     pub fn connection_string(&self) -> &str {
@@ -170,9 +160,20 @@ impl MssqlTestEndpoint {
         Ok(Client::connect(config, tcp.compat_write()).await?)
     }
 
-    pub async fn ensure_database(&self) -> anyhow::Result<()> {
+    async fn connect(&self) -> anyhow::Result<MssqlTestTdsClient> {
+        let config = MssqlConnectionPool::build_client_config(
+            &self.config.connection_string,
+            &self.config.connection_auth,
+            self.config.app_name.as_deref(),
+        )?;
+
+        let tcp = TcpStream::connect(config.get_addr()).await?;
+        tcp.set_nodelay(true)?;
+        Ok(Client::connect(config, tcp.compat_write()).await?)
+    }
+
+    pub async fn ensure_database(&self, database: &str) -> anyhow::Result<()> {
         let mut client = self.connect_to("master").await?;
-        let database = self.database();
         let database_literal = database.replace('\'', "''");
         let database_identifier = format!("[{}]", database.replace(']', "]]"));
         let sql = format!(
@@ -183,7 +184,7 @@ impl MssqlTestEndpoint {
     }
 
     pub async fn check_connection(&self) -> anyhow::Result<()> {
-        let mut client = self.connect_to(self.database()).await?;
+        let mut client = self.connect().await?;
         client
             .simple_query("SELECT 1")
             .await?
@@ -193,7 +194,7 @@ impl MssqlTestEndpoint {
     }
 
     pub async fn execute_batches(&self, batches: &[String]) -> anyhow::Result<()> {
-        let mut client = self.connect_to(self.database()).await?;
+        let mut client = self.connect().await?;
         for batch in batches {
             client
                 .simple_query(batch.as_str())
@@ -246,6 +247,7 @@ impl MssqlTestEndpoint {
 
     pub async fn fetch_table(
         &self,
+        db: &str,
         schema: &str,
         tb: &str,
         ignore_cols: Option<&HashSet<String>>,
@@ -253,7 +255,7 @@ impl MssqlTestEndpoint {
     ) -> anyhow::Result<Vec<RowData>> {
         let pool = self.create_pool().await?;
         let mut meta_manager = Self::create_meta_manager(pool).await?;
-        let tb_meta = meta_manager.get_tb_meta(schema, tb).await?.clone();
+        let tb_meta = meta_manager.get_tb_meta(db, schema, tb).await?.clone();
         let mut compare_ignore_cols = tb_meta.non_comparable_cols();
         if let Some(ignore_cols) = ignore_cols {
             compare_ignore_cols.extend(ignore_cols.iter().cloned());
@@ -261,7 +263,7 @@ impl MssqlTestEndpoint {
         let query_builder = RdbQueryBuilder::new_for_mssql(&tb_meta, Some(&compare_ignore_cols));
         let cols = query_builder.build_extract_cols_str()?;
         if cols.is_empty() {
-            bail!("MSSQL compare has no comparable columns for {schema}.{tb}");
+            bail!("MSSQL compare has no comparable columns for {db}.{schema}.{tb}");
         }
         let order_col = tb_meta
             .basic
@@ -271,24 +273,28 @@ impl MssqlTestEndpoint {
             .find(|col| !compare_ignore_cols.contains(*col))
             .context("MSSQL compare has no column available for ordering")?;
         let sql = format!(
-            "SELECT {cols} FROM {}.{} {where_sql} ORDER BY {} ASC",
-            Self::quote(schema),
-            Self::quote(tb),
+            "SELECT {cols} FROM {} {where_sql} ORDER BY {} ASC",
+            SqlUtil::render_rdb_table(&DbType::Mssql, db, schema, tb),
             Self::quote(order_col),
         );
 
-        let mut client = self.connect_to(self.database()).await?;
+        let mut client = self.connect().await?;
         let rows = client.simple_query(sql).await?.into_first_result().await?;
         rows.iter()
             .map(|row| RowData::from_mssql_row(row, &tb_meta, &Some(&compare_ignore_cols), None))
             .collect()
     }
 
-    pub async fn get_table_columns(&self, schema: &str, tb: &str) -> anyhow::Result<Vec<String>> {
+    pub async fn get_table_columns(
+        &self,
+        db: &str,
+        schema: &str,
+        tb: &str,
+    ) -> anyhow::Result<Vec<String>> {
         let pool = self.create_pool().await?;
         let mut meta_manager = Self::create_meta_manager(pool).await?;
         Ok(meta_manager
-            .get_tb_meta(schema, tb)
+            .get_tb_meta(db, schema, tb)
             .await?
             .basic
             .cols
@@ -301,22 +307,5 @@ impl MssqlTestEndpoint {
 
     fn quote(identifier: &str) -> String {
         SqlUtil::escape_by_db_type(identifier, &DbType::Mssql)
-    }
-
-    fn database_from_connection_string(connection_string: &str) -> anyhow::Result<String> {
-        if let Ok(ado) = connection_string.parse::<AdoNetString>() {
-            return ado
-                .get("database")
-                .cloned()
-                .context("MSSQL ADO.NET connection string must include database");
-        }
-
-        connection_string
-            .parse::<JdbcString>()
-            .context("failed to parse MSSQL JDBC connection string")?
-            .properties()
-            .get("database")
-            .cloned()
-            .context("MSSQL JDBC connection string must include database")
     }
 }

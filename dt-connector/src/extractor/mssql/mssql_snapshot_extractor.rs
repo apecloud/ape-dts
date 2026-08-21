@@ -45,7 +45,7 @@ pub struct MssqlSnapshotExtractor {
     pub shared: MssqlSnapshotShared,
     pub extract_state: ExtractState,
     pub parallel_size: usize,
-    pub schema_tbs: HashMap<String, Vec<String>>,
+    pub tbs: Vec<(String, String, String)>,
 }
 
 #[derive(Clone)]
@@ -54,7 +54,7 @@ pub struct MssqlSnapshotShared {
     pub connection_pool: MssqlConnectionPool,
     pub meta_manager: MssqlMetaManager,
     pub filter: Arc<RdbFilter>,
-    pub partition_cols: Arc<HashMap<(String, String), String>>,
+    pub partition_cols: Arc<HashMap<(String, String, String), String>>,
     pub batch_size: usize,
     pub parallel_type: RdbParallelType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
@@ -197,16 +197,14 @@ impl Extractor for MssqlSnapshotExtractor {
 
 impl MssqlSnapshotExtractor {
     fn collect_tables(&self) -> Vec<SnapshotTableId> {
-        let mut tables = Vec::new();
-        for (schema, tbs) in &self.schema_tbs {
-            for tb in tbs {
-                tables.push(SnapshotTableId {
-                    schema: schema.clone(),
-                    tb: tb.clone(),
-                });
-            }
-        }
-        tables
+        self.tbs
+            .iter()
+            .map(|(db, schema, tb)| SnapshotTableId {
+                db: db.clone(),
+                schema: schema.clone(),
+                tb: tb.clone(),
+            })
+            .collect()
     }
 
     async fn next_work(
@@ -454,7 +452,7 @@ impl MssqlSnapshotExtractor {
         }
         let ignore_cols = shared
             .filter
-            .get_ignore_cols(&tb_meta.basic.schema, &tb_meta.basic.tb)
+            .get_ignore_cols_with_db(&tb_meta.basic.db, &tb_meta.basic.schema, &tb_meta.basic.tb)
             .cloned();
         let mut connection = shared.connection_pool.get().await?;
         let mut rows = query
@@ -523,6 +521,7 @@ impl MssqlSnapshotDispatchState {
                 &mut active_table.extract_state,
                 Position::RdbSnapshotFinished {
                     db_type: DbType::Mssql.to_string(),
+                    db: table_id.db.clone(),
                     schema: table_id.schema.clone(),
                     tb: table_id.tb.clone(),
                 },
@@ -537,13 +536,17 @@ impl MssqlSnapshotDispatchState {
         let user_defined_partition_col = self
             .shared
             .partition_cols
-            .get(&(table_id.schema.clone(), table_id.tb.clone()))
+            .get(&(
+                table_id.db.clone(),
+                table_id.schema.clone(),
+                table_id.tb.clone(),
+            ))
             .cloned()
             .unwrap_or_default();
         let tb_meta = self
             .shared
             .meta_manager
-            .get_tb_meta(&table_id.schema, &table_id.tb)
+            .get_tb_meta(&table_id.db, &table_id.schema, &table_id.tb)
             .await?
             .clone();
         let table_ctx = MssqlTableCtx {
@@ -554,6 +557,7 @@ impl MssqlSnapshotDispatchState {
         table_ctx.validate_order_cols(&tb_meta)?;
         let (extract_state, monitor_guard) = SnapshotDispatcher::fork_table_extract_state(
             &self.root_extract_state,
+            &table_id.db,
             &table_id.schema,
             &table_id.tb,
         )
@@ -792,7 +796,7 @@ impl MssqlTableCtx {
         let ignore_cols = self
             .shared
             .filter
-            .get_ignore_cols(&self.table_id.schema, &self.table_id.tb)
+            .get_ignore_cols_with_db(&self.table_id.db, &self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
         let mut select_ignore_cols = ignore_cols;
@@ -800,7 +804,11 @@ impl MssqlTableCtx {
         let where_condition = self
             .shared
             .filter
-            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
+            .get_where_condition_with_db(
+                &self.table_id.db,
+                &self.table_id.schema,
+                &self.table_id.tb,
+            )
             .cloned()
             .unwrap_or_default();
         let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
@@ -855,14 +863,19 @@ impl MssqlTableCtx {
         tb_meta: &MssqlTbMeta,
         order_cols: &[String],
     ) -> anyhow::Result<u64> {
-        let ignore_cols = self
-            .shared
-            .filter
-            .get_ignore_cols(&self.table_id.schema, &self.table_id.tb);
+        let ignore_cols = self.shared.filter.get_ignore_cols_with_db(
+            &self.table_id.db,
+            &self.table_id.schema,
+            &self.table_id.tb,
+        );
         let where_condition = self
             .shared
             .filter
-            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
+            .get_where_condition_with_db(
+                &self.table_id.db,
+                &self.table_id.schema,
+                &self.table_id.tb,
+            )
             .cloned()
             .unwrap_or_default();
         let empty_ignore_cols = HashSet::new();
@@ -906,12 +919,18 @@ impl MssqlTableCtx {
         let mut resume_values = HashMap::new();
         if let Some(recovery) = &self.shared.recovery {
             let Some(Position::RdbSnapshot {
+                db,
                 schema,
                 tb,
                 order_key: Some(order_key),
                 ..
             }) = recovery
-                .get_snapshot_resume_position(&self.table_id.schema, &self.table_id.tb, checkpoint)
+                .get_snapshot_resume_position(
+                    &self.table_id.db,
+                    &self.table_id.schema,
+                    &self.table_id.tb,
+                    checkpoint,
+                )
                 .await
             else {
                 log_info!(
@@ -921,9 +940,10 @@ impl MssqlTableCtx {
                 );
                 return Ok(resume_values);
             };
-            if schema != self.table_id.schema || tb != self.table_id.tb {
+            if db != self.table_id.db || schema != self.table_id.schema || tb != self.table_id.tb {
                 log_info!(
-                    "{}.{} resume position schema/table does not match, ignoring it",
+                    "{}.{}.{} resume position database/schema/table does not match, ignoring it",
+                    MssqlSnapshotExtractor::quote(&self.table_id.db),
                     MssqlSnapshotExtractor::quote(&self.table_id.schema),
                     MssqlSnapshotExtractor::quote(&self.table_id.tb)
                 );
@@ -982,14 +1002,19 @@ impl MssqlTableCtx {
             MssqlSnapshotExtractor::quote(&self.table_id.schema),
             MssqlSnapshotExtractor::quote(&self.table_id.tb)
         );
-        let ignore_cols = self
-            .shared
-            .filter
-            .get_ignore_cols(&self.table_id.schema, &self.table_id.tb);
+        let ignore_cols = self.shared.filter.get_ignore_cols_with_db(
+            &self.table_id.db,
+            &self.table_id.schema,
+            &self.table_id.tb,
+        );
         let where_condition = self
             .shared
             .filter
-            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
+            .get_where_condition_with_db(
+                &self.table_id.db,
+                &self.table_id.schema,
+                &self.table_id.tb,
+            )
             .cloned()
             .unwrap_or_default();
         let empty_ignore_cols = HashSet::new();
@@ -1033,14 +1058,19 @@ impl MssqlTableCtx {
         if start_from_beginning {
             start_values = tb_meta.basic.get_default_order_col_values();
         }
-        let ignore_cols = self
-            .shared
-            .filter
-            .get_ignore_cols(&self.table_id.schema, &self.table_id.tb);
+        let ignore_cols = self.shared.filter.get_ignore_cols_with_db(
+            &self.table_id.db,
+            &self.table_id.schema,
+            &self.table_id.tb,
+        );
         let where_condition = self
             .shared
             .filter
-            .get_where_condition(&self.table_id.schema, &self.table_id.tb)
+            .get_where_condition_with_db(
+                &self.table_id.db,
+                &self.table_id.schema,
+                &self.table_id.tb,
+            )
             .cloned()
             .unwrap_or_default();
         let mut select_ignore_cols = ignore_cols.cloned().unwrap_or_default();

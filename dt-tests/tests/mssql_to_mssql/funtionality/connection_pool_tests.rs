@@ -25,9 +25,10 @@ mod test {
 
     use super::super::{JDBC_TASK_CONFIG_FILE, TASK_CONFIG_FILE};
 
-    const CROSS_TASK_TABLE: &str = "[dbo].[ape_dts_pool_cross_task_test]";
-    const TRANSACTION_TABLE: &str = "[dbo].[ape_dts_pool_transaction_test]";
-    const POISONED_TABLE: &str = "[dbo].[ape_dts_pool_poisoned_test]";
+    const TEST_DATABASE: &str = "ape_dts";
+    const CROSS_TASK_TABLE: &str = "[ape_dts].[dbo].[ape_dts_pool_cross_task_test]";
+    const TRANSACTION_TABLE: &str = "[ape_dts].[dbo].[ape_dts_pool_transaction_test]";
+    const POISONED_TABLE: &str = "[ape_dts].[dbo].[ape_dts_pool_poisoned_test]";
     const TABLE_SINK_IDENTITY_TABLE: &str = "ape_dts_pool_table_sink_identity_test";
     const TABLE_SINK_REGULAR_TABLE: &str = "ape_dts_pool_table_sink_regular_test";
 
@@ -41,7 +42,7 @@ mod test {
         max_connections: u32,
         connection_timeout_secs: u64,
     ) -> anyhow::Result<MssqlConnectionPool> {
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DATABASE).await?;
 
         let pool = MssqlConnectionPool::from_config(
             endpoint.connection_string(),
@@ -330,7 +331,7 @@ mod test {
     #[serial]
     async fn pool_accepts_ado_and_jdbc_strings_with_task_overrides() -> anyhow::Result<()> {
         let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
-        endpoint.ensure_database().await?;
+        endpoint.ensure_database(TEST_DATABASE).await?;
         let auth = endpoint.connection_auth();
         let ado_only_connection_string = format!(
             "{};User ID={};Password={};Encrypt=DANGER_PLAINTEXT;Application Name=from-ado-only",
@@ -383,7 +384,7 @@ mod test {
             );
             assert_eq!(
                 query_string(&mut connection, "SELECT DB_NAME()").await?,
-                endpoint.database()
+                TEST_DATABASE
             );
         }
         Ok(())
@@ -574,8 +575,8 @@ mod test {
     #[serial]
     async fn table_sink_session_uses_table_meta_to_control_identity_insert() -> anyhow::Result<()> {
         let pool = create_source_pool(1).await?;
-        let identity_table = format!("[dbo].[{TABLE_SINK_IDENTITY_TABLE}]");
-        let regular_table = format!("[dbo].[{TABLE_SINK_REGULAR_TABLE}]");
+        let identity_table = format!("[{TEST_DATABASE}].[dbo].[{TABLE_SINK_IDENTITY_TABLE}]");
+        let regular_table = format!("[{TEST_DATABASE}].[dbo].[{TABLE_SINK_REGULAR_TABLE}]");
         MssqlTestEndpoint::execute_batch(
             &pool,
             &format!(
@@ -593,6 +594,7 @@ mod test {
 
         let build_tb_meta = |table: &str, identity_col: Option<&str>| MssqlTbMeta {
             basic: RdbTbMeta {
+                db: TEST_DATABASE.to_string(),
                 schema: "dbo".to_string(),
                 tb: table.to_string(),
                 ..Default::default()

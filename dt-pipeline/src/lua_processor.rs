@@ -26,6 +26,7 @@ impl LuaProcessor {
 
             lua.globals().set("before", lua_before)?;
             lua.globals().set("after", lua_after)?;
+            lua.globals().set("db", row_data.db)?;
             lua.globals().set("schema", row_data.schema)?;
             lua.globals().set("tb", row_data.tb)?;
             lua.globals()
@@ -46,10 +47,11 @@ impl LuaProcessor {
             let before = self.lua_table_to_col_values(lua_before, blob_before)?;
             let after = self.lua_table_to_col_values(lua_after, blob_after)?;
 
+            let db = lua.globals().get("db")?;
             let schema = lua.globals().get("schema")?;
             let tb = lua.globals().get("tb")?;
             let row_type = RowType::from_str(&row_type)?;
-            let new_row_data = RowData::new(schema, tb, 0, row_type, before, after);
+            let new_row_data = RowData::new(db, schema, tb, 0, row_type, before, after);
             new_data.push(new_row_data);
         }
 
