@@ -26,6 +26,10 @@ pub enum DdlStatement {
     PgTruncateTable(PgTruncateTableStatement),
     PgCreateIndex(PgCreateIndexStatement),
 
+    MssqlCreateTable(PgCreateTableStatement),
+    MssqlCreateIndex(MysqlCreateIndexStatement),
+    MssqlDropIndex(PgCreateIndexStatement),
+
     DropMultiTable(DropMultiTableStatement),
     RenameMultiTable(RenameMultiTableStatement),
     PgDropMultiIndex(PgDropMultiIndexStatement),
@@ -108,6 +112,10 @@ impl DdlStatement {
             DdlStatement::PgTruncateTable(s) => (s.schema.clone(), s.tb.clone()),
             DdlStatement::PgCreateIndex(s) => (s.schema.clone(), s.tb.clone()),
 
+            DdlStatement::MssqlCreateTable(s) => (s.schema.clone(), s.tb.clone()),
+            DdlStatement::MssqlCreateIndex(s) => (s.db.clone(), s.tb.clone()),
+            DdlStatement::MssqlDropIndex(s) => (s.schema.clone(), s.tb.clone()),
+
             DdlStatement::DropTable(s) => (s.schema.clone(), s.tb.clone()),
 
             DdlStatement::RenameTable(s) => (s.schema.clone(), s.tb.clone()),
@@ -134,6 +142,90 @@ impl DdlStatement {
             DdlStatement::MongoCommand(s) => (s.new_schema.clone(), s.new_tb.clone()),
             _ => (String::new(), String::new()),
         }
+    }
+
+    /// Returns the explicitly qualified parts stored by the statement. Missing
+    /// database and schema values are resolved by `DdlData` from its defaults.
+    pub fn get_db_schema_tb(&self, db_type: &DbType) -> (String, String, String) {
+        let (namespace, tb) = self.get_schema_tb();
+        match self {
+            DdlStatement::CreateDatabase(_)
+            | DdlStatement::DropDatabase(_)
+            | DdlStatement::AlterDatabase(_) => (namespace, String::new(), tb),
+
+            DdlStatement::CreateSchema(_)
+            | DdlStatement::DropSchema(_)
+            | DdlStatement::AlterSchema(_) => (String::new(), namespace, tb),
+
+            DdlStatement::MysqlCreateTable(_)
+            | DdlStatement::MysqlAlterTable(_)
+            | DdlStatement::MysqlAlterTableRename(_)
+            | DdlStatement::MysqlTruncateTable(_)
+            | DdlStatement::MysqlCreateIndex(_)
+            | DdlStatement::MysqlDropIndex(_) => (namespace, String::new(), tb),
+
+            DdlStatement::MongoCommand(_) => (namespace, String::new(), tb),
+
+            // The generic DROP/RENAME variants use their namespace field as a
+            // database for MySQL and as a schema for PostgreSQL/MSSQL.
+            _ if matches!(db_type, DbType::Mysql) => (namespace, String::new(), tb),
+            _ => (String::new(), namespace, tb),
+        }
+    }
+
+    pub fn get_rename_to_db_schema_tb(&self, db_type: &DbType) -> (String, String, String) {
+        let (namespace, tb) = self.get_rename_to_schema_tb();
+        match self {
+            DdlStatement::MysqlAlterTableRename(_) | DdlStatement::MongoCommand(_) => {
+                (namespace, String::new(), tb)
+            }
+            _ if matches!(db_type, DbType::Mysql) => (namespace, String::new(), tb),
+            _ => (String::new(), namespace, tb),
+        }
+    }
+
+    pub fn route_db_schema_tb(
+        &mut self,
+        db_type: &DbType,
+        dst_db: String,
+        dst_schema: String,
+        dst_tb: String,
+    ) {
+        match self {
+            DdlStatement::CreateDatabase(_)
+            | DdlStatement::DropDatabase(_)
+            | DdlStatement::AlterDatabase(_) => {
+                let namespace = if matches!(db_type, DbType::Mssql) {
+                    dst_db
+                } else {
+                    dst_schema
+                };
+                self.route(namespace, dst_tb);
+            }
+
+            DdlStatement::CreateSchema(_)
+            | DdlStatement::DropSchema(_)
+            | DdlStatement::AlterSchema(_) => self.route(dst_schema, dst_tb),
+
+            // Existing MySQL/PG/Mongo routes use the middle tuple item as
+            // their logical database/schema namespace. MSSQL uses it as the
+            // physical schema.
+            _ => self.route(dst_schema, dst_tb),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn route_rename_db_schema_tb(
+        &mut self,
+        _db_type: &DbType,
+        _dst_db: String,
+        dst_schema: String,
+        dst_tb: String,
+        _dst_new_db: String,
+        dst_new_schema: String,
+        dst_new_tb: String,
+    ) {
+        self.route_rename_table(dst_schema, dst_tb, dst_new_schema, dst_new_tb);
     }
 
     pub fn route_rename_table(
@@ -242,6 +334,24 @@ impl DdlStatement {
             }
 
             DdlStatement::PgCreateTable(s) => {
+                if !s.schema.is_empty() {
+                    s.schema = dst_schema;
+                }
+                s.tb = dst_tb;
+            }
+            DdlStatement::MssqlCreateTable(s) => {
+                if !s.schema.is_empty() {
+                    s.schema = dst_schema;
+                }
+                s.tb = dst_tb;
+            }
+            DdlStatement::MssqlCreateIndex(s) => {
+                if !s.db.is_empty() {
+                    s.db = dst_schema;
+                }
+                s.tb = dst_tb;
+            }
+            DdlStatement::MssqlDropIndex(s) => {
                 if !s.schema.is_empty() {
                     s.schema = dst_schema;
                 }
@@ -500,6 +610,77 @@ pub struct PgDropIndexStatement {
 }
 
 impl DdlStatement {
+    pub fn to_sql_with_default_info(
+        &self,
+        db_type: &DbType,
+        default_db: &str,
+        default_schema: &str,
+    ) -> String {
+        if !matches!(db_type, DbType::Mssql) {
+            return self.to_sql(db_type);
+        }
+
+        match self {
+            DdlStatement::MssqlCreateTable(s) => {
+                let mut sql = "CREATE TABLE".to_string();
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                sql = append_db_schema_tb(&sql, default_db, schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+            DdlStatement::DropTable(s) => {
+                let mut sql = "DROP TABLE".to_string();
+                if s.if_exists {
+                    sql = format!("{} IF EXISTS", sql);
+                }
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                sql = append_db_schema_tb(&sql, default_db, schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+            DdlStatement::MssqlCreateIndex(s) => {
+                let mut sql = "CREATE".to_string();
+                if let Some(index_kind) = &s.index_kind {
+                    sql = format!("{} {}", sql, index_kind.to_uppercase());
+                }
+                sql = format!("{} INDEX", sql);
+                sql = append_identifier(&sql, &s.index_name, true, db_type);
+                sql = format!("{} ON", sql);
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                sql = append_db_schema_tb(&sql, default_db, schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+            DdlStatement::MssqlDropIndex(s) => {
+                let mut sql = "DROP INDEX".to_string();
+                if s.if_not_exists {
+                    sql = format!("{} IF EXISTS", sql);
+                }
+                if let Some(index_name) = &s.index_name {
+                    sql = append_identifier(&sql, index_name, true, db_type);
+                }
+                sql = format!("{} ON", sql);
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                sql = append_db_schema_tb(&sql, default_db, schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+            _ => self.to_sql(db_type),
+        }
+    }
+
     pub fn to_sql(&self, db_type: &DbType) -> String {
         match self {
             DdlStatement::CreateDatabase(s) => {
@@ -508,6 +689,37 @@ impl DdlStatement {
                     sql = format!("{} IF NOT EXISTS", sql);
                 }
                 sql = append_identifier(&sql, &s.db, true, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlCreateTable(s) => {
+                let mut sql = "CREATE TABLE".to_string();
+                sql = append_tb(&sql, &s.schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlCreateIndex(s) => {
+                let mut sql = "CREATE".to_string();
+                if let Some(index_kind) = &s.index_kind {
+                    sql = format!("{} {}", sql, index_kind.to_uppercase());
+                }
+                sql = format!("{} INDEX", sql);
+                sql = append_identifier(&sql, &s.index_name, true, db_type);
+                sql = format!("{} ON", sql);
+                sql = append_tb(&sql, &s.db, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlDropIndex(s) => {
+                let mut sql = "DROP INDEX".to_string();
+                if s.if_not_exists {
+                    sql = format!("{} IF EXISTS", sql);
+                }
+                if let Some(index_name) = &s.index_name {
+                    sql = append_identifier(&sql, index_name, true, db_type);
+                }
+                sql = format!("{} ON", sql);
+                sql = append_tb(&sql, &s.schema, &s.tb, db_type);
                 append_unparsed(sql, &s.unparsed)
             }
 
@@ -791,7 +1003,8 @@ impl DdlStatement {
                 size += mysql_truncate_table_statement.tb.len() as u64;
                 size += mysql_truncate_table_statement.unparsed.len() as u64;
             }
-            DdlStatement::PgCreateTable(pg_create_table_statement) => {
+            DdlStatement::PgCreateTable(pg_create_table_statement)
+            | DdlStatement::MssqlCreateTable(pg_create_table_statement) => {
                 size += pg_create_table_statement.schema.len() as u64;
                 size += pg_create_table_statement.tb.len() as u64;
                 size += pg_create_table_statement.unparsed.len() as u64;
@@ -834,7 +1047,8 @@ impl DdlStatement {
                 size += pg_truncate_table_statement.unparsed.len() as u64;
                 size += 1;
             }
-            DdlStatement::PgCreateIndex(pg_create_index_statement) => {
+            DdlStatement::PgCreateIndex(pg_create_index_statement)
+            | DdlStatement::MssqlDropIndex(pg_create_index_statement) => {
                 size += pg_create_index_statement.schema.len() as u64;
                 size += pg_create_index_statement.tb.len() as u64;
                 size += pg_create_index_statement.unparsed.len() as u64;
@@ -899,6 +1113,21 @@ impl DdlStatement {
                 size += rename_table_statement.unparsed.len() as u64;
             }
             DdlStatement::MysqlCreateIndex(mysql_create_index_statement) => {
+                size += mysql_create_index_statement.db.len() as u64;
+                size += mysql_create_index_statement.tb.len() as u64;
+                size += mysql_create_index_statement.index_name.len() as u64;
+                size += mysql_create_index_statement.unparsed.len() as u64;
+                size += std::mem::size_of::<Option<String>>() as u64 * 2;
+                size += mysql_create_index_statement
+                    .index_kind
+                    .as_ref()
+                    .map_or(0, |s| s.len() as u64);
+                size += mysql_create_index_statement
+                    .index_type
+                    .as_ref()
+                    .map_or(0, |s| s.len() as u64);
+            }
+            DdlStatement::MssqlCreateIndex(mysql_create_index_statement) => {
                 size += mysql_create_index_statement.db.len() as u64;
                 size += mysql_create_index_statement.tb.len() as u64;
                 size += mysql_create_index_statement.index_name.len() as u64;
@@ -987,6 +1216,21 @@ fn append_tb(sql: &str, schema: &str, tb: &str, db_type: &DbType) -> String {
     } else {
         let schema = escape_identifier(schema, db_type);
         format!("{} {}.{}", sql, schema, tb)
+    }
+}
+
+fn append_db_schema_tb(sql: &str, db: &str, schema: &str, tb: &str, db_type: &DbType) -> String {
+    if db.is_empty() {
+        return append_tb(sql, schema, tb, db_type);
+    }
+
+    let db = escape_identifier(db, db_type);
+    let tb = escape_identifier(tb, db_type);
+    if schema.is_empty() {
+        format!("{} {}..{}", sql, db, tb)
+    } else {
+        let schema = escape_identifier(schema, db_type);
+        format!("{} {}.{}.{}", sql, db, schema, tb)
     }
 }
 
