@@ -8,7 +8,7 @@ use dt_common::{
     },
     error::DtError,
     meta::{
-        ddl_meta::{ddl_data::DdlData, ddl_statement::DdlStatement},
+        ddl_meta::ddl_data::DdlData,
         mssql::MSSQL_DEFAULT_SCHEMA,
         struct_meta::{statement::struct_statement::StructStatement, struct_data::StructData},
     },
@@ -343,41 +343,23 @@ impl RdbRouterInner {
     }
 
     fn route_ddl(&self, mut ddl_data: DdlData) -> DdlData {
-        let src_db = ddl_data.default_db.clone();
-        let has_rename_target = !ddl_data.get_rename_to_schema_tb().1.is_empty();
-        match &mut ddl_data.statement {
-            DdlStatement::MysqlAlterTableRename(_)
-            | DdlStatement::PgAlterTableRename(_)
-            | DdlStatement::RenameTable(_)
-            | DdlStatement::MongoCommand(_)
-                if has_rename_target =>
-            {
-                let (_, src_schema, src_tb) = ddl_data.get_db_schema_tb();
-                let (_, src_new_schema, src_new_tb) = ddl_data.get_rename_to_db_schema_tb();
-                let (_, dst_schema, dst_tb) =
-                    self.get_tb_map_with_db(&src_db, &src_schema, &src_tb);
-                let (_, dst_new_schema, dst_new_tb) =
-                    self.get_tb_map_with_db(&src_db, &src_new_schema, &src_new_tb);
-                ddl_data.statement.route_rename_table(
-                    dst_schema.into(),
-                    dst_tb.into(),
-                    dst_new_schema.into(),
-                    dst_new_tb.into(),
-                );
-            }
+        let (src_db, src_schema, src_tb) = ddl_data.get_db_schema_tb();
+        let (src_new_db, src_new_schema, src_new_tb) = ddl_data.get_rename_to_db_schema_tb();
+        let (dst_db, dst_schema, dst_tb) = self.get_tb_map_with_db(&src_db, &src_schema, &src_tb);
 
-            _ => {
-                let (_, src_schema, src_tb) = ddl_data.get_db_schema_tb();
-                let (_, dst_schema, dst_tb) =
-                    self.get_tb_map_with_db(&src_db, &src_schema, &src_tb);
-                ddl_data.statement.route(dst_schema.into(), dst_tb.into());
-            }
-        }
-
-        if src_db.is_empty() {
-            ddl_data.default_schema = self.get_schema_map(&ddl_data.default_schema).into();
+        if src_new_tb.is_empty() {
+            ddl_data.route(dst_db.into(), dst_schema.into(), dst_tb.into());
         } else {
-            ddl_data.default_db = self.get_schema_map(&src_db).into();
+            let (dst_new_db, dst_new_schema, dst_new_tb) =
+                self.get_tb_map_with_db(&src_new_db, &src_new_schema, &src_new_tb);
+            ddl_data.route_rename(
+                dst_db.into(),
+                dst_schema.into(),
+                dst_tb.into(),
+                dst_new_db.into(),
+                dst_new_schema.into(),
+                dst_new_tb.into(),
+            );
         }
         ddl_data
     }
@@ -754,7 +736,7 @@ mod tests {
 
     use dt_common::{
         config::{config_enums::DbType, router_config::RouterConfig},
-        meta::{row_data::RowData, row_type::RowType},
+        meta::{ddl_meta::ddl_parser::DdlParser, row_data::RowData, row_type::RowType},
     };
 
     use super::{RdbRouter, SchemaMap, TableColMap, TableMap};
@@ -1050,6 +1032,60 @@ mod tests {
             ("db:1", "dbo", "orders")
         );
         assert_eq!(router.get_schema_map("db2"), "archive2");
+    }
+
+    #[test]
+    fn mssql_ddl_route_updates_database_schema_and_table_together() {
+        let config = RouterConfig::Rdb {
+            schema_map: String::new(),
+            tb_map: "db1.schema1.tb1:db2.schema2.tb2".to_string(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        let router = RdbRouter::from_config(&config, &DbType::Mssql)
+            .unwrap()
+            .unwrap();
+        let ddl = DdlParser::new(DbType::Mssql)
+            .parse("CREATE TABLE [db1].[schema1].[tb1] (id int)")
+            .unwrap()
+            .unwrap();
+
+        let routed = router.route_ddl(ddl);
+
+        assert_eq!(
+            routed.get_db_schema_tb(),
+            ("db2".into(), "schema2".into(), "tb2".into())
+        );
+        assert_eq!(
+            routed.to_sql(),
+            "CREATE TABLE [db2].[schema2].[tb2] (id int)"
+        );
+    }
+
+    #[test]
+    fn mysql_ddl_route_keeps_existing_namespace_layout() {
+        let config = RouterConfig::Rdb {
+            schema_map: String::new(),
+            tb_map: "db1.tb1:db2.tb2".to_string(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        let router = RdbRouter::from_config(&config, &DbType::Mysql)
+            .unwrap()
+            .unwrap();
+        let ddl = DdlParser::new(DbType::Mysql)
+            .parse("CREATE TABLE db1.tb1 (id int)")
+            .unwrap()
+            .unwrap();
+
+        let routed = router.route_ddl(ddl);
+
+        assert_eq!(routed.get_schema_tb(), ("db2".into(), "tb2".into()));
+        assert_eq!(
+            routed.get_db_schema_tb(),
+            (String::new(), "db2".into(), "tb2".into())
+        );
+        assert_eq!(routed.to_sql(), "CREATE TABLE `db2`.`tb2` (id int)");
     }
 
     #[test]
