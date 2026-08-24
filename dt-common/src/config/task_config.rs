@@ -2278,7 +2278,7 @@ max_connections=3
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
-url=server=tcp:127.0.0.1,1433;database=ape_dts
+url=sqlserver://127.0.0.1:1433?database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
