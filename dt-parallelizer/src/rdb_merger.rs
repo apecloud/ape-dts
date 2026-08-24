@@ -110,50 +110,7 @@ impl RdbMerger {
             }
 
             RowType::Update => {
-                // if pk/uk change found in any row_data, for safety, all following row_data won't be merged
-                if Self::check_key_changed(tb_meta, &row_data)? {
-                    merged.unmerged_rows.push(row_data);
-                    return Ok(());
-                }
-
-                let db = row_data.db.clone();
-                let delete = RowData::new(
-                    db.clone(),
-                    row_data.schema.clone(),
-                    row_data.tb.clone(),
-                    0,
-                    RowType::Delete,
-                    row_data.before,
-                    None,
-                );
-                let insert = RowData::new(
-                    db.clone(),
-                    row_data.schema,
-                    row_data.tb,
-                    0,
-                    RowType::Insert,
-                    None,
-                    row_data.after,
-                );
-                let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
-
-                if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
-                    || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)?
-                {
-                    let row_data = RowData::new(
-                        db,
-                        delete.schema,
-                        delete.tb,
-                        0,
-                        RowType::Update,
-                        delete.before,
-                        insert.after,
-                    );
-                    merged.unmerged_rows.push(row_data);
-                    return Ok(());
-                }
-                merged.delete_rows.insert(hash_code, delete);
-                merged.insert_rows.insert(insert_hash_code, insert);
+                Self::merge_update_row_data(merged, row_data, tb_meta, hash_code).await?
             }
 
             RowType::Insert => {
@@ -164,6 +121,41 @@ impl RdbMerger {
                 merged.insert_rows.insert(hash_code, row_data);
             }
         }
+        Ok(())
+    }
+
+    async fn merge_update_row_data(
+        merged: &mut RdbTbMergedData,
+        row_data: RowData,
+        tb_meta: &RdbTbMeta,
+        hash_code: u128,
+    ) -> anyhow::Result<()> {
+        // if pk/uk change found in any row_data, for safety, all following row_data won't be merged
+        if Self::check_key_changed(tb_meta, &row_data)? {
+            merged.unmerged_rows.push(row_data);
+            return Ok(());
+        }
+
+        let (delete, insert) = row_data.split_update_row_data();
+        let insert_hash_code = Self::get_hash_code(&insert, tb_meta).await?;
+
+        if Self::check_collision(&merged.insert_rows, tb_meta, &insert, insert_hash_code)?
+            || Self::check_collision(&merged.delete_rows, tb_meta, &delete, hash_code)?
+        {
+            let row_data = RowData::new(
+                delete.db,
+                delete.schema,
+                delete.tb,
+                0,
+                RowType::Update,
+                delete.before,
+                insert.after,
+            );
+            merged.unmerged_rows.push(row_data);
+            return Ok(());
+        }
+        merged.delete_rows.insert(hash_code, delete);
+        merged.insert_rows.insert(insert_hash_code, insert);
         Ok(())
     }
 
@@ -325,5 +317,22 @@ mod tests {
         let row_data = build_update_row("value");
 
         assert!(!RdbMerger::check_key_changed(&tb_meta, &row_data).unwrap());
+    }
+
+    #[tokio::test]
+    async fn merge_marks_split_update_rows_as_not_origin() {
+        let tb_meta = build_tb_meta();
+        let row_data = build_update_row("value");
+        let hash_code = RdbMerger::get_hash_code(&row_data, &tb_meta).await.unwrap();
+        let mut merged = RdbTbMergedData::new();
+
+        RdbMerger::merge_update_row_data(&mut merged, row_data, &tb_meta, hash_code)
+            .await
+            .unwrap();
+
+        assert_eq!(merged.delete_rows.len(), 1);
+        assert_eq!(merged.insert_rows.len(), 1);
+        assert!(merged.delete_rows.values().all(|row| row.is_not_origin));
+        assert!(merged.insert_rows.values().all(|row| row.is_not_origin));
     }
 }
