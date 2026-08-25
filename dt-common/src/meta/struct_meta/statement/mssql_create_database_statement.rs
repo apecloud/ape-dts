@@ -32,13 +32,12 @@ impl MssqlCreateDatabaseStatement {
 
 #[cfg(test)]
 mod tests {
+    use super::MssqlCreateDatabaseStatement;
     use crate::{
         config::{config_enums::DbType, filter_config::FilterConfig},
         meta::struct_meta::structure::database::Database,
         rdb_filter::RdbFilter,
     };
-
-    use super::MssqlCreateDatabaseStatement;
 
     #[test]
     fn to_sqls_escapes_database_name() {

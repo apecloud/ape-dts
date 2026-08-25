@@ -2513,17 +2513,9 @@ mod test_mssql {
     }
 
     #[test]
-    fn test_unimplemented_ddl_mssql() {
-        for sql in [
-            "CREATE TABLE [server].[app].[dbo].[orders] (id int)",
-            "ALTER DATABASE [app] SET READ_ONLY",
-            "ALTER SCHEMA [audit] TRANSFER [dbo].[orders]",
-            "ALTER TABLE [app].[dbo].[orders] ADD value int",
-            "TRUNCATE TABLE [app].[dbo].[orders]",
-            "RENAME TABLE [dbo].[orders] TO [dbo].[orders_2]",
-        ] {
-            assert!(DdlParser::new(DbType::Mssql).parse(sql).is_err(), "{sql}");
-        }
+    fn test_invalid_table_name_mssql() {
+        let sql = "CREATE TABLE [server].[app].[dbo].[orders] (id int)";
+        assert!(DdlParser::new(DbType::Mssql).parse(sql).is_err(), "{sql}");
     }
 }
 

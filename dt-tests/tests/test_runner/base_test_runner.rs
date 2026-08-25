@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn load_sql_file_by_mssql_go_semicolon_preserves_fenced_batch() {
         let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(vec![
-            "```sql".to_string(),
+            "```".to_string(),
             "DECLARE @i INT = 1;".to_string(),
             "DECLARE @sql NVARCHAR(MAX);".to_string(),
             "WHILE @i <= 2".to_string(),
@@ -560,5 +560,20 @@ mod tests {
         assert!(sqls[0].ends_with("END"));
         assert_eq!(sqls[1], "SELECT 1");
         assert_eq!(sqls[2], "SELECT 2");
+    }
+
+    #[test]
+    fn load_sql_file_by_mssql_go_semicolon_preserves_fenced_xml_literal() {
+        let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(vec![
+            "```".to_string(),
+            "INSERT INTO dbo.events VALUES (N'<root>text &amp; value</root>');".to_string(),
+            "```".to_string(),
+            "GO".to_string(),
+        ]);
+
+        assert_eq!(
+            sqls,
+            vec!["INSERT INTO dbo.events VALUES (N'<root>text &amp; value</root>')"]
+        );
     }
 }

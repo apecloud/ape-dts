@@ -1417,7 +1417,11 @@ impl RdbTestRunner {
 
         if BaseTestRunner::check_path_exists(&filtered_tbs_file) {
             let lines = BaseTestRunner::load_file(&filtered_tbs_file);
-            for line in lines.iter() {
+            for line in lines
+                .iter()
+                .map(|line| line.trim())
+                .filter(|line| !line.is_empty())
+            {
                 filtered_db_tbs.insert(Self::parse_full_tb_name(line, db_type).unwrap());
             }
         }
