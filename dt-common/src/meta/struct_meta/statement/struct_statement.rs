@@ -1,6 +1,7 @@
 use super::{
     mongo_create_collection_statement::MongoCreateCollectionStatement,
     mongo_shard_key_statement::MongoShardKeyStatement,
+    mssql_create_database_statement::MssqlCreateDatabaseStatement,
     mssql_create_schema_statement::MssqlCreateSchemaStatement,
     mssql_create_table_statement::MssqlCreateTableStatement,
     mysql_create_database_statement::MysqlCreateDatabaseStatement,
@@ -19,6 +20,7 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub enum StructStatement {
+    MssqlCreateDatabase(MssqlCreateDatabaseStatement),
     MssqlCreateSchema(MssqlCreateSchemaStatement),
     MssqlCreateTable(MssqlCreateTableStatement),
     MysqlCreateDatabase(MysqlCreateDatabaseStatement),
@@ -37,6 +39,7 @@ pub enum StructStatement {
 impl StructStatement {
     pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
         match self {
+            Self::MssqlCreateDatabase(s) => s.to_sqls(filter),
             Self::MssqlCreateSchema(s) => s.to_sqls(filter),
             Self::MssqlCreateTable(s) => s.to_sqls(filter),
             Self::MysqlCreateDatabase(s) => s.to_sqls(filter),

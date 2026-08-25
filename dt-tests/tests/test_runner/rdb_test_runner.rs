@@ -32,7 +32,6 @@ use tokio::{sync::Semaphore, task::JoinHandle};
 
 use super::{
     base_test_runner::{BaseTestRunner, SqlLoadStrategy},
-    mssql_ddl_scanner,
     mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint},
     rdb_util::{DbSchemaTb, RdbUtil},
 };
@@ -106,7 +105,7 @@ impl RdbTestRunner {
     ) -> anyhow::Result<()> {
         let mut databases = HashSet::new();
         for sqls in sql_groups {
-            for (db, _, _) in mssql_ddl_scanner::extract_created_tables(sqls)? {
+            for (db, _, _) in Self::get_compare_db_tbs_from_sqls(&DbType::Mssql, sqls)? {
                 databases.insert(db);
             }
         }
@@ -118,8 +117,11 @@ impl RdbTestRunner {
 
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
         let mut base = if relative_test_dir.starts_with("mssql_to_mssql/") {
-            BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::MssqlGo)
-                .await?
+            BaseTestRunner::new_with_sql_load_strategy(
+                relative_test_dir,
+                SqlLoadStrategy::MssqlGoSemicolon,
+            )
+            .await?
         } else {
             BaseTestRunner::new(relative_test_dir).await?
         };
@@ -1325,25 +1327,14 @@ impl RdbTestRunner {
             &['.'],
             &TokenEscapePair::from_char_pairs(escape_pairs.clone()),
         );
-        if matches!(db_type, DbType::Mssql) {
-            anyhow::ensure!(
-                tokens.len() == 3,
-                "MSSQL test table must be explicitly qualified as database.schema.table: {full_tb_name}"
-            );
-            return Ok((
-                SqlUtil::unescape(&tokens[0], &escape_pairs[0]),
-                SqlUtil::unescape(&tokens[1], &escape_pairs[0]),
-                SqlUtil::unescape(&tokens[2], &escape_pairs[0]),
-            ));
-        }
-
-        let (schema, tb) = if tokens.len() > 1 {
-            (tokens[0].as_str(), tokens[1].as_str())
-        } else {
-            ("", full_tb_name)
+        let (db, schema, tb) = match tokens.as_slice() {
+            [tb] => ("", "", tb.as_str()),
+            [schema, tb] => ("", schema.as_str(), tb.as_str()),
+            [db, schema, tb] => (db.as_str(), schema.as_str(), tb.as_str()),
+            _ => anyhow::bail!("invalid table name: {full_tb_name}"),
         };
         Ok((
-            String::new(),
+            SqlUtil::unescape(db, &escape_pairs[0]),
             SqlUtil::unescape(schema, &escape_pairs[0]),
             SqlUtil::unescape(tb, &escape_pairs[0]),
         ))
@@ -1361,29 +1352,18 @@ impl RdbTestRunner {
             &self.base.src_test_sqls,
         )?);
 
-        if matches!(db_type, DbType::Mssql) {
-            let mut seen = HashSet::new();
-            src_db_tbs.retain(|db_tb| seen.insert(db_tb.clone()));
-            if src_db_tbs.is_empty() {
-                let compare_tbs_file = format!("{}/compare_tbs.txt", self.base.test_dir);
-                let compare_tbs = fs::read_to_string(&compare_tbs_file).map_err(|error| {
-                    anyhow::anyhow!(
-                        "no MSSQL CREATE TABLE statements found and failed to read {}: {}",
-                        compare_tbs_file,
-                        error
-                    )
-                })?;
-                src_db_tbs = compare_tbs
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                    .map(|line| Self::parse_full_tb_name(line, &db_type))
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                anyhow::ensure!(
-                    !src_db_tbs.is_empty(),
-                    "no MSSQL tables found in SQL fixtures or compare_tbs.txt"
-                );
-            }
+        let mut seen = HashSet::new();
+        src_db_tbs.retain(|db_tb| seen.insert(db_tb.clone()));
+        let compare_tbs_file = format!("{}/compare_tbs.txt", self.base.test_dir);
+        if src_db_tbs.is_empty() && BaseTestRunner::check_path_exists(&compare_tbs_file) {
+            let compare_tbs = fs::read_to_string(&compare_tbs_file)?;
+            src_db_tbs = compare_tbs
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| Self::parse_full_tb_name(line, &db_type))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            anyhow::ensure!(!src_db_tbs.is_empty(), "no tables found in compare_tbs.txt");
         }
 
         let mut dst_db_tbs = vec![];
@@ -1402,34 +1382,33 @@ impl RdbTestRunner {
         db_type: &DbType,
         sqls: &[String],
     ) -> anyhow::Result<Vec<DbSchemaTb>> {
-        // todo: implement MSSQL DDL parser to extract created tables from SQLs
-        if matches!(db_type, DbType::Mssql) {
-            return mssql_ddl_scanner::extract_created_tables(sqls);
-        }
-
-        let mut db_tbs = vec![];
         let parser = DdlParser::new(db_type.to_owned());
+        let mut db_schema_tbs = Vec::new();
 
-        for sql in sqls.iter() {
-            let sql = sql.trim().to_string();
-            let tokens: Vec<&str> = sql.split(" ").collect();
-            if tokens[0].trim().to_lowercase() != "create"
-                || tokens[1].trim().to_lowercase() != "table"
-            {
+        for sql in sqls {
+            let mut ddl = match parser.parse(sql) {
+                Ok(Some(ddl)) => ddl,
+                Ok(None) => continue,
+                Err(error) => {
+                    if sql
+                        .trim_start()
+                        .to_ascii_lowercase()
+                        .starts_with("create table")
+                    {
+                        return Err(error);
+                    }
+                    continue;
+                }
+            };
+            if ddl.ddl_type != DdlType::CreateTable {
                 continue;
             }
 
-            let ddl = parser.parse(&sql).unwrap().unwrap();
-            if ddl.ddl_type == DdlType::CreateTable {
-                let (mut db, tb) = ddl.get_schema_tb();
-                if db.is_empty() {
-                    db = PUBLIC.to_string();
-                }
-                db_tbs.push((String::new(), db, tb));
-            }
+            ddl.default_schema = PUBLIC.to_string();
+            db_schema_tbs.push(ddl.get_db_schema_tb());
         }
 
-        Ok(db_tbs)
+        Ok(db_schema_tbs)
     }
     fn get_filtered_db_tbs(&self) -> HashSet<DbSchemaTb> {
         let mut filtered_db_tbs = HashSet::new();
@@ -1526,6 +1505,7 @@ impl RdbTestRunner {
 mod tests {
     use std::{
         fs,
+        path::Path,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -1548,6 +1528,17 @@ mod tests {
         );
         fs::write(&path, content).unwrap();
         path
+    }
+
+    fn collect_sql_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect_sql_files(&path, files);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("sql") {
+                files.push(path);
+            }
+        }
     }
 
     #[test]
@@ -1607,22 +1598,93 @@ mod tests {
 
     #[test]
     fn test_get_compare_db_tbs_from_mssql_sqls() {
-        let sqls = vec!["CREATE TABLE [sales_db].[audit].[events] (id int);".to_string()];
+        let prepare_sql = r#"
+            -- Multiple statements in one GO batch are split before DDL parsing.
+            DROP TABLE IF EXISTS [sales_db].[audit].[events];
+            CREATE TABLE [sales_db].[audit].[events] (id int);
+            SELECT 'CREATE TABLE ignored.string_table (id int)';
+            CREATE /* comment */ TABLE [database.with.dot].[schema.with.dot].[table with space] (id int);
+            CREATE TABLE [escaped]]database].[escaped]]schema].[escaped]]table] (id int);
+            GO
+            CREATE TABLE "quoted""database"."quoted""schema"."quoted""table" (id int);
+        "#;
+        let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(
+            prepare_sql.lines().map(str::to_string).collect(),
+        );
 
         let db_tbs = RdbTestRunner::get_compare_db_tbs_from_sqls(&DbType::Mssql, &sqls).unwrap();
 
         assert_eq!(
             db_tbs,
-            vec![(
-                "sales_db".to_string(),
-                "audit".to_string(),
-                "events".to_string()
-            )]
+            vec![
+                (
+                    "sales_db".to_string(),
+                    "audit".to_string(),
+                    "events".to_string()
+                ),
+                (
+                    "database.with.dot".to_string(),
+                    "schema.with.dot".to_string(),
+                    "table with space".to_string()
+                ),
+                (
+                    "escaped]database".to_string(),
+                    "escaped]schema".to_string(),
+                    "escaped]table".to_string()
+                ),
+                (
+                    "quoted\"database".to_string(),
+                    "quoted\"schema".to_string(),
+                    "quoted\"table".to_string()
+                ),
+            ]
         );
     }
 
     #[test]
-    fn test_parse_full_tb_name_only_requires_three_parts_for_mssql() {
+    fn test_get_compare_db_tbs_from_sqls_uses_default_schema() {
+        for db_type in [DbType::Mysql, DbType::Pg, DbType::Mssql] {
+            let db_tbs = RdbTestRunner::get_compare_db_tbs_from_sqls(
+                &db_type,
+                &["CREATE TABLE orders (id int);".to_string()],
+            )
+            .unwrap();
+            assert_eq!(
+                db_tbs,
+                vec![(String::new(), PUBLIC.to_string(), "orders".to_string())]
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_compare_db_tbs_from_mssql_sqls_rejects_malformed_create_table() {
+        let error = RdbTestRunner::get_compare_db_tbs_from_sqls(
+            &DbType::Mssql,
+            &["CREATE TABLE [unterminated (id int);".to_string()],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("failed to parse sql"));
+    }
+
+    #[test]
+    fn test_mssql_fixtures_use_parseable_explicit_table_names() {
+        let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/mssql_to_mssql");
+        let mut sql_files = Vec::new();
+        collect_sql_files(&fixture_root, &mut sql_files);
+        assert!(!sql_files.is_empty());
+
+        for path in sql_files {
+            let sql = fs::read_to_string(&path).unwrap();
+            let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(
+                sql.lines().map(str::to_string).collect(),
+            );
+            RdbTestRunner::get_compare_db_tbs_from_sqls(&DbType::Mssql, &sqls)
+                .unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+        }
+    }
+
+    #[test]
+    fn test_parse_full_tb_name_supports_one_two_and_three_parts() {
         assert_eq!(
             RdbTestRunner::parse_full_tb_name("shop.orders", &DbType::Mysql).unwrap(),
             (String::new(), "shop".to_string(), "orders".to_string())
@@ -1631,6 +1693,9 @@ mod tests {
             RdbTestRunner::parse_full_tb_name("orders", &DbType::Mysql).unwrap(),
             (String::new(), String::new(), "orders".to_string())
         );
-        assert!(RdbTestRunner::parse_full_tb_name("dbo.orders", &DbType::Mssql).is_err());
+        assert_eq!(
+            RdbTestRunner::parse_full_tb_name("app.dbo.orders", &DbType::Mssql).unwrap(),
+            ("app".to_string(), "dbo".to_string(), "orders".to_string())
+        );
     }
 }

@@ -1,3 +1,4 @@
+```
 DECLARE @i INT = 1;
 DECLARE @database SYSNAME;
 DECLARE @qualified NVARCHAR(776);
@@ -25,4 +26,5 @@ BEGIN
     EXEC sys.sp_executesql @sql;
     SET @i += 1;
 END;
+```
 GO

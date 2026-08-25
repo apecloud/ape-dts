@@ -9,6 +9,7 @@ use dt_common::{
         mssql::mssql_connection_pool::MssqlConnectionPool,
         struct_meta::{
             statement::{
+                mssql_create_database_statement::MssqlCreateDatabaseStatement,
                 mssql_create_schema_statement::MssqlCreateSchemaStatement,
                 mssql_create_table_statement::{
                     MssqlComputedColumn, MssqlCreateTableStatement, MssqlDefaultConstraint,
@@ -19,6 +20,7 @@ use dt_common::{
                 column::Column,
                 comment::{Comment, CommentType},
                 constraint::{Constraint, ConstraintType},
+                database::Database,
                 index::{Index, IndexKind, IndexType},
                 schema::Schema,
                 table::Table,
@@ -197,11 +199,29 @@ pub struct MssqlStructFetcher {
 }
 
 impl MssqlStructFetcher {
+    pub async fn get_create_database_statements(
+        &mut self,
+        database: &str,
+    ) -> anyhow::Result<Vec<MssqlCreateDatabaseStatement>> {
+        Ok(self
+            .get_databases(database)
+            .await?
+            .into_iter()
+            .map(|name| MssqlCreateDatabaseStatement {
+                database: Database {
+                    name,
+                    ..Default::default()
+                },
+            })
+            .collect())
+    }
+
     pub async fn get_create_schema_statements(
         &mut self,
-        db: &str,
+        database: &str,
+        requested_schema: &str,
     ) -> anyhow::Result<Vec<MssqlCreateSchemaStatement>> {
-        let dbs = self.get_databases(db).await?;
+        let dbs = self.get_databases(database).await?;
         let mut statements = Vec::new();
         for database_name in dbs {
             let sql = Self::catalog_sql(SCHEMAS_SQL, &database_name);
@@ -219,9 +239,10 @@ impl MssqlStructFetcher {
             for row in rows {
                 let schema = Self::required_string(&row, "schema_name")?;
                 let table = Self::required_string(&row, "table_name")?;
-                if self
-                    .filter
-                    .filter_tb_with_db(&database_name, &schema, &table)
+                if (!requested_schema.is_empty() && requested_schema != schema)
+                    || self
+                        .filter
+                        .filter_tb_with_db(&database_name, &schema, &table)
                 {
                     continue;
                 }
@@ -239,11 +260,12 @@ impl MssqlStructFetcher {
 
     pub async fn get_create_table_statements(
         &mut self,
+        database: &str,
         schema: &str,
         table: &str,
     ) -> anyhow::Result<Vec<MssqlCreateTableStatement>> {
         let mut all_statements = BTreeMap::new();
-        for db in self.get_databases("").await? {
+        for db in self.get_databases(database).await? {
             let mut statements = self.get_tables(&db, schema, table).await?;
             if statements.is_empty() {
                 continue;

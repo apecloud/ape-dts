@@ -1,9 +1,0 @@
-struct_it_mssql2mssql_1.dbo.full_column_type
-struct_it_mssql2mssql_1.dbo.spatial_column_type
-struct_it_mssql2mssql_1.dbo.defaults_and_generated
-struct_it_mssql2mssql_1.dbo.constraint_table
-struct_it_mssql2mssql_1.dbo.full_index_type
-struct_it_mssql2mssql_1.dbo.special_default_and_comment
-struct_it_mssql2mssql_1.dbo.case_sensitive_column_name
-[struct_it_mssql2mssql_1].[dbo].[special_character_$1#@*]].table]
-struct_it_mssql2mssql_1.dbo.match

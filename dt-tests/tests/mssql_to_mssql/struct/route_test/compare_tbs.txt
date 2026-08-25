@@ -1,3 +1,0 @@
-struct_route_mssql2mssql_1.dbo.full_column_type
-struct_route_mssql2mssql_1.dbo.constraint_table
-struct_route_mssql2mssql_1.dbo.full_index_type

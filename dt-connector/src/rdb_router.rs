@@ -350,13 +350,11 @@ impl RdbRouterInner {
         if src_new_tb.is_empty() {
             ddl_data.route(dst_db.into(), dst_schema.into(), dst_tb.into());
         } else {
-            let (dst_new_db, dst_new_schema, dst_new_tb) =
+            let (_, dst_new_schema, dst_new_tb) =
                 self.get_tb_map_with_db(&src_new_db, &src_new_schema, &src_new_tb);
             ddl_data.route_rename(
-                dst_db.into(),
                 dst_schema.into(),
                 dst_tb.into(),
-                dst_new_db.into(),
                 dst_new_schema.into(),
                 dst_new_tb.into(),
             );
@@ -370,6 +368,13 @@ impl RdbRouterInner {
         let mut dst_schema = struct_data.schema.clone();
         let mut dst_tb = struct_data.tb.clone();
         match &mut struct_data.statement {
+            StructStatement::MssqlCreateDatabase(s) => {
+                dst_db = self.get_schema_map(&s.database.name).to_string();
+                dst_schema.clear();
+                dst_tb.clear();
+                s.route(&dst_db)
+            }
+
             StructStatement::MssqlCreateTable(s) => {
                 let db = s.table.database_name.clone();
                 let schema = s.table.schema_name.clone();
@@ -385,7 +390,7 @@ impl RdbRouterInner {
                 dst_db = self.get_schema_map(&s.database_name).to_string();
                 dst_schema = s.schema.name.clone();
                 dst_tb.clear();
-                s.route(&dst_db, &dst_schema)
+                s.route_database(&dst_db)
             }
 
             StructStatement::MysqlCreateTable(s) => {
@@ -440,7 +445,9 @@ impl RdbRouterInner {
         struct_data.db = dst_db;
         if matches!(
             &struct_data.statement,
-            StructStatement::MssqlCreateTable(_) | StructStatement::MssqlCreateSchema(_)
+            StructStatement::MssqlCreateDatabase(_)
+                | StructStatement::MssqlCreateTable(_)
+                | StructStatement::MssqlCreateSchema(_)
         ) {
             struct_data.schema = dst_schema;
             struct_data.tb = dst_tb;
@@ -736,7 +743,20 @@ mod tests {
 
     use dt_common::{
         config::{config_enums::DbType, router_config::RouterConfig},
-        meta::{ddl_meta::ddl_parser::DdlParser, row_data::RowData, row_type::RowType},
+        meta::{
+            ddl_meta::ddl_parser::DdlParser,
+            row_data::RowData,
+            row_type::RowType,
+            struct_meta::{
+                statement::{
+                    mssql_create_database_statement::MssqlCreateDatabaseStatement,
+                    mssql_create_schema_statement::MssqlCreateSchemaStatement,
+                    struct_statement::StructStatement,
+                },
+                struct_data::StructData,
+                structure::{database::Database, schema::Schema},
+            },
+        },
     };
 
     use super::{RdbRouter, SchemaMap, TableColMap, TableMap};
@@ -1035,6 +1055,75 @@ mod tests {
     }
 
     #[test]
+    fn mssql_create_schema_struct_only_routes_database() {
+        let config = RouterConfig::Rdb {
+            schema_map: "src_db:dst_db".to_string(),
+            tb_map: "src_db.src_schema.src_tb:dst_db.dst_schema.dst_tb".to_string(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        let router = RdbRouter::from_config(&config, &DbType::Mssql)
+            .unwrap()
+            .unwrap();
+        let struct_data = StructData {
+            db: "src_db".to_string(),
+            schema: "src_schema".to_string(),
+            tb: String::new(),
+            statement: StructStatement::MssqlCreateSchema(MssqlCreateSchemaStatement {
+                database_name: "src_db".to_string(),
+                schema: Schema {
+                    name: "src_schema".to_string(),
+                },
+            }),
+        };
+
+        let routed = router.route_struct(struct_data);
+
+        assert_eq!(routed.db, "dst_db");
+        assert_eq!(routed.schema, "src_schema");
+        assert!(routed.tb.is_empty());
+        let StructStatement::MssqlCreateSchema(statement) = routed.statement else {
+            panic!("expected MSSQL create schema statement");
+        };
+        assert_eq!(statement.database_name, "dst_db");
+        assert_eq!(statement.schema.name, "src_schema");
+    }
+
+    #[test]
+    fn mssql_create_database_struct_routes_database() {
+        let config = RouterConfig::Rdb {
+            schema_map: "src_db:dst_db".to_string(),
+            tb_map: String::new(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        let router = RdbRouter::from_config(&config, &DbType::Mssql)
+            .unwrap()
+            .unwrap();
+        let struct_data = StructData {
+            db: "src_db".to_string(),
+            schema: String::new(),
+            tb: String::new(),
+            statement: StructStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
+                database: Database {
+                    name: "src_db".to_string(),
+                    ..Default::default()
+                },
+            }),
+        };
+
+        let routed = router.route_struct(struct_data);
+
+        assert_eq!(routed.db, "dst_db");
+        assert!(routed.schema.is_empty());
+        assert!(routed.tb.is_empty());
+        let StructStatement::MssqlCreateDatabase(statement) = routed.statement else {
+            panic!("expected MSSQL create database statement");
+        };
+        assert_eq!(statement.database.name, "dst_db");
+    }
+
+    #[test]
     fn mssql_ddl_route_updates_database_schema_and_table_together() {
         let config = RouterConfig::Rdb {
             schema_map: String::new(),
@@ -1060,13 +1149,60 @@ mod tests {
             routed.to_sql(),
             "CREATE TABLE [db2].[schema2].[tb2] (id int)"
         );
+
+        let mut ddl = DdlParser::new(DbType::Mssql)
+            .parse("CREATE TABLE [tb1] (id int)")
+            .unwrap()
+            .unwrap();
+        ddl.default_db = "db1".into();
+        ddl.default_schema = "schema1".into();
+
+        let routed = router.route_ddl(ddl);
+
+        assert_eq!(
+            routed.get_db_schema_tb(),
+            ("db2".into(), "schema2".into(), "tb2".into())
+        );
+        assert_eq!(
+            routed.to_sql(),
+            "CREATE TABLE [db2].[schema2].[tb2] (id int)"
+        );
+        assert_eq!(routed.default_db, "db1");
+        assert_eq!(routed.default_schema, "schema1");
+    }
+
+    #[test]
+    fn mssql_schema_ddl_route_materializes_database_fallback() {
+        let config = RouterConfig::Rdb {
+            schema_map: "db1:db2".to_string(),
+            tb_map: String::new(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        let router = RdbRouter::from_config(&config, &DbType::Mssql)
+            .unwrap()
+            .unwrap();
+        let mut ddl = DdlParser::new(DbType::Mssql)
+            .parse("CREATE SCHEMA [audit]")
+            .unwrap()
+            .unwrap();
+        ddl.default_db = "db1".into();
+
+        let routed = router.route_ddl(ddl);
+
+        assert_eq!(
+            routed.get_db_schema_tb(),
+            ("db2".into(), "audit".into(), String::new())
+        );
+        assert_eq!(routed.to_sql(), "CREATE SCHEMA [audit]");
+        assert_eq!(routed.default_db, "db1");
     }
 
     #[test]
     fn mysql_ddl_route_keeps_existing_namespace_layout() {
         let config = RouterConfig::Rdb {
-            schema_map: String::new(),
-            tb_map: "db1.tb1:db2.tb2".to_string(),
+            schema_map: "db1:db2".to_string(),
+            tb_map: "db1.tb1:db2.tb2,db1.tb_new:db2.tb_new2".to_string(),
             col_map: String::new(),
             topic_map: String::new(),
         };
@@ -1086,6 +1222,30 @@ mod tests {
             (String::new(), "db2".into(), "tb2".into())
         );
         assert_eq!(routed.to_sql(), "CREATE TABLE `db2`.`tb2` (id int)");
+
+        let ddl = DdlParser::new(DbType::Mysql)
+            .parse("CREATE DATABASE db1")
+            .unwrap()
+            .unwrap();
+        let routed = router.route_ddl(ddl);
+
+        assert_eq!(
+            routed.get_db_schema_tb(),
+            ("db2".into(), String::new(), String::new())
+        );
+        assert_eq!(routed.get_schema_tb(), ("db2".into(), String::new()));
+        assert_eq!(routed.to_sql(), "CREATE DATABASE `db2`");
+
+        let ddl = DdlParser::new(DbType::Mysql)
+            .parse("ALTER TABLE db1.tb1 RENAME TO db1.tb_new")
+            .unwrap()
+            .unwrap();
+        let routed = router.route_ddl(ddl);
+
+        assert_eq!(
+            routed.to_sql(),
+            "ALTER TABLE `db2`.`tb2` RENAME TO `db2`.`tb_new2`"
+        );
     }
 
     #[test]

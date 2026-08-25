@@ -253,7 +253,8 @@ impl BaseExtractor {
         // case 3, execute: use db_1; create table db_2.tb_1(id int);
         // binlog query.schema == db_1, schema from DdlParser == db_2
         if let Some(mut ddl_data) = parse_result? {
-            ddl_data.fill_default_info("", schema, query);
+            ddl_data.default_schema = schema.to_string();
+            ddl_data.query = query.to_string();
             Ok(Some(ddl_data))
         } else {
             Ok(None)

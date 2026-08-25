@@ -23,32 +23,10 @@ impl std::fmt::Display for DdlData {
 
 impl DdlData {
     pub fn to_sql(&self) -> String {
-        self.statement.to_sql_with_default_info(
-            &self.db_type,
-            &self.default_db,
-            &self.default_schema,
-        )
-    }
-
-    pub fn fill_default_info(&mut self, default_db: &str, default_schema: &str, query: &str) {
-        if self.default_db.is_empty() {
-            self.default_db = default_db.to_string();
-        }
-        if self.default_schema.is_empty() {
-            self.default_schema = default_schema.to_string();
-        }
-        self.query = query.to_string();
+        self.statement.to_sql(&self.db_type)
     }
 
     pub fn get_schema_tb(&self) -> (String, String) {
-        if !matches!(self.db_type, DbType::Mssql) {
-            let (mut schema, tb) = self.statement.get_schema_tb();
-            if schema.is_empty() {
-                schema = self.default_schema.clone();
-            }
-            return (schema, tb);
-        }
-
         let (db, schema, tb) = self.get_db_schema_tb();
         match self.ddl_type {
             DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {
@@ -62,12 +40,7 @@ impl DdlData {
     }
 
     pub fn get_db_schema_tb(&self) -> (String, String, String) {
-        if !matches!(self.db_type, DbType::Mssql) {
-            let (schema, tb) = self.get_schema_tb();
-            return (self.default_db.clone(), schema, tb);
-        }
-
-        let (mut db, mut schema, tb) = self.statement.get_db_schema_tb(&self.db_type);
+        let (mut db, mut schema, tb) = self.statement.get_db_schema_tb();
         match self.ddl_type {
             DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {
                 return (db, String::new(), String::new());
@@ -91,25 +64,12 @@ impl DdlData {
     }
 
     pub fn get_rename_to_schema_tb(&self) -> (String, String) {
-        if !matches!(self.db_type, DbType::Mssql) {
-            let (mut schema, tb) = self.statement.get_rename_to_schema_tb();
-            if schema.is_empty() {
-                schema = self.default_schema.clone();
-            }
-            return (schema, tb);
-        }
-
         let (_, schema, tb) = self.get_rename_to_db_schema_tb();
         (schema, tb)
     }
 
     pub fn get_rename_to_db_schema_tb(&self) -> (String, String, String) {
-        if !matches!(self.db_type, DbType::Mssql) {
-            let (schema, tb) = self.get_rename_to_schema_tb();
-            return (self.default_db.clone(), schema, tb);
-        }
-
-        let (mut db, mut schema, tb) = self.statement.get_rename_to_db_schema_tb(&self.db_type);
+        let (mut db, mut schema, tb) = self.statement.get_rename_to_db_schema_tb();
         if tb.is_empty() {
             return (String::new(), String::new(), String::new());
         }
@@ -125,37 +85,19 @@ impl DdlData {
     }
 
     pub fn route(&mut self, dst_db: String, dst_schema: String, dst_tb: String) {
-        self.statement.route_db_schema_tb(
-            &self.db_type,
-            dst_db.clone(),
-            dst_schema.clone(),
-            dst_tb,
-        );
-        self.default_db = dst_db;
-        self.default_schema = dst_schema;
+        self.statement
+            .route_db_schema_tb(dst_db, dst_schema, dst_tb);
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn route_rename(
         &mut self,
-        dst_db: String,
         dst_schema: String,
         dst_tb: String,
-        dst_new_db: String,
         dst_new_schema: String,
         dst_new_tb: String,
     ) {
-        self.statement.route_rename_db_schema_tb(
-            &self.db_type,
-            dst_db.clone(),
-            dst_schema.clone(),
-            dst_tb,
-            dst_new_db,
-            dst_new_schema,
-            dst_new_tb,
-        );
-        self.default_db = dst_db;
-        self.default_schema = dst_schema;
+        self.statement
+            .route_rename(dst_schema, dst_tb, dst_new_schema, dst_new_tb);
     }
 
     pub fn split_to_multi(self) -> Vec<DdlData> {

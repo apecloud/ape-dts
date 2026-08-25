@@ -1,3 +1,4 @@
+```
 DECLARE @i INT = 1;
 DECLARE @database SYSNAME;
 DECLARE @sql NVARCHAR(MAX);
@@ -13,4 +14,5 @@ BEGIN
     END;
     SET @i += 1;
 END;
+```
 GO

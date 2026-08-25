@@ -12,9 +12,8 @@ pub struct MssqlCreateSchemaStatement {
 }
 
 impl MssqlCreateSchemaStatement {
-    pub fn route(&mut self, dst_db: &str, dst_schema: &str) {
+    pub fn route_database(&mut self, dst_db: &str) {
         self.database_name = dst_db.to_string();
-        self.schema.name = dst_schema.to_string();
     }
 
     pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {

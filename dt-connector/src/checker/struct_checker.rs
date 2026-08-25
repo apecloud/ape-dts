@@ -270,10 +270,13 @@ impl StructCheckerHandle {
                     filter: target_filter,
                     allow_missing_databases: true,
                 };
-                for stmt in fetcher.get_create_schema_statements("").await? {
+                for stmt in fetcher.get_create_database_statements("").await? {
                     Self::insert_sqls(&mut dst_map, stmt.to_sqls(&self.filter)?, "target")?;
                 }
-                for mut stmt in fetcher.get_create_table_statements("", "").await? {
+                for stmt in fetcher.get_create_schema_statements("", "").await? {
+                    Self::insert_sqls(&mut dst_map, stmt.to_sqls(&self.filter)?, "target")?;
+                }
+                for mut stmt in fetcher.get_create_table_statements("", "", "").await? {
                     Self::insert_sqls(&mut dst_map, stmt.to_sqls(&self.filter)?, "target")?;
                 }
             }

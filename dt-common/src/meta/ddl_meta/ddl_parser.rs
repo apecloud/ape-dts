@@ -23,12 +23,14 @@ use super::{
     ddl_statement::{
         AlterDatabaseStatement, AlterSchemaStatement, CreateDatabaseStatement,
         CreateSchemaStatement, DdlStatement, DropDatabaseStatement, DropMultiTableStatement,
-        DropSchemaStatement, DropTableStatement, MysqlAlterTableRenameStatement,
-        MysqlAlterTableStatement, MysqlCreateIndexStatement, MysqlCreateTableStatement,
-        MysqlDropIndexStatement, MysqlTruncateTableStatement, PgAlterTableRenameStatement,
-        PgAlterTableSetSchemaStatement, PgAlterTableStatement, PgCreateIndexStatement,
-        PgCreateTableStatement, PgDropMultiIndexStatement, PgTruncateTableStatement,
-        RenameMultiTableStatement,
+        DropSchemaStatement, MssqlCreateDatabaseStatement, MssqlCreateIndexStatement,
+        MssqlCreateSchemaStatement, MssqlCreateTableStatement, MssqlDropDatabaseStatement,
+        MssqlDropIndexStatement, MssqlDropSchemaStatement, MssqlDropTableStatement,
+        MysqlAlterTableRenameStatement, MysqlAlterTableStatement, MysqlCreateIndexStatement,
+        MysqlCreateTableStatement, MysqlDropIndexStatement, MysqlTruncateTableStatement,
+        PgAlterTableRenameStatement, PgAlterTableSetSchemaStatement, PgAlterTableStatement,
+        PgCreateIndexStatement, PgCreateTableStatement, PgDropMultiIndexStatement,
+        PgTruncateTableStatement, RenameMultiTableStatement,
     },
     ddl_type::DdlType,
     keywords::{
@@ -122,15 +124,25 @@ impl DdlParser {
             multispace0,
         ))(i)?;
 
-        let statement = CreateDatabaseStatement {
-            db: self.identifier_to_string(database),
-            if_not_exists: if_not_exists.is_some(),
-            unparsed: to_string(remaining_input),
+        let db = self.identifier_to_string(database);
+        let unparsed = to_string(remaining_input);
+        let statement = if matches!(self.db_type, DbType::Mssql) {
+            DdlStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
+                db,
+                if_not_exists: if_not_exists.is_some(),
+                unparsed,
+            })
+        } else {
+            DdlStatement::CreateDatabase(CreateDatabaseStatement {
+                db,
+                if_not_exists: if_not_exists.is_some(),
+                unparsed,
+            })
         };
 
         let ddl = DdlData {
             ddl_type: DdlType::CreateDatabase,
-            statement: DdlStatement::CreateDatabase(statement),
+            statement,
             ..Default::default()
         };
         Ok((remaining_input, ddl))
@@ -147,25 +159,31 @@ impl DdlParser {
             multispace0,
         ))(i)?;
 
-        let statement = DropDatabaseStatement {
-            db: self.identifier_to_string(database),
-            if_exists: if_exists.is_some(),
-            unparsed: to_string(remaining_input),
+        let db = self.identifier_to_string(database);
+        let unparsed = to_string(remaining_input);
+        let statement = if matches!(self.db_type, DbType::Mssql) {
+            DdlStatement::MssqlDropDatabase(MssqlDropDatabaseStatement {
+                db,
+                if_exists: if_exists.is_some(),
+                unparsed,
+            })
+        } else {
+            DdlStatement::DropDatabase(DropDatabaseStatement {
+                db,
+                if_exists: if_exists.is_some(),
+                unparsed,
+            })
         };
 
         let ddl = DdlData {
             ddl_type: DdlType::DropDatabase,
-            statement: DdlStatement::DropDatabase(statement),
+            statement,
             ..Default::default()
         };
         Ok((remaining_input, ddl))
     }
 
     fn alter_database<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], DdlData> {
-        if self.db_type == DbType::Mssql {
-            return unsupported(i);
-        }
-
         let (remaining_input, (_, _, _, _, database, _)) = tuple((
             tag_no_case("alter"),
             multispace1,
@@ -201,16 +219,27 @@ impl DdlParser {
                 multispace0,
             ))(i)?;
 
-        let statement = CreateSchemaStatement {
-            schema: self.identifier_to_string(schema),
-            if_not_exists: if_not_exists.is_some(),
-            authorization: authorization.is_some(),
-            unparsed: to_string(remaining_input),
+        let schema = self.identifier_to_string(schema);
+        let unparsed = to_string(remaining_input);
+        let statement = if matches!(self.db_type, DbType::Mssql) {
+            DdlStatement::MssqlCreateSchema(MssqlCreateSchemaStatement {
+                db: String::new(),
+                schema,
+                authorization: authorization.is_some(),
+                unparsed,
+            })
+        } else {
+            DdlStatement::CreateSchema(CreateSchemaStatement {
+                schema,
+                if_not_exists: if_not_exists.is_some(),
+                authorization: authorization.is_some(),
+                unparsed,
+            })
         };
 
         let ddl = DdlData {
             ddl_type: DdlType::CreateSchema,
-            statement: DdlStatement::CreateSchema(statement),
+            statement,
             ..Default::default()
         };
         Ok((remaining_input, ddl))
@@ -227,25 +256,32 @@ impl DdlParser {
             multispace0,
         ))(i)?;
 
-        let statement = DropSchemaStatement {
-            schema: self.identifier_to_string(schema),
-            if_exists: if_exists.is_some(),
-            unparsed: to_string(remaining_input),
+        let schema = self.identifier_to_string(schema);
+        let unparsed = to_string(remaining_input);
+        let statement = if matches!(self.db_type, DbType::Mssql) {
+            DdlStatement::MssqlDropSchema(MssqlDropSchemaStatement {
+                db: String::new(),
+                schema,
+                if_exists: if_exists.is_some(),
+                unparsed,
+            })
+        } else {
+            DdlStatement::DropSchema(DropSchemaStatement {
+                schema,
+                if_exists: if_exists.is_some(),
+                unparsed,
+            })
         };
 
         let ddl = DdlData {
             ddl_type: DdlType::DropSchema,
-            statement: DdlStatement::DropSchema(statement),
+            statement,
             ..Default::default()
         };
         Ok((remaining_input, ddl))
     }
 
     fn alter_schema<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], DdlData> {
-        if self.db_type == DbType::Mssql {
-            return unsupported(i);
-        }
-
         let rename_to = |i: &'a [u8]| -> IResult<&'a [u8], &[u8]> {
             let (remaining_input, (_, _, _, _, new_name, _)) = tuple((
                 tag_no_case("rename"),
@@ -390,14 +426,13 @@ impl DdlParser {
             multispace0,
         ))(i)?;
 
-        let statement = PgCreateTableStatement {
+        let statement = MssqlCreateTableStatement {
+            db,
             schema,
             tb,
             unparsed: to_string(remaining_input),
-            ..Default::default()
         };
         let ddl = DdlData {
-            default_db: db,
             ddl_type: DdlType::CreateTable,
             statement: DdlStatement::MssqlCreateTable(statement),
             ..Default::default()
@@ -451,26 +486,22 @@ impl DdlParser {
             multispace0,
         ))(i)?;
 
-        let statement = DropTableStatement {
+        let statement = MssqlDropTableStatement {
+            db,
             schema,
             tb,
             if_exists: if_exists.is_some(),
             unparsed: to_string(remaining_input),
         };
         let ddl = DdlData {
-            default_db: db,
             ddl_type: DdlType::DropTable,
-            statement: DdlStatement::DropTable(statement),
+            statement: DdlStatement::MssqlDropTable(statement),
             ..Default::default()
         };
         Ok((remaining_input, ddl))
     }
 
     fn alter_table<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], DdlData> {
-        if self.db_type == DbType::Mssql {
-            return unsupported(i);
-        }
-
         if self.db_type == DbType::Pg {
             self.pg_alter_table(i)
         } else {
@@ -631,10 +662,6 @@ impl DdlParser {
     }
 
     fn truncate_table<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], DdlData> {
-        if self.db_type == DbType::Mssql {
-            return unsupported(i);
-        }
-
         if self.db_type == DbType::Pg {
             self.pg_truncate_table(i)
         } else {
@@ -696,10 +723,6 @@ impl DdlParser {
     }
 
     fn rename_table<'a>(&'a self, i: &'a [u8]) -> IResult<&'a [u8], DdlData> {
-        if self.db_type == DbType::Mssql {
-            return unsupported(i);
-        }
-
         let (remaining_input, (_, _, _, _, table_to_table_list, _)) = tuple((
             tag_no_case("rename"),
             multispace1,
@@ -876,16 +899,15 @@ impl DdlParser {
         if let Some((clustered, _)) = clustered {
             index_kinds.push(to_string(clustered));
         }
-        let statement = MysqlCreateIndexStatement {
-            db: schema,
+        let statement = MssqlCreateIndexStatement {
+            db,
+            schema,
             tb,
             index_name: self.identifier_to_string(index_name),
             index_kind: (!index_kinds.is_empty()).then(|| index_kinds.join(" ")),
-            index_type: None,
             unparsed: to_string(remaining_input),
         };
         let ddl = DdlData {
-            default_db: db,
             ddl_type: DdlType::CreateIndex,
             statement: DdlStatement::MssqlCreateIndex(statement),
             ..Default::default()
@@ -948,16 +970,15 @@ impl DdlParser {
                 multispace0,
             ))(i)?;
 
-        let statement = PgCreateIndexStatement {
+        let statement = MssqlDropIndexStatement {
+            db,
             schema,
             tb,
-            index_name: Some(self.identifier_to_string(index_name)),
-            if_not_exists: if_exists.is_some(),
+            index_name: self.identifier_to_string(index_name),
+            if_exists: if_exists.is_some(),
             unparsed: to_string(remaining_input),
-            ..Default::default()
         };
         let ddl = DdlData {
-            default_db: db,
             ddl_type: DdlType::DropIndex,
             statement: DdlStatement::MssqlDropIndex(statement),
             ..Default::default()
@@ -1257,13 +1278,6 @@ fn recognize_doubled_delimited_identifier(i: &[u8], open: u8, close: u8) -> IRes
     Err(nom::Err::Failure(nom::error::Error::new(
         i,
         nom::error::ErrorKind::Escaped,
-    )))
-}
-
-fn unsupported<T>(i: &[u8]) -> IResult<&[u8], T> {
-    Err(nom::Err::Error(nom::error::Error::new(
-        i,
-        nom::error::ErrorKind::Tag,
     )))
 }
 
@@ -2433,7 +2447,7 @@ mod test_mssql {
                 "app",
                 "dbo",
                 ("app", "dbo", "orders"),
-                "CREATE TABLE [app].[dbo].[orders] (id int)",
+                "CREATE TABLE [orders] (id int)",
             ),
             (
                 "CREATE TABLE [app]..[orders] (id int)",
@@ -2448,9 +2462,43 @@ mod test_mssql {
         let parser = DdlParser::new(DbType::Mssql);
         for (sql, ddl_type, default_db, default_schema, expected_name, expected_sql) in cases {
             let mut ddl = parser.parse(sql).unwrap().unwrap();
-            ddl.fill_default_info(default_db, default_schema, sql);
+            assert!(ddl.default_db.is_empty(), "sql: {sql}");
+            assert!(ddl.default_schema.is_empty(), "sql: {sql}");
+            ddl.default_db = default_db.to_string();
+            ddl.default_schema = default_schema.to_string();
+            ddl.query = sql.to_string();
 
             assert_eq!(ddl.ddl_type, ddl_type, "sql: {sql}");
+            match ddl.ddl_type {
+                DdlType::CreateDatabase => {
+                    assert!(matches!(
+                        &ddl.statement,
+                        DdlStatement::MssqlCreateDatabase(_)
+                    ))
+                }
+                DdlType::DropDatabase => {
+                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropDatabase(_)))
+                }
+                DdlType::CreateSchema => {
+                    assert!(matches!(&ddl.statement, DdlStatement::MssqlCreateSchema(_)))
+                }
+                DdlType::DropSchema => {
+                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropSchema(_)))
+                }
+                DdlType::CreateTable => {
+                    assert!(matches!(&ddl.statement, DdlStatement::MssqlCreateTable(_)))
+                }
+                DdlType::DropTable => {
+                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropTable(_)))
+                }
+                DdlType::CreateIndex => {
+                    assert!(matches!(&ddl.statement, DdlStatement::MssqlCreateIndex(_)))
+                }
+                DdlType::DropIndex => {
+                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropIndex(_)))
+                }
+                _ => {}
+            }
             assert_eq!(
                 ddl.get_db_schema_tb(),
                 (
@@ -2465,7 +2513,7 @@ mod test_mssql {
     }
 
     #[test]
-    fn test_unsupported_ddl_mssql() {
+    fn test_unimplemented_ddl_mssql() {
         for sql in [
             "CREATE TABLE [server].[app].[dbo].[orders] (id int)",
             "ALTER DATABASE [app] SET READ_ONLY",

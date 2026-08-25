@@ -28,7 +28,7 @@ pub struct BaseTestRunner {
 pub enum SqlLoadStrategy {
     Semicolon,
     Line,
-    MssqlGo,
+    MssqlGoSemicolon,
 }
 
 #[allow(dead_code)]
@@ -191,8 +191,8 @@ impl BaseTestRunner {
         if matches!(sql_load_strategy, SqlLoadStrategy::Line) {
             return Self::load_sql_file_by_line(lines);
         }
-        if matches!(sql_load_strategy, SqlLoadStrategy::MssqlGo) {
-            return Self::load_sql_file_by_mssql_go(lines);
+        if matches!(sql_load_strategy, SqlLoadStrategy::MssqlGoSemicolon) {
+            return Self::load_sql_file_by_mssql_go_semicolon(lines);
         }
 
         let mut sqls = Vec::new();
@@ -311,7 +311,7 @@ impl BaseTestRunner {
         sqls
     }
 
-    fn load_sql_file_by_mssql_go(lines: Vec<String>) -> Vec<String> {
+    fn split_mssql_go_batches(lines: Vec<String>) -> Vec<String> {
         let mut batches = Vec::new();
         let mut current_batch = String::new();
 
@@ -331,6 +331,92 @@ impl BaseTestRunner {
             batches.push(Self::flush_sql(&mut current_batch));
         }
         batches
+    }
+
+    pub(super) fn load_sql_file_by_mssql_go_semicolon(lines: Vec<String>) -> Vec<String> {
+        let mut sqls = Vec::new();
+        let mut unfenced_lines = Vec::new();
+        let mut fenced_sql = String::new();
+        let mut in_fenced_block = false;
+
+        for line in lines {
+            if line.trim().starts_with("```") {
+                if in_fenced_block {
+                    if !fenced_sql.trim().is_empty() {
+                        sqls.push(Self::flush_sql(&mut fenced_sql));
+                    }
+                } else {
+                    Self::append_mssql_unfenced_sqls(&mut sqls, &mut unfenced_lines);
+                }
+                in_fenced_block = !in_fenced_block;
+                continue;
+            }
+
+            if in_fenced_block {
+                fenced_sql.push_str(&line);
+                fenced_sql.push('\n');
+            } else {
+                unfenced_lines.push(line);
+            }
+        }
+
+        if !fenced_sql.trim().is_empty() {
+            sqls.push(Self::flush_sql(&mut fenced_sql));
+        }
+        Self::append_mssql_unfenced_sqls(&mut sqls, &mut unfenced_lines);
+        sqls
+    }
+
+    fn append_mssql_unfenced_sqls(sqls: &mut Vec<String>, lines: &mut Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+
+        let batches = Self::split_mssql_go_batches(std::mem::take(lines));
+        for batch in batches {
+            let mut current_sql = String::new();
+            let mut block_depth = 0_u32;
+            for line in batch.lines() {
+                let trimmed = line.trim();
+                let block_keyword = trimmed.trim_end_matches(';').trim();
+                let ends_block = block_keyword.eq_ignore_ascii_case("END")
+                    || block_keyword.eq_ignore_ascii_case("END TRY")
+                    || block_keyword.eq_ignore_ascii_case("END CATCH");
+                let starts_block = block_keyword.eq_ignore_ascii_case("BEGIN")
+                    || block_keyword.eq_ignore_ascii_case("BEGIN TRY")
+                    || block_keyword.eq_ignore_ascii_case("BEGIN CATCH");
+
+                if ends_block {
+                    block_depth = block_depth.saturating_sub(1);
+                }
+
+                if starts_block {
+                    block_depth += 1;
+                }
+
+                if block_depth > 0 || starts_block || ends_block {
+                    current_sql.push_str(line);
+                    current_sql.push('\n');
+                    if block_depth == 0 && trimmed.ends_with(';') {
+                        sqls.push(Self::flush_sql(&mut current_sql));
+                    }
+                    continue;
+                }
+
+                let mut remaining = line;
+                while let Some(index) = remaining.find(';') {
+                    current_sql.push_str(&remaining[..=index]);
+                    sqls.push(Self::flush_sql(&mut current_sql));
+                    remaining = &remaining[index + 1..];
+                }
+                current_sql.push_str(remaining);
+                current_sql.push('\n');
+            }
+
+            if !current_sql.trim().is_empty() {
+                sqls.push(Self::flush_sql(&mut current_sql));
+            }
+        }
     }
 
     fn flush_sql(current_sql: &mut String) -> String {
@@ -410,8 +496,8 @@ mod tests {
     }
 
     #[test]
-    fn load_sql_file_by_mssql_go_only_splits_standalone_go_lines() {
-        let sqls = BaseTestRunner::load_sql_file_by_mssql_go(vec![
+    fn split_mssql_go_batches_only_splits_standalone_go_lines() {
+        let batches = BaseTestRunner::split_mssql_go_batches(vec![
             "CREATE TABLE dbo.t (id INT);".to_string(),
             "go".to_string(),
             "INSERT INTO dbo.t VALUES (1);".to_string(),
@@ -420,9 +506,59 @@ mod tests {
             "GO".to_string(),
         ]);
 
-        assert_eq!(sqls.len(), 2);
-        assert!(sqls[0].contains("CREATE TABLE"));
-        assert!(sqls[1].contains("SELECT 'GO'"));
-        assert!(sqls[1].contains("-- GO"));
+        assert_eq!(batches.len(), 2);
+        assert!(batches[0].contains("CREATE TABLE"));
+        assert!(batches[1].contains("SELECT 'GO'"));
+        assert!(batches[1].contains("-- GO"));
+    }
+
+    #[test]
+    fn load_sql_file_by_mssql_go_semicolon_preserves_control_blocks() {
+        let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(vec![
+            "USE [app];".to_string(),
+            "GO".to_string(),
+            "IF DB_ID(N'app') IS NOT NULL".to_string(),
+            "BEGIN".to_string(),
+            "    ALTER DATABASE [app] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;".to_string(),
+            "    DROP DATABASE [app];".to_string(),
+            "END;".to_string(),
+            "CREATE TABLE [app].dbo.orders (id int); CREATE INDEX idx_orders ON [app].dbo.orders (id);"
+                .to_string(),
+            "GO".to_string(),
+        ]);
+
+        assert_eq!(sqls.len(), 4);
+        assert_eq!(sqls[0], "USE [app]");
+        assert!(sqls[1].starts_with("IF DB_ID"));
+        assert!(sqls[1].contains("ALTER DATABASE"));
+        assert!(sqls[1].contains("DROP DATABASE"));
+        assert!(sqls[1].ends_with("END"));
+        assert!(sqls[2].starts_with("CREATE TABLE"));
+        assert!(sqls[3].starts_with("CREATE INDEX"));
+    }
+
+    #[test]
+    fn load_sql_file_by_mssql_go_semicolon_preserves_fenced_batch() {
+        let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(vec![
+            "```sql".to_string(),
+            "DECLARE @i INT = 1;".to_string(),
+            "DECLARE @sql NVARCHAR(MAX);".to_string(),
+            "WHILE @i <= 2".to_string(),
+            "BEGIN".to_string(),
+            "    SET @sql = N'SELECT ' + CONVERT(NVARCHAR(10), @i);".to_string(),
+            "    EXEC sys.sp_executesql @sql;".to_string(),
+            "    SET @i += 1;".to_string(),
+            "END;".to_string(),
+            "```".to_string(),
+            "GO".to_string(),
+            "SELECT 1; SELECT 2;".to_string(),
+        ]);
+
+        assert_eq!(sqls.len(), 3);
+        assert!(sqls[0].starts_with("DECLARE @i"));
+        assert!(sqls[0].contains("WHILE @i <= 2"));
+        assert!(sqls[0].ends_with("END"));
+        assert_eq!(sqls[1], "SELECT 1");
+        assert_eq!(sqls[2], "SELECT 2");
     }
 }
