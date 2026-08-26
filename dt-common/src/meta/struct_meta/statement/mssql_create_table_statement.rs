@@ -1,66 +1,125 @@
 use crate::{
-    config::config_enums::DbType,
-    error::DtError,
-    meta::struct_meta::structure::{
-        comment::{Comment, CommentType},
-        constraint::{Constraint, ConstraintType},
-        index::Index,
-        structure_type::StructureType,
-        table::Table,
-    },
-    rdb_filter::RdbFilter,
+    config::config_enums::DbType, error::DtError,
+    meta::struct_meta::structure::structure_type::StructureType, rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MssqlIdentityColumn {
-    pub column_name: String,
+pub struct MssqlIdentity {
     pub seed_value: String,
     pub increment_value: String,
     pub is_not_for_replication: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MssqlComputedColumn {
-    pub column_name: String,
-    pub definition: String,
-    pub is_persisted: bool,
+pub enum MssqlColumnDefinition {
+    Regular {
+        column_type: String,
+        collation_name: String,
+        is_nullable: bool,
+        identity: Option<MssqlIdentity>,
+    },
+    Computed {
+        definition: String,
+        is_persisted: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MssqlDefaultConstraint {
-    pub constraint_name: String,
+pub struct MssqlColumn {
     pub column_name: String,
-    pub definition: String,
+    pub ordinal_position: u32,
+    pub definition: MssqlColumnDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MssqlKeyColumn {
+    pub column_name: String,
+    pub is_descending_key: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MssqlKeyConstraintType {
+    PrimaryKey,
+    Unique,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MssqlConstraintKind {
+    Default {
+        column_name: String,
+        definition: String,
+    },
+    Key {
+        constraint_type: MssqlKeyConstraintType,
+        index_type_desc: String,
+        columns: Vec<MssqlKeyColumn>,
+    },
+    Check {
+        definition: String,
+        is_not_for_replication: bool,
+        is_disabled: bool,
+        is_not_trusted: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MssqlConstraint {
+    pub constraint_name: String,
+    pub kind: MssqlConstraintKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MssqlIndexColumn {
     pub column_name: String,
+    pub index_column_id: u32,
     pub key_ordinal: u32,
     pub is_descending_key: bool,
     pub is_included_column: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MssqlIndex {
-    pub index: Index,
+    pub index_name: String,
+    pub index_id: u32,
+    pub index_type: u8,
     pub index_type_desc: String,
-    pub is_primary_key: bool,
-    pub is_unique_constraint: bool,
+    pub is_unique: bool,
+    pub is_disabled: bool,
     pub filter_definition: Option<String>,
+    pub xml_primary_index_name: Option<String>,
+    pub xml_secondary_type_desc: Option<String>,
+    pub hash_bucket_count: Option<u64>,
     pub columns: Vec<MssqlIndexColumn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MssqlComment {
+    Table {
+        comment: String,
+    },
+    Column {
+        column_name: String,
+        comment: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MssqlTable {
+    pub database_name: String,
+    pub schema_name: String,
+    pub table_name: String,
+    pub is_memory_optimized: bool,
+    pub durability_desc: String,
+    pub columns: Vec<MssqlColumn>,
+    pub constraints: Vec<MssqlConstraint>,
+    pub indexes: Vec<MssqlIndex>,
+    pub comments: Vec<MssqlComment>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MssqlCreateTableStatement {
-    pub table: Table,
-    pub identity_columns: Vec<MssqlIdentityColumn>,
-    pub computed_columns: Vec<MssqlComputedColumn>,
-    pub default_constraints: Vec<MssqlDefaultConstraint>,
-    pub constraints: Vec<Constraint>,
-    pub indexes: Vec<MssqlIndex>,
-    pub comments: Vec<Comment>,
+    pub table: MssqlTable,
 }
 
 impl MssqlCreateTableStatement {
@@ -68,24 +127,6 @@ impl MssqlCreateTableStatement {
         self.table.database_name = dst_db.to_string();
         self.table.schema_name = dst_schema.to_string();
         self.table.table_name = dst_tb.to_string();
-
-        for constraint in &mut self.constraints {
-            constraint.database_name = dst_db.to_string();
-            constraint.schema_name = dst_schema.to_string();
-            constraint.table_name = dst_tb.to_string();
-        }
-
-        for index in &mut self.indexes {
-            index.index.database_name = dst_db.to_string();
-            index.index.schema_name = dst_schema.to_string();
-            index.index.table_name = dst_tb.to_string();
-        }
-
-        for comment in &mut self.comments {
-            comment.database_name = dst_db.to_string();
-            comment.schema_name = dst_schema.to_string();
-            comment.table_name = dst_tb.to_string();
-        }
     }
 
     pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
@@ -102,11 +143,8 @@ impl MssqlCreateTableStatement {
             ));
         }
 
-        for constraint in &self.constraints {
-            let is_key = matches!(
-                constraint.constraint_type,
-                ConstraintType::Primary | ConstraintType::Unique
-            );
+        for constraint in &self.table.constraints {
+            let is_key = matches!(&constraint.kind, MssqlConstraintKind::Key { .. });
             if (is_key && !table_enabled)
                 || (!is_key && filter.filter_structure(&StructureType::Constraint))
             {
@@ -115,49 +153,77 @@ impl MssqlCreateTableStatement {
             sqls.push((
                 format!(
                     "constraint.{}.{}.{}.{}",
-                    constraint.database_name,
-                    constraint.schema_name,
-                    constraint.table_name,
+                    self.table.database_name,
+                    self.table.schema_name,
+                    self.table.table_name,
                     constraint.constraint_name
                 ),
-                Self::constraint_to_sql(constraint),
+                self.constraint_to_sql(constraint)?,
             ));
+        }
+        if !filter.filter_structure(&StructureType::Constraint) {
+            for constraint in &self.table.constraints {
+                let Some((state, sql)) = self.check_constraint_state_to_sql(constraint) else {
+                    continue;
+                };
+                sqls.push((
+                    format!(
+                        "constraint.{}.{}.{}.{}.{}",
+                        self.table.database_name,
+                        self.table.schema_name,
+                        self.table.table_name,
+                        constraint.constraint_name,
+                        state
+                    ),
+                    sql,
+                ));
+            }
         }
 
         if !filter.filter_structure(&StructureType::Index) {
-            for index in &self.indexes {
-                if index.is_primary_key || index.is_unique_constraint {
-                    continue;
-                }
+            self.table.indexes.sort_by_key(|index| index.index_id);
+            for index in &self.table.indexes {
                 sqls.push((
                     format!(
                         "index.{}.{}.{}.{}",
-                        index.index.database_name,
-                        index.index.schema_name,
-                        index.index.table_name,
-                        index.index.index_name
+                        self.table.database_name,
+                        self.table.schema_name,
+                        self.table.table_name,
+                        index.index_name
                     ),
-                    Self::index_to_sql(index)?,
+                    self.index_to_sql(index)?,
+                ));
+            }
+            for index in self.table.indexes.iter().filter(|index| index.is_disabled) {
+                sqls.push((
+                    format!(
+                        "index.{}.{}.{}.{}.disable",
+                        self.table.database_name,
+                        self.table.schema_name,
+                        self.table.table_name,
+                        index.index_name
+                    ),
+                    self.index_disable_sql(index)?,
                 ));
             }
         }
 
         if table_enabled && !filter.filter_structure(&StructureType::Comment) {
-            for comment in &self.comments {
-                let key = match &comment.comment_type {
-                    CommentType::Table => format!(
+            for comment in &self.table.comments {
+                let key = match comment {
+                    MssqlComment::Table { .. } => format!(
                         "table_comment.{}.{}.{}",
-                        comment.database_name, comment.schema_name, comment.table_name
+                        self.table.database_name, self.table.schema_name, self.table.table_name
                     ),
-                    CommentType::Column => format!(
+                    MssqlComment::Column { column_name, .. } => format!(
                         "column_comment.{}.{}.{}.{}",
-                        comment.database_name,
-                        comment.schema_name,
-                        comment.table_name,
-                        comment.column_name
+                        self.table.database_name,
+                        self.table.schema_name,
+                        self.table.table_name,
+                        column_name
                     ),
                 };
-                sqls.push((key, Self::comment_to_sql(comment)));
+                sqls.push((key, self.comment_to_sql(comment)));
             }
         }
 
@@ -168,107 +234,253 @@ impl MssqlCreateTableStatement {
         self.table
             .columns
             .sort_by_key(|column| column.ordinal_position);
+
         let mut column_sqls = Vec::with_capacity(self.table.columns.len());
         for column in &self.table.columns {
             let column_name = Self::quote(&column.column_name);
-            if let Some(computed) = self
-                .computed_columns
-                .iter()
-                .find(|computed| computed.column_name == column.column_name)
-            {
-                let persisted = if computed.is_persisted {
-                    " PERSISTED"
-                } else {
-                    ""
-                };
-                column_sqls.push(format!(
-                    "{column_name} AS {}{persisted}",
-                    computed.definition
-                ));
-                continue;
-            }
-
-            let mut sql = format!("{column_name} {}", column.column_type);
-            if !column.collation_name.is_empty() {
-                sql.push_str(&format!(" COLLATE {}", column.collation_name));
-            }
-            if let Some(identity) = self
-                .identity_columns
-                .iter()
-                .find(|identity| identity.column_name == column.column_name)
-            {
-                sql.push_str(&format!(
-                    " IDENTITY({}, {})",
-                    identity.seed_value, identity.increment_value
-                ));
-                if identity.is_not_for_replication {
-                    sql.push_str(" NOT FOR REPLICATION");
+            match &column.definition {
+                MssqlColumnDefinition::Computed {
+                    definition,
+                    is_persisted,
+                } => {
+                    let persisted = if *is_persisted { " PERSISTED" } else { "" };
+                    column_sqls.push(format!("{column_name} AS {definition}{persisted}"));
+                }
+                MssqlColumnDefinition::Regular {
+                    column_type,
+                    collation_name,
+                    is_nullable,
+                    identity,
+                } => {
+                    let mut sql = format!("{column_name} {column_type}");
+                    if !collation_name.is_empty() {
+                        sql.push_str(&format!(" COLLATE {collation_name}"));
+                    }
+                    if let Some(identity) = identity {
+                        sql.push_str(&format!(
+                            " IDENTITY({}, {})",
+                            identity.seed_value, identity.increment_value
+                        ));
+                        if identity.is_not_for_replication {
+                            sql.push_str(" NOT FOR REPLICATION");
+                        }
+                    }
+                    sql.push_str(if *is_nullable { " NULL" } else { " NOT NULL" });
+                    column_sqls.push(sql);
                 }
             }
-            if let Some(default) = self
-                .default_constraints
-                .iter()
-                .find(|default| default.column_name == column.column_name)
-            {
-                sql.push_str(&format!(
-                    " CONSTRAINT {} DEFAULT {}",
-                    Self::quote(&default.constraint_name),
-                    default.definition
-                ));
-            }
-            sql.push_str(if column.is_nullable {
-                " NULL"
-            } else {
-                " NOT NULL"
-            });
-            column_sqls.push(sql);
         }
 
         if column_sqls.is_empty() {
             return Err(DtError::UnsupportedTableStructure(format!(
                 "MSSQL table {} has no columns",
-                Self::qualified_table(
-                    &self.table.database_name,
-                    &self.table.schema_name,
-                    &self.table.table_name,
-                )
+                self.qualified_table_name()
             ))
             .into());
         }
 
-        Ok(format!(
+        let mut sql = format!(
             "CREATE TABLE {} ({})",
-            Self::qualified_table(
-                &self.table.database_name,
-                &self.table.schema_name,
-                &self.table.table_name,
-            ),
+            self.qualified_table_name(),
             column_sqls.join(", ")
+        );
+        if self.table.is_memory_optimized {
+            if !matches!(
+                self.table.durability_desc.as_str(),
+                "SCHEMA_AND_DATA" | "SCHEMA_ONLY"
+            ) {
+                return Err(DtError::UnsupportedTableStructure(format!(
+                    "MSSQL memory-optimized table {} uses unsupported durability {}",
+                    self.qualified_table_name(),
+                    self.table.durability_desc,
+                ))
+                .into());
+            }
+            sql.push_str(&format!(
+                " WITH (MEMORY_OPTIMIZED = ON, DURABILITY = {})",
+                self.table.durability_desc
+            ));
+        }
+        Ok(sql)
+    }
+
+    fn constraint_to_sql(&self, constraint: &MssqlConstraint) -> anyhow::Result<String> {
+        let definition = match &constraint.kind {
+            MssqlConstraintKind::Default {
+                column_name,
+                definition,
+            } => {
+                let column = self
+                    .table
+                    .columns
+                    .iter()
+                    .find(|column| column.column_name == *column_name)
+                    .ok_or_else(|| {
+                        DtError::UnsupportedTableStructure(format!(
+                            "MSSQL default constraint {} references missing column {} on table {}",
+                            Self::quote(&constraint.constraint_name),
+                            Self::quote(column_name),
+                            self.qualified_table_name(),
+                        ))
+                    })?;
+                if matches!(column.definition, MssqlColumnDefinition::Computed { .. }) {
+                    return Err(DtError::UnsupportedTableStructure(format!(
+                        "MSSQL computed column {} on table {} has a default constraint",
+                        Self::quote(column_name),
+                        self.qualified_table_name(),
+                    ))
+                    .into());
+                }
+                format!("DEFAULT {definition} FOR {}", Self::quote(column_name))
+            }
+            MssqlConstraintKind::Key {
+                constraint_type,
+                index_type_desc,
+                columns,
+            } => {
+                if !matches!(index_type_desc.as_str(), "CLUSTERED" | "NONCLUSTERED") {
+                    return Err(DtError::UnsupportedTableStructure(format!(
+                        "MSSQL constraint {} uses unsupported index type {}",
+                        constraint.constraint_name, index_type_desc
+                    ))
+                    .into());
+                }
+                if columns.is_empty() {
+                    return Err(DtError::UnsupportedTableStructure(format!(
+                        "MSSQL constraint {} has no key columns",
+                        constraint.constraint_name
+                    ))
+                    .into());
+                }
+                let constraint_type = match constraint_type {
+                    MssqlKeyConstraintType::PrimaryKey => "PRIMARY KEY",
+                    MssqlKeyConstraintType::Unique => "UNIQUE",
+                };
+                let columns = columns
+                    .iter()
+                    .map(|column| {
+                        format!(
+                            "{} {}",
+                            Self::quote(&column.column_name),
+                            if column.is_descending_key {
+                                "DESC"
+                            } else {
+                                "ASC"
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{constraint_type} {index_type_desc} ({columns})")
+            }
+            MssqlConstraintKind::Check {
+                definition,
+                is_not_for_replication,
+                ..
+            } => format!(
+                "CHECK {}{}",
+                if *is_not_for_replication {
+                    "NOT FOR REPLICATION "
+                } else {
+                    ""
+                },
+                definition
+            ),
+        };
+        let with_nocheck = if matches!(
+            &constraint.kind,
+            MssqlConstraintKind::Check {
+                is_not_trusted: true,
+                ..
+            }
+        ) {
+            " WITH NOCHECK"
+        } else {
+            ""
+        };
+        Ok(format!(
+            "ALTER TABLE {}{with_nocheck} ADD CONSTRAINT {} {}",
+            self.qualified_table_name(),
+            Self::quote(&constraint.constraint_name),
+            definition
         ))
     }
 
-    fn constraint_to_sql(constraint: &Constraint) -> String {
-        format!(
-            "ALTER TABLE {} ADD CONSTRAINT {} {}",
-            Self::qualified_table(
-                &constraint.database_name,
-                &constraint.schema_name,
-                &constraint.table_name,
+    fn check_constraint_state_to_sql(
+        &self,
+        constraint: &MssqlConstraint,
+    ) -> Option<(&'static str, String)> {
+        let MssqlConstraintKind::Check {
+            is_disabled,
+            is_not_trusted,
+            ..
+        } = &constraint.kind
+        else {
+            return None;
+        };
+        let (state, action) = if *is_disabled {
+            ("disable", "NOCHECK CONSTRAINT")
+        } else if *is_not_trusted {
+            ("untrust", "WITH NOCHECK CHECK CONSTRAINT")
+        } else {
+            return None;
+        };
+        Some((
+            state,
+            format!(
+                "ALTER TABLE {} {action} {}",
+                self.qualified_table_name(),
+                Self::quote(&constraint.constraint_name)
             ),
-            Self::quote(&constraint.constraint_name),
-            constraint.definition
-        )
+        ))
     }
 
-    fn index_to_sql(index: &MssqlIndex) -> anyhow::Result<String> {
-        if !matches!(index.index_type_desc.as_str(), "CLUSTERED" | "NONCLUSTERED") {
-            return Err(DtError::UnsupportedTableStructure(format!(
-                "MSSQL index {} uses unsupported type {}",
-                index.index.index_name, index.index_type_desc
+    fn index_to_sql(&self, index: &MssqlIndex) -> anyhow::Result<String> {
+        match index.index_type {
+            1 | 2 => self.rowstore_index_to_sql(index),
+            3 => self.xml_index_to_sql(index),
+            4 => self.single_column_index_to_sql(index, "CREATE SPATIAL INDEX"),
+            5 => Ok(format!(
+                "CREATE CLUSTERED COLUMNSTORE INDEX {} ON {}",
+                Self::quote(&index.index_name),
+                self.qualified_table_name()
+            )),
+            6 => {
+                let columns = self.index_columns_by_position(index)?;
+                let mut sql = format!(
+                    "CREATE NONCLUSTERED COLUMNSTORE INDEX {} ON {} ({columns})",
+                    Self::quote(&index.index_name),
+                    self.qualified_table_name()
+                );
+                if let Some(filter) = &index.filter_definition {
+                    sql.push_str(&format!(" WHERE {filter}"));
+                }
+                Ok(sql)
+            }
+            7 => {
+                let columns = self.index_columns_by_position(index)?;
+                let bucket_count = index.hash_bucket_count.ok_or_else(|| {
+                    DtError::UnsupportedTableStructure(format!(
+                        "MSSQL hash index {} has no bucket count",
+                        Self::quote(&index.index_name),
+                    ))
+                })?;
+                Ok(format!(
+                    "ALTER TABLE {} ADD INDEX {} HASH ({columns}) WITH (BUCKET_COUNT = {bucket_count})",
+                    self.qualified_table_name(),
+                    Self::quote(&index.index_name),
+                ))
+            }
+            9 => self.single_column_index_to_sql(index, "CREATE JSON INDEX"),
+            _ => Err(DtError::UnsupportedTableStructure(format!(
+                "MSSQL index {} uses unknown type {} ({})",
+                index.index_name, index.index_type, index.index_type_desc
             ))
-            .into());
+            .into()),
         }
+    }
 
+    fn rowstore_index_to_sql(&self, index: &MssqlIndex) -> anyhow::Result<String> {
         let mut key_columns = index
             .columns
             .iter()
@@ -278,7 +490,7 @@ impl MssqlCreateTableStatement {
         if key_columns.is_empty() {
             return Err(DtError::UnsupportedTableStructure(format!(
                 "MSSQL index {} has no key columns",
-                index.index.index_name
+                index.index_name
             ))
             .into());
         }
@@ -298,29 +510,20 @@ impl MssqlCreateTableStatement {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let unique = if index.index.index_kind
-            == crate::meta::struct_meta::structure::index::IndexKind::Unique
-        {
-            "UNIQUE "
-        } else {
-            ""
-        };
+        let unique = if index.is_unique { "UNIQUE " } else { "" };
         let mut sql = format!(
             "CREATE {unique}{} INDEX {} ON {} ({key_columns})",
             index.index_type_desc,
-            Self::quote(&index.index.index_name),
-            Self::qualified_table(
-                &index.index.database_name,
-                &index.index.schema_name,
-                &index.index.table_name,
-            )
+            Self::quote(&index.index_name),
+            self.qualified_table_name()
         );
 
-        let included_columns = index
+        let mut included_columns = index
             .columns
             .iter()
             .filter(|column| column.is_included_column)
             .collect::<Vec<_>>();
+        included_columns.sort_by_key(|column| column.index_column_id);
         if !included_columns.is_empty() {
             sql.push_str(&format!(
                 " INCLUDE ({})",
@@ -337,22 +540,124 @@ impl MssqlCreateTableStatement {
         Ok(sql)
     }
 
-    fn comment_to_sql(comment: &Comment) -> String {
-        let value = comment.comment.replace('\'', "''");
-        let schema = comment.schema_name.replace('\'', "''");
-        let table = comment.table_name.replace('\'', "''");
-        let database = if comment.database_name.is_empty() {
+    fn xml_index_to_sql(&self, index: &MssqlIndex) -> anyhow::Result<String> {
+        let column = self.single_index_column(index)?;
+        if let Some(primary_index_name) = &index.xml_primary_index_name {
+            let secondary_type = index.xml_secondary_type_desc.as_deref().ok_or_else(|| {
+                DtError::UnsupportedTableStructure(format!(
+                    "MSSQL secondary XML index {} has no secondary type",
+                    Self::quote(&index.index_name),
+                ))
+            })?;
+            if !matches!(secondary_type, "PATH" | "VALUE" | "PROPERTY") {
+                return Err(DtError::UnsupportedTableStructure(format!(
+                    "MSSQL XML index {} uses unsupported secondary type {secondary_type}",
+                    Self::quote(&index.index_name),
+                ))
+                .into());
+            }
+            Ok(format!(
+                "CREATE XML INDEX {} ON {} ({}) USING XML INDEX {} FOR {secondary_type}",
+                Self::quote(&index.index_name),
+                self.qualified_table_name(),
+                Self::quote(&column.column_name),
+                Self::quote(primary_index_name),
+            ))
+        } else {
+            Ok(format!(
+                "CREATE PRIMARY XML INDEX {} ON {} ({})",
+                Self::quote(&index.index_name),
+                self.qualified_table_name(),
+                Self::quote(&column.column_name),
+            ))
+        }
+    }
+
+    fn single_column_index_to_sql(
+        &self,
+        index: &MssqlIndex,
+        prefix: &str,
+    ) -> anyhow::Result<String> {
+        let column = self.single_index_column(index)?;
+        Ok(format!(
+            "{prefix} {} ON {} ({})",
+            Self::quote(&index.index_name),
+            self.qualified_table_name(),
+            Self::quote(&column.column_name),
+        ))
+    }
+
+    fn single_index_column<'a>(
+        &self,
+        index: &'a MssqlIndex,
+    ) -> anyhow::Result<&'a MssqlIndexColumn> {
+        if index.columns.len() != 1 {
+            return Err(DtError::UnsupportedTableStructure(format!(
+                "MSSQL index {} of type {} has {} columns, expected one",
+                Self::quote(&index.index_name),
+                index.index_type_desc,
+                index.columns.len(),
+            ))
+            .into());
+        }
+        Ok(&index.columns[0])
+    }
+
+    fn index_columns_by_position(&self, index: &MssqlIndex) -> anyhow::Result<String> {
+        let mut columns = index.columns.iter().collect::<Vec<_>>();
+        columns.sort_by_key(|column| column.index_column_id);
+        if columns.is_empty() {
+            return Err(DtError::UnsupportedTableStructure(format!(
+                "MSSQL index {} has no columns",
+                Self::quote(&index.index_name),
+            ))
+            .into());
+        }
+        Ok(columns
+            .into_iter()
+            .map(|column| Self::quote(&column.column_name))
+            .collect::<Vec<_>>()
+            .join(", "))
+    }
+
+    fn index_disable_sql(&self, index: &MssqlIndex) -> anyhow::Result<String> {
+        if index.index_type == 7 {
+            return Err(DtError::UnsupportedTableStructure(format!(
+                "MSSQL memory-optimized hash index {} cannot be disabled",
+                Self::quote(&index.index_name),
+            ))
+            .into());
+        }
+        Ok(format!(
+            "ALTER INDEX {} ON {} DISABLE",
+            Self::quote(&index.index_name),
+            self.qualified_table_name()
+        ))
+    }
+
+    fn comment_to_sql(&self, comment: &MssqlComment) -> String {
+        let (column_name, comment) = match comment {
+            MssqlComment::Table { comment } => (None, comment),
+            MssqlComment::Column {
+                column_name,
+                comment,
+            } => (Some(column_name), comment),
+        };
+        let value = comment.replace('\'', "''");
+        let schema = self.table.schema_name.replace('\'', "''");
+        let table = self.table.table_name.replace('\'', "''");
+        let database = if self.table.database_name.is_empty() {
             String::new()
         } else {
-            format!("{}.", Self::quote(&comment.database_name))
+            format!("{}.", Self::quote(&self.table.database_name))
         };
         let mut sql = format!(
             "EXEC {database}sys.sp_addextendedproperty @name=N'MS_Description', @value=N'{value}', \
              @level0type=N'SCHEMA', @level0name=N'{schema}', \
              @level1type=N'TABLE', @level1name=N'{table}'"
         );
-        if matches!(comment.comment_type, CommentType::Column) {
-            let column = comment.column_name.replace('\'', "''");
+        if let Some(column_name) = column_name {
+            let column = column_name.replace('\'', "''");
             sql.push_str(&format!(", @level2type=N'COLUMN', @level2name=N'{column}'"));
         }
         sql
@@ -365,72 +670,98 @@ impl MssqlCreateTableStatement {
     fn qualified_table(db: &str, schema: &str, tb: &str) -> String {
         SqlUtil::render_rdb_table(&DbType::Mssql, db, schema, tb)
     }
+
+    fn qualified_table_name(&self) -> String {
+        Self::qualified_table(
+            &self.table.database_name,
+            &self.table.schema_name,
+            &self.table.table_name,
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::filter_config::FilterConfig, meta::struct_meta::structure::column::Column,
-    };
+    use crate::config::filter_config::FilterConfig;
 
     #[test]
-    fn comment_sqls_use_summary_compatible_keys() {
+    fn index_types_not_executed_by_e2e_generate_sql() {
         let filter = RdbFilter::from_config(
             &FilterConfig {
                 do_schemas: "*".to_string(),
-                do_structures: "*".to_string(),
+                do_structures: "index".to_string(),
                 ..Default::default()
             },
             &DbType::Mssql,
         )
         .unwrap();
-        let mut statement = MssqlCreateTableStatement {
-            table: Table {
+        let column = |name: &str| MssqlIndexColumn {
+            column_name: name.to_string(),
+            index_column_id: 1,
+            key_ordinal: 0,
+            is_descending_key: false,
+            is_included_column: false,
+        };
+        let index = |index_name: &str,
+                     index_id: u32,
+                     index_type: u8,
+                     index_type_desc: &str,
+                     columns: Vec<MssqlIndexColumn>| MssqlIndex {
+            index_name: index_name.to_string(),
+            index_id,
+            index_type,
+            index_type_desc: index_type_desc.to_string(),
+            is_unique: false,
+            is_disabled: false,
+            filter_definition: None,
+            xml_primary_index_name: None,
+            xml_secondary_type_desc: None,
+            hash_bucket_count: None,
+            columns,
+        };
+
+        let mut hash = index("ix_hash", 1, 7, "NONCLUSTERED HASH", vec![column("id")]);
+        hash.hash_bucket_count = Some(1024);
+
+        let cases = vec![
+            (
+                hash,
+                "ALTER TABLE [test_db].[dbo].[users] ADD INDEX [ix_hash] HASH ([id]) WITH (BUCKET_COUNT = 1024)",
+            ),
+            (
+                index(
+                    "ix_json",
+                    2,
+                    9,
+                    "JSON",
+                    vec![column("json_value")],
+                ),
+                "CREATE JSON INDEX [ix_json] ON [test_db].[dbo].[users] ([json_value])",
+            ),
+        ];
+
+        for (index, expected_sql) in cases {
+            let mut statement = index_test_statement(vec![index]);
+            let sqls = statement.to_sqls(&filter).unwrap();
+            assert_eq!(sqls.len(), 1);
+            assert_eq!(sqls[0].1, expected_sql);
+        }
+    }
+
+    fn index_test_statement(indexes: Vec<MssqlIndex>) -> MssqlCreateTableStatement {
+        MssqlCreateTableStatement {
+            table: MssqlTable {
                 database_name: "test_db".to_string(),
                 schema_name: "dbo".to_string(),
                 table_name: "users".to_string(),
-                columns: vec![Column {
-                    column_name: "id".to_string(),
-                    ordinal_position: 1,
-                    column_type: "INT".to_string(),
-                    ..Default::default()
-                }],
-                ..Default::default()
+                is_memory_optimized: false,
+                durability_desc: "SCHEMA_AND_DATA".to_string(),
+                columns: Vec::new(),
+                constraints: Vec::new(),
+                indexes,
+                comments: Vec::new(),
             },
-            identity_columns: Vec::new(),
-            computed_columns: Vec::new(),
-            default_constraints: Vec::new(),
-            constraints: Vec::new(),
-            indexes: Vec::new(),
-            comments: vec![
-                Comment {
-                    comment_type: CommentType::Table,
-                    database_name: "test_db".to_string(),
-                    schema_name: "dbo".to_string(),
-                    table_name: "users".to_string(),
-                    column_name: String::new(),
-                    comment: "users table".to_string(),
-                },
-                Comment {
-                    comment_type: CommentType::Column,
-                    database_name: "test_db".to_string(),
-                    schema_name: "dbo".to_string(),
-                    table_name: "users".to_string(),
-                    column_name: "id".to_string(),
-                    comment: "primary identifier".to_string(),
-                },
-            ],
-        };
-
-        let keys = statement
-            .to_sqls(&filter)
-            .unwrap()
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect::<Vec<_>>();
-
-        assert!(keys.contains(&"table_comment.test_db.dbo.users".to_string()));
-        assert!(keys.contains(&"column_comment.test_db.dbo.users.id".to_string()));
+        }
     }
 }

@@ -88,14 +88,6 @@ mod test {
             drop(connection);
 
             assert!(manager
-                .list_schemas(TEST_DATABASE)
-                .await?
-                .contains(&TEST_SCHEMA.to_string()));
-            assert_eq!(
-                manager.list_tables(TEST_DATABASE, TEST_SCHEMA).await?,
-                vec![TEST_TABLE]
-            );
-            assert!(manager
                 .list_schema_tables(TEST_DATABASE)
                 .await?
                 .contains(&(TEST_SCHEMA.to_string(), TEST_TABLE.to_string())));

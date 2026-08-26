@@ -13,7 +13,10 @@ use dt_common::{
     log_diff, log_info, log_miss, log_sql, log_summary,
     meta::{
         mssql::mssql_connection_pool::MssqlConnectionPool,
-        struct_meta::{struct_data::StructData, structure::structure_type::StructureType},
+        struct_meta::{
+            statement::struct_statement::StructStatement, struct_data::StructData,
+            structure::structure_type::StructureType,
+        },
     },
     monitor::{
         counter_type::CounterType, task_metrics::TaskMetricsType,
@@ -34,6 +37,27 @@ use crate::{
     rdb_struct_filter::RdbStructFilter,
 };
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct StructCheckKey {
+    key: String,
+    db: String,
+    schema: String,
+    tb: String,
+}
+
+impl StructCheckKey {
+    fn new(key: String, db: &str, schema: &str, tb: &str) -> Self {
+        Self {
+            key,
+            db: db.to_string(),
+            schema: schema.to_string(),
+            tb: tb.to_string(),
+        }
+    }
+}
+
+type StructSqlMap = BTreeMap<StructCheckKey, String>;
+
 pub struct StructCheckerHandle {
     db_type: DbType,
     conn_pool_mysql: Option<Pool<MySql>>,
@@ -47,21 +71,20 @@ pub struct StructCheckerHandle {
     global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     monitor: TaskMonitorHandle,
     monitor_task_id: String,
-    src_sql_map: BTreeMap<String, String>,
+    src_sql_map: StructSqlMap,
     namespaces: HashSet<String>,
     start_time: String,
 }
 
 fn struct_table_summary(
     db_type: &DbType,
-    key: &str,
+    key: &StructCheckKey,
     checked_count: usize,
     miss: bool,
     diff: bool,
 ) -> Option<CheckTableSummaryLog> {
-    let mut parts = key.splitn(5, '.');
+    let mut parts = key.key.splitn(5, '.');
     let object_type = parts.next()?;
-
     if !matches!(
         object_type,
         "table"
@@ -75,15 +98,15 @@ fn struct_table_summary(
         return None;
     }
 
-    let (db, schema, tb) = if matches!(db_type, DbType::Mssql) {
-        (
-            parts.next()?.to_string(),
-            parts.next()?.to_string(),
-            parts.next()?.to_string(),
-        )
+    let (db, schema, tb) = if !key.tb.is_empty() && object_type != "sequence" {
+        (key.db.clone(), key.schema.clone(), key.tb.clone())
     } else {
         (
-            String::new(),
+            if matches!(db_type, DbType::Mssql) {
+                key.db.clone()
+            } else {
+                String::new()
+            },
             parts.next()?.to_string(),
             parts.next()?.to_string(),
         )
@@ -145,16 +168,31 @@ impl StructCheckerHandle {
     }
 
     fn insert_sqls(
-        sql_map: &mut BTreeMap<String, String>,
+        sql_map: &mut StructSqlMap,
         sqls: Vec<(String, String)>,
         side: &str,
+        db: &str,
+        schema: &str,
+        tb: &str,
     ) -> anyhow::Result<()> {
         for (key, sql) in sqls {
-            if sql_map.insert(key.clone(), sql).is_some() {
+            let check_key = StructCheckKey::new(key.clone(), db, schema, tb);
+            if sql_map.insert(check_key, sql).is_some() {
                 bail!("duplicate {side} structure key after routing: {key}");
             }
         }
         Ok(())
+    }
+
+    fn insert_statement(
+        sql_map: &mut StructSqlMap,
+        mut statement: StructStatement,
+        filter: &RdbFilter,
+        side: &str,
+    ) -> anyhow::Result<()> {
+        let (db, schema, tb) = statement.statement_path();
+        let sqls = statement.to_sqls(filter)?;
+        Self::insert_sqls(sql_map, sqls, side, &db, &schema, &tb)
     }
 
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
@@ -163,8 +201,8 @@ impl StructCheckerHandle {
         } else {
             struct_data
         };
-        let routed_db = routed.db.clone();
         let mut statement = routed.statement;
+        let (db, schema, tb) = statement.statement_path();
         let sqls = statement.to_sqls(&self.filter)?;
         if !sqls.is_empty() {
             self.monitor
@@ -176,26 +214,26 @@ impl StructCheckerHandle {
                 .await;
         }
 
-        for (key, sql) in sqls {
+        for (key, _) in &sqls {
             let namespace = if matches!(self.db_type, DbType::Mssql) {
-                (!routed_db.is_empty()).then_some(routed_db.as_str())
+                (!db.is_empty()).then_some(db.as_str())
             } else {
-                Self::schema_from_key(&key).filter(|schema| !schema.is_empty())
+                (!schema.is_empty())
+                    .then_some(schema.as_str())
+                    .or_else(|| Self::schema_from_key(key).filter(|schema| !schema.is_empty()))
             };
             if let Some(namespace) = namespace {
                 self.namespaces.insert(namespace.to_string());
             }
-            if self.src_sql_map.insert(key.clone(), sql).is_some() {
-                bail!("duplicate source structure key after routing: {key}");
-            }
         }
+        Self::insert_sqls(&mut self.src_sql_map, sqls, "source", &db, &schema, &tb)?;
         Ok(())
     }
 
     async fn build_dst_sql_map(
         &self,
         namespaces: &HashSet<String>,
-    ) -> anyhow::Result<BTreeMap<String, String>> {
+    ) -> anyhow::Result<StructSqlMap> {
         let mut dst_map = BTreeMap::new();
         let target_filter = RdbStructFilter::for_target(self.filter.clone(), self.router.clone());
         match self.db_type {
@@ -218,10 +256,20 @@ impl StructCheckerHandle {
                     allow_missing_databases: true,
                 };
                 for stmt in fetcher.get_create_database_statements("").await? {
-                    dst_map.extend(stmt.to_sqls(&self.filter)?);
+                    Self::insert_statement(
+                        &mut dst_map,
+                        StructStatement::MysqlCreateDatabase(stmt),
+                        &self.filter,
+                        "target",
+                    )?;
                 }
-                for mut stmt in fetcher.get_create_table_statements("", "").await? {
-                    dst_map.extend(stmt.to_sqls(&self.filter)?);
+                for stmt in fetcher.get_create_table_statements("", "").await? {
+                    Self::insert_statement(
+                        &mut dst_map,
+                        StructStatement::MysqlCreateTable(stmt),
+                        &self.filter,
+                        "target",
+                    )?;
                 }
             }
             DbType::Pg => {
@@ -238,23 +286,48 @@ impl StructCheckerHandle {
                 };
                 if !self.filter.filter_structure(&StructureType::Udt) {
                     for stmt in fetcher.get_udt_statements().await? {
-                        dst_map.extend(stmt.to_sqls(&self.filter)?);
+                        Self::insert_statement(
+                            &mut dst_map,
+                            StructStatement::PgCreateUdt(stmt),
+                            &self.filter,
+                            "target",
+                        )?;
                     }
                 }
                 if !self.filter.filter_structure(&StructureType::Udf) {
                     for stmt in fetcher.get_udf_statements().await? {
-                        dst_map.extend(stmt.to_sqls(&self.filter)?);
+                        Self::insert_statement(
+                            &mut dst_map,
+                            StructStatement::PgCreateUdf(stmt),
+                            &self.filter,
+                            "target",
+                        )?;
                     }
                 }
                 for stmt in fetcher.get_create_schema_statements("").await? {
-                    dst_map.extend(stmt.to_sqls(&self.filter)?);
+                    Self::insert_statement(
+                        &mut dst_map,
+                        StructStatement::PgCreateSchema(stmt),
+                        &self.filter,
+                        "target",
+                    )?;
                 }
-                for mut stmt in fetcher.get_create_table_statements("", "").await? {
-                    dst_map.extend(stmt.to_sqls(&self.filter)?);
+                for stmt in fetcher.get_create_table_statements("", "").await? {
+                    Self::insert_statement(
+                        &mut dst_map,
+                        StructStatement::PgCreateTable(stmt),
+                        &self.filter,
+                        "target",
+                    )?;
                 }
                 if !self.filter.filter_structure(&StructureType::Rbac) {
                     for stmt in fetcher.get_create_rbac_statements().await? {
-                        dst_map.extend(stmt.to_sqls(&self.filter)?);
+                        Self::insert_statement(
+                            &mut dst_map,
+                            StructStatement::PgCreateRbac(stmt),
+                            &self.filter,
+                            "target",
+                        )?;
                     }
                 }
             }
@@ -264,20 +337,39 @@ impl StructCheckerHandle {
                     .as_ref()
                     .context("MSSQL connection pool not found")?
                     .clone();
-                let mut fetcher = MssqlStructFetcher {
-                    connection_pool,
-                    dbs: namespaces.clone(),
-                    filter: target_filter,
-                    allow_missing_databases: true,
-                };
-                for stmt in fetcher.get_create_database_statements("").await? {
-                    Self::insert_sqls(&mut dst_map, stmt.to_sqls(&self.filter)?, "target")?;
-                }
-                for stmt in fetcher.get_create_schema_statements("", "").await? {
-                    Self::insert_sqls(&mut dst_map, stmt.to_sqls(&self.filter)?, "target")?;
-                }
-                for mut stmt in fetcher.get_create_table_statements("", "", "").await? {
-                    Self::insert_sqls(&mut dst_map, stmt.to_sqls(&self.filter)?, "target")?;
+                let mut databases = namespaces.iter().cloned().collect::<Vec<_>>();
+                databases.sort();
+                for db in databases {
+                    let mut fetcher = MssqlStructFetcher {
+                        connection_pool: connection_pool.clone(),
+                        db,
+                        filter: target_filter.clone(),
+                        allow_missing_database: true,
+                    };
+                    for stmt in fetcher.get_create_database_statements().await? {
+                        Self::insert_statement(
+                            &mut dst_map,
+                            StructStatement::MssqlCreateDatabase(stmt),
+                            &self.filter,
+                            "target",
+                        )?;
+                    }
+                    for stmt in fetcher.get_create_schema_statements("").await? {
+                        Self::insert_statement(
+                            &mut dst_map,
+                            StructStatement::MssqlCreateSchema(stmt),
+                            &self.filter,
+                            "target",
+                        )?;
+                    }
+                    for stmt in fetcher.get_create_table_statements("", "").await? {
+                        Self::insert_statement(
+                            &mut dst_map,
+                            StructStatement::MssqlCreateTable(stmt),
+                            &self.filter,
+                            "target",
+                        )?;
+                    }
                 }
             }
             _ => bail!(DtError::InvalidConfig(format!(
@@ -291,7 +383,7 @@ impl StructCheckerHandle {
 
     async fn compare_once(
         &self,
-        src_sql_map: &BTreeMap<String, String>,
+        src_sql_map: &StructSqlMap,
         namespaces: &HashSet<String>,
         log_enabled: bool,
     ) -> anyhow::Result<CheckSummaryLog> {
@@ -308,8 +400,8 @@ impl StructCheckerHandle {
 
     fn compare_sql_maps(
         db_type: &DbType,
-        src_sql_map: &BTreeMap<String, String>,
-        mut dst_map: BTreeMap<String, String>,
+        src_sql_map: &StructSqlMap,
+        mut dst_map: StructSqlMap,
         start_time: &str,
         log_enabled: bool,
         output_revise_sql: bool,
@@ -339,7 +431,7 @@ impl StructCheckerHandle {
             }
 
             if log_enabled {
-                let log = StructCheckLog::new(key, Some(src_sql.clone()), dst_sql);
+                let log = StructCheckLog::new(&key.key, Some(src_sql.clone()), dst_sql);
                 if let Some(log) = to_json_line(&log) {
                     if is_miss {
                         log_miss!("{}", log);
@@ -360,7 +452,7 @@ impl StructCheckerHandle {
                 summary.merge_table(table);
             }
             if log_enabled {
-                let log = StructCheckLog::new(&key, None, Some(dst_sql));
+                let log = StructCheckLog::new(&key.key, None, Some(dst_sql));
                 if let Some(log) = to_json_line(&log) {
                     log_diff!("{}", log);
                 }
@@ -446,16 +538,26 @@ impl StructCheckerHandle {
 mod tests {
     use super::*;
 
+    fn sql_map(entries: &[(&str, &str)]) -> StructSqlMap {
+        let mut sql_map = BTreeMap::new();
+        let sqls = entries
+            .iter()
+            .map(|(key, sql)| ((*key).to_string(), (*sql).to_string()))
+            .collect();
+        StructCheckerHandle::insert_sqls(&mut sql_map, sqls, "test", "", "", "").unwrap();
+        sql_map
+    }
+
     #[test]
     fn missing_target_database_and_table_are_reported_as_miss() {
-        let src_sql_map = BTreeMap::from([
+        let src_sql_map = sql_map(&[
             (
-                "database.test_db".to_string(),
-                "CREATE DATABASE IF NOT EXISTS `test_db`".to_string(),
+                "database.test_db",
+                "CREATE DATABASE IF NOT EXISTS `test_db`",
             ),
             (
-                "table.test_db.test_tb".to_string(),
-                "CREATE TABLE IF NOT EXISTS `test_db`.`test_tb` (`id` int)".to_string(),
+                "table.test_db.test_tb",
+                "CREATE TABLE IF NOT EXISTS `test_db`.`test_tb` (`id` int)",
             ),
         ]);
 
@@ -480,21 +582,15 @@ mod tests {
 
     #[test]
     fn compare_sql_maps_reports_miss_diff_and_target_only_objects() {
-        let src_sql_map = BTreeMap::from([
-            ("schema.s1".to_string(), "create schema s1".to_string()),
-            ("table.s1.t1".to_string(), "create table source".to_string()),
-            (
-                "table_comment.s1.t1".to_string(),
-                "comment source".to_string(),
-            ),
+        let src_sql_map = sql_map(&[
+            ("schema.s1", "create schema s1"),
+            ("table.s1.t1", "create table source"),
+            ("table_comment.s1.t1", "comment source"),
         ]);
-        let dst_sql_map = BTreeMap::from([
-            ("schema.s1".to_string(), "create schema s1".to_string()),
-            ("table.s1.t1".to_string(), "create table target".to_string()),
-            (
-                "index.s1.extra.i1".to_string(),
-                "create index target".to_string(),
-            ),
+        let dst_sql_map = sql_map(&[
+            ("schema.s1", "create schema s1"),
+            ("table.s1.t1", "create table target"),
+            ("index.s1.extra.i1", "create index target"),
         ]);
 
         let summary = StructCheckerHandle::compare_sql_maps(
@@ -531,8 +627,76 @@ mod tests {
                 ("table.s1.t1".to_string(), "sql 2".to_string()),
             ],
             "source",
+            "",
+            "",
+            "",
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn equal_display_keys_in_different_mssql_paths_do_not_collide() {
+        let mut sql_map = BTreeMap::new();
+        StructCheckerHandle::insert_sqls(
+            &mut sql_map,
+            vec![(
+                "table.test_db.schema.with.dot".to_string(),
+                "sql 1".to_string(),
+            )],
+            "source",
+            "test_db",
+            "schema.with",
+            "dot",
+        )
+        .unwrap();
+        StructCheckerHandle::insert_sqls(
+            &mut sql_map,
+            vec![(
+                "table.test_db.schema.with.dot".to_string(),
+                "sql 2".to_string(),
+            )],
+            "source",
+            "test_db",
+            "schema",
+            "with.dot",
+        )
+        .unwrap();
+
+        assert_eq!(sql_map.len(), 2);
+        let keys = sql_map.keys().collect::<Vec<_>>();
+        assert_eq!(keys[0].schema, "schema");
+        assert_eq!(keys[0].tb, "with.dot");
+        assert_eq!(keys[1].schema, "schema.with");
+        assert_eq!(keys[1].tb, "dot");
+    }
+
+    #[test]
+    fn old_keys_keep_statement_paths() {
+        let mysql_key = StructCheckKey::new(
+            "constraint.db.with.dot.table.with.dot.constraint.with.dot".to_string(),
+            "",
+            "db.with.dot",
+            "table.with.dot",
+        );
+        assert_eq!(
+            mysql_key.key,
+            "constraint.db.with.dot.table.with.dot.constraint.with.dot"
+        );
+        assert_eq!(mysql_key.schema, "db.with.dot");
+        assert_eq!(mysql_key.tb, "table.with.dot");
+
+        let pg_key = StructCheckKey::new(
+            "column_comment.schema.with.dot.table.with.dot.column.with.dot".to_string(),
+            "",
+            "schema.with.dot",
+            "table.with.dot",
+        );
+        assert_eq!(
+            pg_key.key,
+            "column_comment.schema.with.dot.table.with.dot.column.with.dot"
+        );
+        assert_eq!(pg_key.schema, "schema.with.dot");
+        assert_eq!(pg_key.tb, "table.with.dot");
     }
 }

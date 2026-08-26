@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use anyhow::bail;
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
-    meta::ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
+    meta::{
+        ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
+        struct_meta::structure::structure_type::StructureType,
+    },
 };
 use dt_connector::meta_fetcher::{
     mssql::mssql_struct_check_fetcher::MssqlStructCheckFetcher,
@@ -230,10 +233,24 @@ impl RdbStructTestRunner {
 
         let (src_db_tbs, dst_db_tbs) = self.base.get_compare_db_tbs()?;
         if src_db_tbs.is_empty() {
-            bail!("MSSQL struct test requires at least one table in compare_tbs.txt");
+            bail!("MSSQL struct test requires at least one table in the source SQL fixtures");
         }
 
+        let compare_databases = !self.base.filter.filter_structure(&StructureType::Database);
+        let mut compared_databases = HashSet::new();
         for (src_db_tb, dst_db_tb) in src_db_tbs.iter().zip(&dst_db_tbs) {
+            if compare_databases
+                && compared_databases.insert((src_db_tb.0.clone(), dst_db_tb.0.clone()))
+            {
+                let src_database = src_check_fetcher.fetch_database(&src_db_tb.0).await?;
+                let dst_database = dst_check_fetcher.fetch_database(&dst_db_tb.0).await?;
+                assert_eq!(
+                    src_database, dst_database,
+                    "MSSQL database metadata differs: {} -> {}",
+                    src_db_tb.0, dst_db_tb.0
+                );
+            }
+
             let src_table = src_check_fetcher
                 .fetch_table(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2)
                 .await?;

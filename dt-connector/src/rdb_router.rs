@@ -369,7 +369,7 @@ impl RdbRouterInner {
         let mut dst_tb = struct_data.tb.clone();
         match &mut struct_data.statement {
             StructStatement::MssqlCreateDatabase(s) => {
-                dst_db = self.get_schema_map(&s.database.name).to_string();
+                dst_db = self.get_schema_map(&s.database_name).to_string();
                 dst_schema.clear();
                 dst_tb.clear();
                 s.route(&dst_db)
@@ -388,7 +388,7 @@ impl RdbRouterInner {
 
             StructStatement::MssqlCreateSchema(s) => {
                 dst_db = self.get_schema_map(&s.database_name).to_string();
-                dst_schema = s.schema.name.clone();
+                dst_schema = s.schema_name.clone();
                 dst_tb.clear();
                 s.route_database(&dst_db)
             }
@@ -754,7 +754,6 @@ mod tests {
                     struct_statement::StructStatement,
                 },
                 struct_data::StructData,
-                structure::{database::Database, schema::Schema},
             },
         },
     };
@@ -1071,9 +1070,7 @@ mod tests {
             tb: String::new(),
             statement: StructStatement::MssqlCreateSchema(MssqlCreateSchemaStatement {
                 database_name: "src_db".to_string(),
-                schema: Schema {
-                    name: "src_schema".to_string(),
-                },
+                schema_name: "src_schema".to_string(),
             }),
         };
 
@@ -1086,7 +1083,7 @@ mod tests {
             panic!("expected MSSQL create schema statement");
         };
         assert_eq!(statement.database_name, "dst_db");
-        assert_eq!(statement.schema.name, "src_schema");
+        assert_eq!(statement.schema_name, "src_schema");
     }
 
     #[test]
@@ -1105,10 +1102,8 @@ mod tests {
             schema: String::new(),
             tb: String::new(),
             statement: StructStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
-                database: Database {
-                    name: "src_db".to_string(),
-                    ..Default::default()
-                },
+                database_name: "src_db".to_string(),
+                collation_name: String::new(),
             }),
         };
 
@@ -1120,7 +1115,7 @@ mod tests {
         let StructStatement::MssqlCreateDatabase(statement) = routed.statement else {
             panic!("expected MSSQL create database statement");
         };
-        assert_eq!(statement.database.name, "dst_db");
+        assert_eq!(statement.database_name, "dst_db");
     }
 
     #[test]

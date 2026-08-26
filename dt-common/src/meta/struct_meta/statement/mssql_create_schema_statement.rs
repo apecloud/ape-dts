@@ -1,14 +1,12 @@
 use crate::{
-    config::config_enums::DbType,
-    meta::struct_meta::structure::{schema::Schema, structure_type::StructureType},
-    rdb_filter::RdbFilter,
-    utils::sql_util::SqlUtil,
+    config::config_enums::DbType, meta::struct_meta::structure::structure_type::StructureType,
+    rdb_filter::RdbFilter, utils::sql_util::SqlUtil,
 };
 
 #[derive(Debug, Clone)]
 pub struct MssqlCreateSchemaStatement {
     pub database_name: String,
-    pub schema: Schema,
+    pub schema_name: String,
 }
 
 impl MssqlCreateSchemaStatement {
@@ -21,8 +19,8 @@ impl MssqlCreateSchemaStatement {
             return Ok(Vec::new());
         }
 
-        let schema = SqlUtil::escape_by_db_type(&self.schema.name, &DbType::Mssql);
-        let schema_literal = self.schema.name.replace('\'', "''");
+        let schema = SqlUtil::escape_by_db_type(&self.schema_name, &DbType::Mssql);
+        let schema_literal = self.schema_name.replace('\'', "''");
         let create_schema = format!(
             "IF SCHEMA_ID(N'{schema_literal}') IS NULL EXEC(N'CREATE SCHEMA {}')",
             schema.replace('\'', "''")
@@ -37,7 +35,7 @@ impl MssqlCreateSchemaStatement {
             )
         };
         Ok(vec![(
-            format!("schema.{}.{}", self.database_name, self.schema.name),
+            format!("schema.{}.{}", self.database_name, self.schema_name),
             sql,
         )])
     }

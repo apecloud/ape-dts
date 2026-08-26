@@ -557,21 +557,17 @@ impl ExtractorUtil {
                 Box::new(extractor)
             }
 
-            ExtractorConfig::MssqlStruct {
-                dbs, db_batch_size, ..
-            } => {
+            ExtractorConfig::MssqlStruct { dbs, .. } => {
                 let connection_pool = match extractor_client {
                     ConnClient::Mssql(connection_pool) => connection_pool,
                     _ => bail!(DtError::MissingSourceClient),
                 };
-                let db_batch_size = MssqlStructExtractor::validate_db_batch_size(db_batch_size)?;
                 let extractor = MssqlStructExtractor {
                     base_extractor,
                     extract_state,
                     connection_pool,
                     dbs,
                     filter,
-                    db_batch_size,
                 };
                 Box::new(extractor)
             }

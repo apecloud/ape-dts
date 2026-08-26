@@ -38,4 +38,6 @@ CREATE TABLE [struct_filter_mssql2mssql_2].dbo.constraint_table (
     CONSTRAINT ck_filter_2_amount CHECK (amount >= 0),
     CONSTRAINT ck_filter_2_status CHECK (status IN ('active', 'disabled'))
 );
+ALTER TABLE [struct_filter_mssql2mssql_2].dbo.constraint_table
+    ADD CONSTRAINT df_filter_2_status DEFAULT ('active') FOR status;
 GO

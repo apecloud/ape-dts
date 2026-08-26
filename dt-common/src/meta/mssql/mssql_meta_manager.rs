@@ -24,7 +24,6 @@ const DATABASES_SQL: &str = r#"
 SELECT name AS database_name
 FROM sys.databases
 WHERE state_desc = 'ONLINE'
-  AND HAS_DBACCESS(name) = 1
 ORDER BY name
 "#;
 
@@ -75,23 +74,6 @@ WHERE s.name = @P1
   AND ic.is_included_column = 0
   AND ic.key_ordinal > 0
 ORDER BY i.index_id, ic.key_ordinal
-"#;
-
-const SCHEMAS_SQL: &str = r#"
-SELECT DISTINCT s.name AS schema_name
-FROM {catalog}sys.schemas AS s
-JOIN {catalog}sys.tables AS t ON t.schema_id = s.schema_id
-WHERE t.is_ms_shipped = 0
-ORDER BY s.name
-"#;
-
-const TABLES_SQL: &str = r#"
-SELECT t.name AS table_name
-FROM {catalog}sys.tables AS t
-JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
-WHERE s.name = @P1
-  AND t.is_ms_shipped = 0
-ORDER BY t.name
 "#;
 
 const SCHEMA_TABLES_SQL: &str = r#"
@@ -205,46 +187,6 @@ impl MssqlMetaManager {
         rows.iter()
             .map(|row| {
                 MssqlColValueConvertor::from_query_required_string(row, "database_name")
-                    .code(ErrorCode::MetadataReadFailed)
-            })
-            .collect()
-    }
-
-    pub async fn list_schemas(&self, db: &str) -> anyhow::Result<Vec<String>> {
-        let sql = Self::catalog_sql(SCHEMAS_SQL, db);
-        let mut connection = self.connection_pool.get().await?;
-        let rows = connection
-            .client_mut()
-            .query(&sql, &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
-            .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
-
-        rows.iter()
-            .map(|row| {
-                MssqlColValueConvertor::from_query_required_string(row, "schema_name")
-                    .code(ErrorCode::MetadataReadFailed)
-            })
-            .collect()
-    }
-
-    pub async fn list_tables(&self, db: &str, schema: &str) -> anyhow::Result<Vec<String>> {
-        let mut query = Query::new(Self::catalog_sql(TABLES_SQL, db));
-        query.bind(schema);
-        let mut connection = self.connection_pool.get().await?;
-        let rows = query
-            .query(connection.client_mut())
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
-            .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
-
-        rows.iter()
-            .map(|row| {
-                MssqlColValueConvertor::from_query_required_string(row, "table_name")
                     .code(ErrorCode::MetadataReadFailed)
             })
             .collect()

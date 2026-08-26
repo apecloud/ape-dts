@@ -157,12 +157,9 @@ impl MssqlStructSinker {
 
 #[cfg(test)]
 mod tests {
-    use dt_common::meta::struct_meta::{
-        statement::{
-            mssql_create_database_statement::MssqlCreateDatabaseStatement,
-            struct_statement::StructStatement,
-        },
-        structure::database::Database,
+    use dt_common::meta::struct_meta::statement::{
+        mssql_create_database_statement::MssqlCreateDatabaseStatement,
+        struct_statement::StructStatement,
     };
 
     use super::MssqlStructSinker;
@@ -170,10 +167,8 @@ mod tests {
     #[test]
     fn create_database_requires_autocommit() {
         let statement = StructStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
-            database: Database {
-                name: "test_db".to_string(),
-                ..Default::default()
-            },
+            database_name: "test_db".to_string(),
+            collation_name: String::new(),
         });
 
         assert!(MssqlStructSinker::requires_autocommit(&statement));

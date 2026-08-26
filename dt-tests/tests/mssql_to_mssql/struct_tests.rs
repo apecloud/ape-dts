@@ -44,13 +44,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn struct_route_test() {
-        let mut runner = RdbStructTestRunner::new("mssql_to_mssql/struct/route_test")
-            .await
-            .unwrap();
-        runner.run_mssql_struct_test().await.unwrap();
-        TestBase::run_check_test("mssql_to_mssql/struct/route_test/check").await;
-        runner.base.execute_clean_sqls().await.unwrap();
-        runner.close().await.unwrap();
+        TestBase::run_mssql_struct_test("mssql_to_mssql/struct/route_test").await;
     }
 
     #[tokio::test]

@@ -11,6 +11,12 @@ use dt_common::{
 };
 use tiberius::{Query, Row};
 
+const DATABASE_SQL: &str = r#"
+SELECT d.collation_name
+FROM sys.databases AS d
+WHERE d.name = @P1
+"#;
+
 const COLUMNS_SQL: &str = r#"
 SELECT
     CONVERT(nvarchar(max), c.column_id) AS ordinal_position,
@@ -56,7 +62,9 @@ SELECT
     CONVERT(nvarchar(max), ic.key_ordinal) AS key_ordinal,
     CONVERT(nvarchar(max), ic.is_descending_key) AS is_descending_key,
     CONVERT(nvarchar(max), NULL) AS definition,
-    CONVERT(nvarchar(max), NULL) AS is_not_for_replication
+    CONVERT(nvarchar(max), NULL) AS is_not_for_replication,
+    CONVERT(nvarchar(max), NULL) AS is_disabled,
+    CONVERT(nvarchar(max), NULL) AS is_not_trusted
 FROM {catalog}sys.key_constraints AS kc
 JOIN {catalog}sys.tables AS t ON t.object_id = kc.parent_object_id
 JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
@@ -82,7 +90,9 @@ SELECT
     CONVERT(nvarchar(max), NULL) AS key_ordinal,
     CONVERT(nvarchar(max), NULL) AS is_descending_key,
     cc.definition,
-    CONVERT(nvarchar(max), cc.is_not_for_replication) AS is_not_for_replication
+    CONVERT(nvarchar(max), cc.is_not_for_replication) AS is_not_for_replication,
+    CONVERT(nvarchar(max), cc.is_disabled) AS is_disabled,
+    CONVERT(nvarchar(max), cc.is_not_trusted) AS is_not_trusted
 FROM {catalog}sys.check_constraints AS cc
 JOIN {catalog}sys.tables AS t ON t.object_id = cc.parent_object_id
 JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
@@ -94,8 +104,10 @@ ORDER BY constraint_name, key_ordinal
 const INDEXES_SQL: &str = r#"
 SELECT
     i.name AS index_name,
+    CONVERT(nvarchar(max), i.type) AS index_type,
     i.type_desc AS index_type_desc,
     CONVERT(nvarchar(max), i.is_unique) AS is_unique,
+    CONVERT(nvarchar(max), i.is_disabled) AS is_disabled,
     CONVERT(nvarchar(max), i.is_primary_key) AS is_primary_key,
     CONVERT(nvarchar(max), i.is_unique_constraint) AS is_unique_constraint,
     i.filter_definition,
@@ -103,7 +115,10 @@ SELECT
     CONVERT(nvarchar(max), ic.key_ordinal) AS key_ordinal,
     CONVERT(nvarchar(max), ic.is_descending_key) AS is_descending_key,
     CONVERT(nvarchar(max), ic.is_included_column) AS is_included_column,
-    CONVERT(nvarchar(max), ic.index_column_id) AS index_column_id
+    CONVERT(nvarchar(max), ic.index_column_id) AS index_column_id,
+    pxi.name AS xml_primary_index_name,
+    xi.secondary_type_desc AS xml_secondary_type_desc,
+    CONVERT(nvarchar(max), hi.bucket_count) AS hash_bucket_count
 FROM {catalog}sys.tables AS t
 JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
 JOIN {catalog}sys.indexes AS i ON i.object_id = t.object_id
@@ -113,12 +128,19 @@ JOIN {catalog}sys.index_columns AS ic
 JOIN {catalog}sys.columns AS c
   ON c.object_id = ic.object_id
  AND c.column_id = ic.column_id
+LEFT JOIN {catalog}sys.xml_indexes AS xi
+  ON xi.object_id = i.object_id
+ AND xi.index_id = i.index_id
+LEFT JOIN {catalog}sys.indexes AS pxi
+  ON pxi.object_id = xi.object_id
+ AND pxi.index_id = xi.using_xml_index_id
+LEFT JOIN {catalog}sys.hash_indexes AS hi
+  ON hi.object_id = i.object_id
+ AND hi.index_id = i.index_id
 WHERE s.name = @P1
   AND t.name = @P2
-  AND i.index_id > 0
+  AND i.type > 0
   AND i.is_hypothetical = 0
-  AND i.is_disabled = 0
-  AND i.type IN (1, 2)
 ORDER BY i.name, ic.index_column_id
 "#;
 
@@ -154,6 +176,23 @@ pub struct MssqlStructCheckFetcher {
 }
 
 impl MssqlStructCheckFetcher {
+    pub async fn fetch_database(&self, db: &str) -> anyhow::Result<BTreeMap<String, String>> {
+        let mut query = Query::new(DATABASE_SQL);
+        query.bind(db);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = query
+            .query(connection.client_mut())
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+        let Some(row) = rows.first() else {
+            anyhow::bail!("MSSQL database {db} was not found");
+        };
+        Self::parse_row(row, &["collation_name"])
+    }
+
     pub async fn fetch_table(
         &self,
         db: &str,
@@ -206,6 +245,8 @@ impl MssqlStructCheckFetcher {
                         "is_descending_key",
                         "definition",
                         "is_not_for_replication",
+                        "is_disabled",
+                        "is_not_trusted",
                     ],
                 )
                 .await?,
@@ -217,8 +258,10 @@ impl MssqlStructCheckFetcher {
                     table,
                     &[
                         "index_name",
+                        "index_type",
                         "index_type_desc",
                         "is_unique",
+                        "is_disabled",
                         "is_primary_key",
                         "is_unique_constraint",
                         "filter_definition",
@@ -227,6 +270,9 @@ impl MssqlStructCheckFetcher {
                         "is_descending_key",
                         "is_included_column",
                         "index_column_id",
+                        "xml_primary_index_name",
+                        "xml_secondary_type_desc",
+                        "hash_bucket_count",
                     ],
                 )
                 .await?,

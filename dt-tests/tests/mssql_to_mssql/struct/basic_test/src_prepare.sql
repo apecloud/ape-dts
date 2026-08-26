@@ -41,10 +41,29 @@ CREATE TABLE [struct_it_mssql2mssql_1].dbo.full_column_type (
     uuid_col UNIQUEIDENTIFIER NULL,
     xml_col XML NULL,
     sql_variant_col SQL_VARIANT NULL,
+    hierarchyid_col HIERARCHYID NULL,
     rowversion_col ROWVERSION NOT NULL,
     CONSTRAINT pk_full_column_type PRIMARY KEY CLUSTERED (id)
 );
+CREATE PRIMARY XML INDEX pxml_full_column_type
+    ON [struct_it_mssql2mssql_1].dbo.full_column_type (xml_col);
+CREATE XML INDEX pxml_full_column_type_path
+    ON [struct_it_mssql2mssql_1].dbo.full_column_type (xml_col)
+    USING XML INDEX pxml_full_column_type FOR PATH;
+CREATE XML INDEX pxml_full_column_type_value
+    ON [struct_it_mssql2mssql_1].dbo.full_column_type (xml_col)
+    USING XML INDEX pxml_full_column_type FOR VALUE;
+CREATE XML INDEX pxml_full_column_type_property
+    ON [struct_it_mssql2mssql_1].dbo.full_column_type (xml_col)
+    USING XML INDEX pxml_full_column_type FOR PROPERTY;
 GO
+
+-- SQL Server 2025 types are kept visible but disabled for the SQL Server 2022 CI image.
+-- ALTER TABLE [struct_it_mssql2mssql_1].dbo.full_column_type ADD json_col JSON NULL;
+-- ALTER TABLE [struct_it_mssql2mssql_1].dbo.full_column_type ADD vector_col VECTOR(3) NULL;
+-- CURSOR and TABLE are transient variable/return types and cannot be table columns.
+-- TIMESTAMP is the deprecated synonym of ROWVERSION and cannot coexist with another
+-- ROWVERSION column in the same table. SYSNAME is an alias type over NVARCHAR(128).
 
 -- SQL Server spatial types corresponding to the spatial coverage in MySQL/PG.
 CREATE TABLE [struct_it_mssql2mssql_1].dbo.spatial_column_type (
@@ -53,6 +72,8 @@ CREATE TABLE [struct_it_mssql2mssql_1].dbo.spatial_column_type (
     geography_col GEOGRAPHY NULL,
     CONSTRAINT pk_spatial_column_type PRIMARY KEY CLUSTERED (id)
 );
+CREATE SPATIAL INDEX spatial_geography_col
+    ON [struct_it_mssql2mssql_1].dbo.spatial_column_type (geography_col);
 GO
 
 -- Literal/expression defaults, identity, and persisted/non-persisted computed columns.
@@ -78,6 +99,33 @@ CREATE TABLE [struct_it_mssql2mssql_1].dbo.defaults_and_generated (
 );
 GO
 
+-- DEFAULT constraint syntax: minimal, named, expression, ALTER, and WITH VALUES.
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.default_constraint_syntax (
+    id INT NOT NULL,
+    inline_unnamed INT DEFAULT 0 NULL,
+    inline_named NVARCHAR(40)
+        CONSTRAINT df_default_syntax_inline_named DEFAULT (N'named') NOT NULL,
+    inline_expression DATE
+        CONSTRAINT df_default_syntax_inline_expression
+        DEFAULT (CONVERT(DATE, '20000101')) NOT NULL,
+    inline_niladic NVARCHAR(128) DEFAULT USER NULL,
+    alter_unnamed INT NULL,
+    alter_named DATETIME2(6) NULL,
+    alter_named_with_values INT NULL
+);
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.default_constraint_syntax
+    ADD DEFAULT ((2)) FOR alter_unnamed;
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.default_constraint_syntax
+    ADD CONSTRAINT df_default_syntax_alter_named
+        DEFAULT (SYSUTCDATETIME()) FOR alter_named;
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.default_constraint_syntax
+    ADD CONSTRAINT df_default_syntax_alter_with_values
+        DEFAULT ((4)) FOR alter_named_with_values WITH VALUES;
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.default_constraint_syntax
+    ADD added_with_values INT
+        CONSTRAINT df_default_syntax_with_values DEFAULT ((3)) WITH VALUES NULL;
+GO
+
 -- Dedicated coverage for SQL Server's non-writable rowversion type.
 CREATE TABLE [struct_it_mssql2mssql_1].dbo.rowversion_type (
     id BIGINT NOT NULL,
@@ -100,6 +148,54 @@ CREATE TABLE [struct_it_mssql2mssql_1].dbo.constraint_table (
     CONSTRAINT ck_constraint_table_age CHECK (age >= 18),
     CONSTRAINT ck_constraint_table_email CHECK (email LIKE '%@%.%'),
     CONSTRAINT ck_constraint_table_status CHECK (status IN ('active', 'disabled'))
+);
+GO
+
+-- Constraint syntax: named/unnamed column and table constraints, plus ALTER TABLE.
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.constraint_syntax_variants (
+    id INT NOT NULL PRIMARY KEY,
+    inline_unique INT NULL UNIQUE,
+    inline_check INT NULL CHECK (inline_check IS NULL OR inline_check >= 0),
+    inline_named_unique INT NULL
+        CONSTRAINT uq_constraint_syntax_inline UNIQUE,
+    inline_named_check INT NULL
+        CONSTRAINT ck_constraint_syntax_inline
+        CHECK (inline_named_check IS NULL OR inline_named_check <> 0),
+    table_unnamed_unique INT NOT NULL,
+    table_unnamed_check INT NULL,
+    named_unique_a INT NOT NULL,
+    named_unique_b INT NOT NULL,
+    named_check INT NULL,
+    alter_unique_a INT NOT NULL,
+    alter_unique_b INT NOT NULL,
+    alter_check INT NULL,
+    UNIQUE (table_unnamed_unique),
+    CHECK (table_unnamed_check IS NULL OR table_unnamed_check <= 1000),
+    CONSTRAINT uq_constraint_syntax_named
+        UNIQUE NONCLUSTERED (named_unique_a ASC, named_unique_b DESC),
+    CONSTRAINT ck_constraint_syntax_named
+        CHECK NOT FOR REPLICATION (named_check IS NULL OR named_check > 0)
+);
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.constraint_syntax_variants
+    ADD CONSTRAINT uq_constraint_syntax_alter
+        UNIQUE NONCLUSTERED (alter_unique_a ASC, alter_unique_b DESC);
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.constraint_syntax_variants WITH CHECK
+    ADD CONSTRAINT ck_constraint_syntax_alter
+        CHECK (alter_check IS NULL OR alter_check BETWEEN 0 AND 100);
+
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.constraint_alter_primary (
+    id BIGINT NOT NULL,
+    version_no INT NOT NULL,
+    payload NVARCHAR(100) NULL
+);
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.constraint_alter_primary
+    ADD CONSTRAINT pk_constraint_syntax_alter
+        PRIMARY KEY NONCLUSTERED (id ASC, version_no DESC);
+
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.constraint_inline_primary (
+    id BIGINT NOT NULL
+        CONSTRAINT pk_constraint_syntax_inline PRIMARY KEY NONCLUSTERED,
+    payload NVARCHAR(100) NULL
 );
 GO
 
@@ -133,6 +229,40 @@ CREATE NONCLUSTERED INDEX included_index
 CREATE NONCLUSTERED INDEX filtered_index
     ON [struct_it_mssql2mssql_1].dbo.full_index_type (status ASC)
     WHERE status > 0;
+CREATE NONCLUSTERED INDEX disabled_index
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type (index_col ASC);
+ALTER INDEX disabled_index
+    ON [struct_it_mssql2mssql_1].dbo.full_index_type DISABLE;
+GO
+
+-- Index syntax: column-level, table-level, minimal CREATE INDEX, and richer forms.
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.index_syntax_variants (
+    id INT NOT NULL,
+    column_inline INT INDEX idx_index_syntax_column,
+    table_inline INT NULL,
+    composite_a INT NOT NULL,
+    composite_b DATETIME2(6) NOT NULL,
+    status TINYINT NOT NULL,
+    payload NVARCHAR(100) NULL,
+    external_unique INT NOT NULL,
+    external_complex INT NOT NULL,
+    INDEX idx_index_syntax_table (table_inline),
+    INDEX idx_index_syntax_table_complex UNIQUE NONCLUSTERED
+        (composite_a ASC, composite_b DESC)
+        INCLUDE (payload)
+        WHERE status > 0
+);
+CREATE INDEX idx_index_syntax_create_minimal
+    ON [struct_it_mssql2mssql_1].dbo.index_syntax_variants (status);
+CREATE UNIQUE INDEX idx_index_syntax_create_unique
+    ON [struct_it_mssql2mssql_1].dbo.index_syntax_variants (external_unique);
+CREATE UNIQUE NONCLUSTERED INDEX idx_index_syntax_create_complex
+    ON [struct_it_mssql2mssql_1].dbo.index_syntax_variants
+       (external_complex ASC, composite_b DESC)
+    INCLUDE (payload)
+    WHERE external_complex > 0;
+CREATE CLUSTERED INDEX idx_index_syntax_create_clustered
+    ON [struct_it_mssql2mssql_1].dbo.index_syntax_variants (id);
 GO
 
 -- Quoted Unicode defaults and table/column comments.
@@ -226,4 +356,113 @@ EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'special_default_and_comment',
     @level2type = N'COLUMN', @level2name = N'f_1';
+GO
+
+-- Columnstore indexes must not disappear from a successful struct migration.
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.columnstore_index (
+    id BIGINT NOT NULL,
+    category INT NULL,
+    amount DECIMAL(18, 2) NULL
+);
+CREATE CLUSTERED COLUMNSTORE INDEX cci_columnstore_index
+    ON [struct_it_mssql2mssql_1].dbo.columnstore_index;
+GO
+
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.nonclustered_columnstore_index (
+    id BIGINT NOT NULL,
+    category INT NULL,
+    amount DECIMAL(18, 2) NULL,
+    CONSTRAINT pk_nonclustered_columnstore_index PRIMARY KEY CLUSTERED (id)
+);
+CREATE NONCLUSTERED COLUMNSTORE INDEX ncci_columnstore_index
+    ON [struct_it_mssql2mssql_1].dbo.nonclustered_columnstore_index (category, amount);
+GO
+
+-- A heap is still covered as an ordinary table. Its sys.indexes.type = 0 row is
+-- intentionally not treated as an index to migrate.
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.heap_table (
+    id BIGINT NOT NULL,
+    payload NVARCHAR(100) NULL
+);
+GO
+
+-- The remaining index/table categories are documented as executable examples but are
+-- disabled until the struct model can recreate their prerequisites and type-specific options.
+
+-- Type 7, NONCLUSTERED HASH. It requires a MEMORY_OPTIMIZED_DATA filegroup whose
+-- physical file path cannot be inferred safely by a generic CREATE DATABASE migration.
+-- CREATE TABLE [struct_it_mssql2mssql_1].dbo.memory_optimized_table (
+--     id BIGINT NOT NULL,
+--     payload NVARCHAR(100) NULL,
+--     INDEX ix_memory_optimized_hash HASH (id) WITH (BUCKET_COUNT = 1024)
+-- ) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA);
+-- GO
+
+-- Type 9, JSON, is available in SQL Server 2025 rather than the SQL Server 2022 CI image.
+-- CREATE TABLE [struct_it_mssql2mssql_1].dbo.json_index_table (
+--     id BIGINT NOT NULL PRIMARY KEY,
+--     document JSON NULL
+-- );
+-- CREATE JSON INDEX ix_json_document
+--     ON [struct_it_mssql2mssql_1].dbo.json_index_table (document);
+-- GO
+
+-- Selective XML indexes and explicit spatial tessellation carry options not yet modeled.
+-- CREATE SELECTIVE XML INDEX sxml_full_column_type
+--     ON [struct_it_mssql2mssql_1].dbo.full_column_type (xml_col)
+--     FOR (path_id = '/root/item' AS XQUERY 'xs:int' SINGLETON);
+-- CREATE SPATIAL INDEX spatial_geometry_col
+--     ON [struct_it_mssql2mssql_1].dbo.spatial_column_type (geometry_col)
+--     USING GEOMETRY_AUTO_GRID
+--     WITH (BOUNDING_BOX = (-180, -90, 180, 90));
+-- GO
+
+-- Specialized table categories are intentionally disabled until their system-catalog
+-- metadata and complete CREATE TABLE options are represented by the struct model.
+-- CREATE TABLE [struct_it_mssql2mssql_1].dbo.temporal_table (
+--     id BIGINT NOT NULL PRIMARY KEY,
+--     valid_from DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL,
+--     valid_to DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL,
+--     PERIOD FOR SYSTEM_TIME (valid_from, valid_to)
+-- ) WITH (SYSTEM_VERSIONING = ON);
+-- CREATE TABLE [struct_it_mssql2mssql_1].dbo.graph_node (id BIGINT) AS NODE;
+-- CREATE TABLE [struct_it_mssql2mssql_1].dbo.graph_edge AS EDGE;
+-- CREATE TABLE [struct_it_mssql2mssql_1].dbo.ledger_table (
+--     id BIGINT NOT NULL PRIMARY KEY
+-- ) WITH (LEDGER = ON);
+-- CREATE TABLE [struct_it_mssql2mssql_1].dbo.file_table AS FILETABLE;
+-- CREATE EXTERNAL TABLE [struct_it_mssql2mssql_1].dbo.external_table (
+--     id BIGINT NOT NULL
+-- ) WITH (LOCATION = '/external_table', DATA_SOURCE = external_data_source);
+-- GO
+
+-- CHECK constraints can be disabled or enabled without being trusted. This known
+-- unsupported state case remains executable, but follows all index coverage.
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.check_constraint_state (
+    id INT NOT NULL,
+    disabled_value INT NULL,
+    untrusted_value INT NULL,
+    trusted_value INT NULL,
+    CONSTRAINT pk_check_constraint_state PRIMARY KEY CLUSTERED (id),
+    CONSTRAINT ck_check_constraint_disabled CHECK (disabled_value >= 0),
+    CONSTRAINT ck_check_constraint_trusted CHECK (trusted_value >= 0)
+);
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.check_constraint_state WITH NOCHECK
+    ADD CONSTRAINT ck_check_constraint_untrusted CHECK (untrusted_value >= 0);
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.check_constraint_state
+    NOCHECK CONSTRAINT ck_check_constraint_disabled;
+ALTER TABLE [struct_it_mssql2mssql_1].dbo.check_constraint_state
+    WITH NOCHECK CHECK CONSTRAINT ck_check_constraint_untrusted;
+GO
+
+-- These table paths flatten to the same dot-delimited checker key.
+EXEC [struct_it_mssql2mssql_1].sys.sp_executesql N'CREATE SCHEMA [schema.with]';
+EXEC [struct_it_mssql2mssql_1].sys.sp_executesql N'CREATE SCHEMA [schema]';
+GO
+CREATE TABLE [struct_it_mssql2mssql_1].[schema.with].[dot] (
+    id INT NOT NULL
+);
+CREATE TABLE [struct_it_mssql2mssql_1].[schema].[with.dot] (
+    id INT NOT NULL
+);
 GO
