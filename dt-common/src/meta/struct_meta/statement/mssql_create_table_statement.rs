@@ -1,3 +1,4 @@
+use super::mssql_comment_statement::MssqlComment;
 use crate::{
     config::config_enums::DbType, error::DtError,
     meta::struct_meta::structure::structure_type::StructureType, rdb_filter::RdbFilter,
@@ -91,17 +92,6 @@ pub struct MssqlIndex {
     pub xml_secondary_type_desc: Option<String>,
     pub hash_bucket_count: Option<u64>,
     pub columns: Vec<MssqlIndexColumn>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MssqlComment {
-    Table {
-        comment: String,
-    },
-    Column {
-        column_name: String,
-        comment: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,22 +198,14 @@ impl MssqlCreateTableStatement {
             }
         }
 
-        if table_enabled && !filter.filter_structure(&StructureType::Comment) {
-            for comment in &self.table.comments {
-                let key = match comment {
-                    MssqlComment::Table { .. } => format!(
-                        "table_comment.{}.{}.{}",
-                        self.table.database_name, self.table.schema_name, self.table.table_name
-                    ),
-                    MssqlComment::Column { column_name, .. } => format!(
-                        "column_comment.{}.{}.{}.{}",
-                        self.table.database_name,
-                        self.table.schema_name,
-                        self.table.table_name,
-                        column_name
-                    ),
-                };
-                sqls.push((key, self.comment_to_sql(comment)));
+        for comment in &self.table.comments {
+            if let Some(sql) = comment.to_sql(
+                &self.table.database_name,
+                &self.table.schema_name,
+                &self.table.table_name,
+                filter,
+            ) {
+                sqls.push(sql);
             }
         }
 
@@ -633,34 +615,6 @@ impl MssqlCreateTableStatement {
             Self::quote(&index.index_name),
             self.qualified_table_name()
         ))
-    }
-
-    fn comment_to_sql(&self, comment: &MssqlComment) -> String {
-        let (column_name, comment) = match comment {
-            MssqlComment::Table { comment } => (None, comment),
-            MssqlComment::Column {
-                column_name,
-                comment,
-            } => (Some(column_name), comment),
-        };
-        let value = comment.replace('\'', "''");
-        let schema = self.table.schema_name.replace('\'', "''");
-        let table = self.table.table_name.replace('\'', "''");
-        let database = if self.table.database_name.is_empty() {
-            String::new()
-        } else {
-            format!("{}.", Self::quote(&self.table.database_name))
-        };
-        let mut sql = format!(
-            "EXEC {database}sys.sp_addextendedproperty @name=N'MS_Description', @value=N'{value}', \
-             @level0type=N'SCHEMA', @level0name=N'{schema}', \
-             @level1type=N'TABLE', @level1name=N'{table}'"
-        );
-        if let Some(column_name) = column_name {
-            let column = column_name.replace('\'', "''");
-            sql.push_str(&format!(", @level2type=N'COLUMN', @level2name=N'{column}'"));
-        }
-        sql
     }
 
     fn quote(identifier: &str) -> String {

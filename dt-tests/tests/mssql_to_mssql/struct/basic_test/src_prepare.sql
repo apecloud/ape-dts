@@ -6,6 +6,29 @@ END;
 CREATE DATABASE [struct_it_mssql2mssql_1];
 GO
 
+-- Default, fully specified, and descending sequence definitions.
+EXEC [struct_it_mssql2mssql_1].sys.sp_executesql N'
+    CREATE SEQUENCE [dbo].[sequence_default]';
+EXEC [struct_it_mssql2mssql_1].sys.sp_executesql N'
+    CREATE SEQUENCE [dbo].[sequence_full]
+        AS DECIMAL(10, 0)
+        START WITH 100
+        INCREMENT BY 5
+        MINVALUE 50
+        MAXVALUE 1000
+        CYCLE
+        CACHE 20';
+EXEC [struct_it_mssql2mssql_1].sys.sp_executesql N'
+    CREATE SEQUENCE [dbo].[sequence_descending]
+        AS INT
+        START WITH -1
+        INCREMENT BY -2
+        MINVALUE -101
+        MAXVALUE -1
+        NO CYCLE
+        NO CACHE';
+GO
+
 -- Align with the MySQL/PG full_column_type tables using SQL Server equivalents.
 CREATE TABLE [struct_it_mssql2mssql_1].dbo.full_column_type (
     id INT IDENTITY(1, 1) NOT NULL,
@@ -91,6 +114,9 @@ CREATE TABLE [struct_it_mssql2mssql_1].dbo.defaults_and_generated (
         CONSTRAINT df_defaults_and_generated_date DEFAULT (CONVERT(DATE, '19700101')),
     request_id UNIQUEIDENTIFIER NOT NULL
         CONSTRAINT df_defaults_and_generated_request_id DEFAULT (NEWID()),
+    sequence_value DECIMAL(10, 0) NOT NULL
+        CONSTRAINT df_defaults_and_generated_sequence
+        DEFAULT (NEXT VALUE FOR [dbo].[sequence_full]),
     quantity INT NOT NULL CONSTRAINT df_defaults_and_generated_quantity DEFAULT ((1)),
     unit_price DECIMAL(12, 2) NOT NULL CONSTRAINT df_defaults_and_generated_price DEFAULT ((1.25)),
     total AS (CONVERT(DECIMAL(18, 2), quantity * unit_price)) PERSISTED,
@@ -325,6 +351,18 @@ GO
 
 EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
+    @value = N'Database comment for ''struct migration''.';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Schema comment for ''dbo''.',
+    @level0type = N'SCHEMA', @level0name = N'dbo';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Sequence comment ''with quotes''.',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'SEQUENCE', @level1name = N'sequence_full';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
     @value = N'Comment on full_column_type.',
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'full_column_type';
@@ -345,6 +383,36 @@ EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE', @level1name = N'full_index_type',
     @level2type = N'COLUMN', @level2name = N'id';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Check constraint comment.',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE', @level1name = N'constraint_table',
+    @level2type = N'CONSTRAINT', @level2name = N'ck_constraint_table_age';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Default constraint comment.',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE', @level1name = N'defaults_and_generated',
+    @level2type = N'CONSTRAINT', @level2name = N'df_defaults_and_generated_code';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Primary key constraint comment.',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE', @level1name = N'constraint_table',
+    @level2type = N'CONSTRAINT', @level2name = N'pk_constraint_table';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Ordinary index comment.',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE', @level1name = N'full_index_type',
+    @level2type = N'INDEX', @level2name = N'index_index';
+EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Constraint backing index comment.',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE', @level1name = N'constraint_table',
+    @level2type = N'INDEX', @level2name = N'pk_constraint_table';
 EXEC [struct_it_mssql2mssql_1].sys.sp_addextendedproperty
     @name = N'MS_Description',
     @value = N'中文注释''special_default_and_comment''',

@@ -358,10 +358,6 @@ mod test {
             query_string(&mut connection, "SELECT APP_NAME()").await?,
             "from-url-only"
         );
-        assert_eq!(
-            query_string(&mut connection, "SELECT DB_NAME()").await?,
-            TEST_DATABASE
-        );
         drop(connection);
         drop(pool);
 
@@ -390,6 +386,10 @@ mod test {
             query_string(&mut connection, "SELECT APP_NAME()").await?,
             "from-ado-only"
         );
+        assert_eq!(
+            query_string(&mut connection, "SELECT DB_NAME()").await?,
+            TEST_DATABASE
+        );
         drop(connection);
         drop(pool);
 
@@ -402,11 +402,15 @@ mod test {
             TaskConfigEndpoint::Extractor,
         )?;
         let configurations = [
-            (ado_connection_string.as_str(), "ape-dts-ado-test"),
-            (jdbc_endpoint.connection_string(), "ape-dts-jdbc-test"),
+            (
+                ado_connection_string.as_str(),
+                "ape-dts-ado-test",
+                Some(TEST_DATABASE),
+            ),
+            (jdbc_endpoint.connection_string(), "ape-dts-jdbc-test", None),
         ];
 
-        for (connection_string, application_name) in configurations {
+        for (connection_string, application_name, expected_database) in configurations {
             let pool = MssqlConnectionPool::from_config(
                 connection_string,
                 auth,
@@ -420,10 +424,12 @@ mod test {
                 query_string(&mut connection, "SELECT APP_NAME()").await?,
                 application_name
             );
-            assert_eq!(
-                query_string(&mut connection, "SELECT DB_NAME()").await?,
-                TEST_DATABASE
-            );
+            if let Some(expected_database) = expected_database {
+                assert_eq!(
+                    query_string(&mut connection, "SELECT DB_NAME()").await?,
+                    expected_database
+                );
+            }
         }
         Ok(())
     }

@@ -237,26 +237,73 @@ impl RdbStructTestRunner {
         }
 
         let compare_databases = !self.base.filter.filter_structure(&StructureType::Database);
+        let compare_sequences = !self.base.filter.filter_structure(&StructureType::Sequence);
+        let compare_comments = !self.base.filter.filter_structure(&StructureType::Comment);
         let mut compared_databases = HashSet::new();
+        let mut compared_schemas = HashSet::new();
         for (src_db_tb, dst_db_tb) in src_db_tbs.iter().zip(&dst_db_tbs) {
+            if compared_databases.insert((src_db_tb.0.clone(), dst_db_tb.0.clone())) {
+                if compare_databases {
+                    let mut src_database = src_check_fetcher.fetch_database(&src_db_tb.0).await?;
+                    let mut dst_database = dst_check_fetcher.fetch_database(&dst_db_tb.0).await?;
+                    if !compare_comments {
+                        src_database.remove("comment");
+                        dst_database.remove("comment");
+                    }
+                    assert_eq!(
+                        src_database, dst_database,
+                        "MSSQL database metadata differs: {} -> {}",
+                        src_db_tb.0, dst_db_tb.0
+                    );
+                }
+                if compare_sequences {
+                    let mut src_sequences = src_check_fetcher.fetch_sequences(&src_db_tb.0).await?;
+                    let mut dst_sequences = dst_check_fetcher.fetch_sequences(&dst_db_tb.0).await?;
+                    if !compare_comments {
+                        for sequence in src_sequences.iter_mut().chain(&mut dst_sequences) {
+                            sequence.remove("comment");
+                        }
+                    }
+                    assert_eq!(
+                        src_sequences, dst_sequences,
+                        "MSSQL sequence metadata differs: {} -> {}",
+                        src_db_tb.0, dst_db_tb.0
+                    );
+                }
+            }
+
             if compare_databases
-                && compared_databases.insert((src_db_tb.0.clone(), dst_db_tb.0.clone()))
+                && compare_comments
+                && compared_schemas.insert((
+                    src_db_tb.0.clone(),
+                    src_db_tb.1.clone(),
+                    dst_db_tb.0.clone(),
+                    dst_db_tb.1.clone(),
+                ))
             {
-                let src_database = src_check_fetcher.fetch_database(&src_db_tb.0).await?;
-                let dst_database = dst_check_fetcher.fetch_database(&dst_db_tb.0).await?;
+                let src_schema = src_check_fetcher
+                    .fetch_schema(&src_db_tb.0, &src_db_tb.1)
+                    .await?;
+                let dst_schema = dst_check_fetcher
+                    .fetch_schema(&dst_db_tb.0, &dst_db_tb.1)
+                    .await?;
                 assert_eq!(
-                    src_database, dst_database,
-                    "MSSQL database metadata differs: {} -> {}",
-                    src_db_tb.0, dst_db_tb.0
+                    src_schema, dst_schema,
+                    "MSSQL schema metadata differs: {}.{} -> {}.{}",
+                    src_db_tb.0, src_db_tb.1, dst_db_tb.0, dst_db_tb.1
                 );
             }
 
-            let src_table = src_check_fetcher
+            let mut src_table = src_check_fetcher
                 .fetch_table(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2)
                 .await?;
-            let dst_table = dst_check_fetcher
+            let mut dst_table = dst_check_fetcher
                 .fetch_table(&dst_db_tb.0, &dst_db_tb.1, &dst_db_tb.2)
                 .await?;
+            if !compare_comments {
+                src_table.comments.clear();
+                dst_table.comments.clear();
+            }
 
             println!(
                 "comparing MSSQL src table: {:?} with dst table: {:?}",

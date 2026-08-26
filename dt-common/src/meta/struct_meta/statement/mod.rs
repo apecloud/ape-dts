@@ -1,5 +1,6 @@
 pub mod mongo_create_collection_statement;
 pub mod mongo_shard_key_statement;
+pub mod mssql_comment_statement;
 pub mod mssql_create_database_statement;
 pub mod mssql_create_schema_statement;
 pub mod mssql_create_table_statement;

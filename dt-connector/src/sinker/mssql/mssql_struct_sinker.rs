@@ -169,6 +169,7 @@ mod tests {
         let statement = StructStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
             database_name: "test_db".to_string(),
             collation_name: String::new(),
+            comments: Vec::new(),
         });
 
         assert!(MssqlStructSinker::requires_autocommit(&statement));

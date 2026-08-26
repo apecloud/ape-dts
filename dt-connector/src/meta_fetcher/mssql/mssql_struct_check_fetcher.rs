@@ -12,9 +12,57 @@ use dt_common::{
 use tiberius::{Query, Row};
 
 const DATABASE_SQL: &str = r#"
-SELECT d.collation_name
+SELECT
+    d.collation_name,
+    (
+        SELECT CONVERT(nvarchar(max), ep.value)
+        FROM {catalog}sys.extended_properties AS ep
+        WHERE ep.class = 0
+          AND ep.major_id = 0
+          AND ep.minor_id = 0
+          AND ep.name = N'MS_Description'
+    ) AS comment
 FROM sys.databases AS d
 WHERE d.name = @P1
+"#;
+
+const SCHEMA_SQL: &str = r#"
+SELECT CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.schemas AS s
+LEFT JOIN {catalog}sys.extended_properties AS ep
+  ON ep.class = 3
+ AND ep.major_id = s.schema_id
+ AND ep.minor_id = 0
+ AND ep.name = N'MS_Description'
+WHERE s.name = @P1
+"#;
+
+const SEQUENCES_SQL: &str = r#"
+SELECT
+    s.name AS schema_name,
+    seq.name AS sequence_name,
+    ty.name AS type_name,
+    CONVERT(nvarchar(max), seq.precision) AS numeric_precision,
+    CONVERT(nvarchar(max), seq.scale) AS numeric_scale,
+    CONVERT(nvarchar(max), seq.start_value) AS start_value,
+    CONVERT(nvarchar(max), seq.increment) AS increment,
+    CONVERT(nvarchar(max), seq.minimum_value) AS minimum_value,
+    CONVERT(nvarchar(max), seq.maximum_value) AS maximum_value,
+    CONVERT(nvarchar(max), seq.is_cycling) AS is_cycling,
+    CONVERT(nvarchar(max), seq.is_cached) AS is_cached,
+    CONVERT(nvarchar(max), seq.cache_size) AS cache_size,
+    CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.sequences AS seq
+JOIN {catalog}sys.schemas AS s ON s.schema_id = seq.schema_id
+JOIN {catalog}sys.types AS ty
+  ON ty.user_type_id = seq.system_type_id
+ AND ty.is_user_defined = 0
+LEFT JOIN {catalog}sys.extended_properties AS ep
+  ON ep.class = 1
+ AND ep.major_id = seq.object_id
+ AND ep.minor_id = 0
+ AND ep.name = N'MS_Description'
+ORDER BY s.name, seq.name
 "#;
 
 const COLUMNS_SQL: &str = r#"
@@ -146,8 +194,8 @@ ORDER BY i.name, ic.index_column_id
 
 const COMMENTS_SQL: &str = r#"
 SELECT
-    CONVERT(nvarchar(max), ep.minor_id) AS minor_id,
-    c.name AS column_name,
+    CASE WHEN ep.minor_id = 0 THEN N'TABLE' ELSE N'COLUMN' END AS comment_type,
+    c.name AS object_name,
     CONVERT(nvarchar(max), ep.value) AS comment
 FROM {catalog}sys.extended_properties AS ep
 JOIN {catalog}sys.tables AS t
@@ -160,7 +208,39 @@ LEFT JOIN {catalog}sys.columns AS c
 WHERE s.name = @P1
   AND t.name = @P2
   AND ep.name = N'MS_Description'
-ORDER BY ep.minor_id
+UNION ALL
+SELECT
+    N'CONSTRAINT' AS comment_type,
+    o.name AS object_name,
+    CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.objects AS o
+  ON ep.class = 1
+ AND ep.major_id = o.object_id
+ AND ep.minor_id = 0
+JOIN {catalog}sys.tables AS t ON t.object_id = o.parent_object_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE o.type IN (N'C', N'D', N'PK', N'UQ')
+  AND s.name = @P1
+  AND t.name = @P2
+  AND ep.name = N'MS_Description'
+UNION ALL
+SELECT
+    N'INDEX' AS comment_type,
+    i.name AS object_name,
+    CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.tables AS t
+  ON ep.class = 7
+ AND ep.major_id = t.object_id
+JOIN {catalog}sys.indexes AS i
+  ON i.object_id = ep.major_id
+ AND i.index_id = ep.minor_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE s.name = @P1
+  AND t.name = @P2
+  AND ep.name = N'MS_Description'
+ORDER BY comment_type, object_name
 "#;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -177,7 +257,7 @@ pub struct MssqlStructCheckFetcher {
 
 impl MssqlStructCheckFetcher {
     pub async fn fetch_database(&self, db: &str) -> anyhow::Result<BTreeMap<String, String>> {
-        let mut query = Query::new(DATABASE_SQL);
+        let mut query = Query::new(Self::catalog_sql(DATABASE_SQL, db));
         query.bind(db);
         let mut connection = self.connection_pool.get().await?;
         let rows = query
@@ -190,7 +270,62 @@ impl MssqlStructCheckFetcher {
         let Some(row) = rows.first() else {
             anyhow::bail!("MSSQL database {db} was not found");
         };
-        Self::parse_row(row, &["collation_name"])
+        Self::parse_row(row, &["collation_name", "comment"])
+    }
+
+    pub async fn fetch_schema(
+        &self,
+        db: &str,
+        schema: &str,
+    ) -> anyhow::Result<BTreeMap<String, String>> {
+        let mut query = Query::new(Self::catalog_sql(SCHEMA_SQL, db));
+        query.bind(schema);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = query
+            .query(connection.client_mut())
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+        let Some(row) = rows.first() else {
+            anyhow::bail!("MSSQL schema {db}.{schema} was not found");
+        };
+        Self::parse_row(row, &["comment"])
+    }
+
+    pub async fn fetch_sequences(&self, db: &str) -> anyhow::Result<Vec<BTreeMap<String, String>>> {
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&Self::catalog_sql(SEQUENCES_SQL, db), &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+        rows.iter()
+            .map(|row| {
+                Self::parse_row(
+                    row,
+                    &[
+                        "schema_name",
+                        "sequence_name",
+                        "type_name",
+                        "numeric_precision",
+                        "numeric_scale",
+                        "start_value",
+                        "increment",
+                        "minimum_value",
+                        "maximum_value",
+                        "is_cycling",
+                        "is_cached",
+                        "cache_size",
+                        "comment",
+                    ],
+                )
+            })
+            .collect()
     }
 
     pub async fn fetch_table(
@@ -282,7 +417,7 @@ impl MssqlStructCheckFetcher {
                     db,
                     schema,
                     table,
-                    &["minor_id", "column_name", "comment"],
+                    &["comment_type", "object_name", "comment"],
                 )
                 .await?,
         })

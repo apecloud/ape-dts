@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::bail;
 use dt_common::{
@@ -8,12 +8,13 @@ use dt_common::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         mssql::mssql_connection_pool::MssqlConnectionPool,
         struct_meta::statement::{
+            mssql_comment_statement::MssqlComment,
             mssql_create_database_statement::MssqlCreateDatabaseStatement,
-            mssql_create_schema_statement::MssqlCreateSchemaStatement,
+            mssql_create_schema_statement::{MssqlCreateSchemaStatement, MssqlSequence},
             mssql_create_table_statement::{
-                MssqlColumn, MssqlColumnDefinition, MssqlComment, MssqlConstraint,
-                MssqlConstraintKind, MssqlCreateTableStatement, MssqlIdentity, MssqlIndex,
-                MssqlIndexColumn, MssqlKeyColumn, MssqlKeyConstraintType, MssqlTable,
+                MssqlColumn, MssqlColumnDefinition, MssqlConstraint, MssqlConstraintKind,
+                MssqlCreateTableStatement, MssqlIdentity, MssqlIndex, MssqlIndexColumn,
+                MssqlKeyColumn, MssqlKeyConstraintType, MssqlTable,
             },
         },
     },
@@ -30,14 +31,85 @@ WHERE state_desc = 'ONLINE'
   AND name = @P1
 "#;
 
+const DATABASE_COMMENT_SQL: &str = r#"
+SELECT CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.extended_properties AS ep
+WHERE ep.class = 0
+  AND ep.major_id = 0
+  AND ep.minor_id = 0
+  AND ep.name = N'MS_Description'
+"#;
+
 const SCHEMAS_SQL: &str = r#"
 SELECT
     s.name AS schema_name,
-    t.name AS table_name
+    t.name AS table_name,
+    CONVERT(bit, CASE WHEN EXISTS (
+        SELECT 1
+        FROM {catalog}sys.sequences AS seq
+        WHERE seq.schema_id = s.schema_id
+    ) THEN 1 ELSE 0 END) AS has_sequence
 FROM {catalog}sys.schemas AS s
-JOIN {catalog}sys.tables AS t ON t.schema_id = s.schema_id
-WHERE t.is_ms_shipped = 0
+LEFT JOIN {catalog}sys.tables AS t
+  ON t.schema_id = s.schema_id
+ AND t.is_ms_shipped = 0
+WHERE t.object_id IS NOT NULL
+   OR EXISTS (
+       SELECT 1
+       FROM {catalog}sys.sequences AS seq
+       WHERE seq.schema_id = s.schema_id
+   )
 ORDER BY s.name, t.name
+"#;
+
+const SEQUENCES_SQL: &str = r#"
+SELECT
+    s.name AS schema_name,
+    seq.name AS sequence_name,
+    ty.name AS type_name,
+    CONVERT(bigint, seq.precision) AS numeric_precision,
+    CONVERT(bigint, seq.scale) AS numeric_scale,
+    CONVERT(nvarchar(100), seq.start_value) AS start_value,
+    CONVERT(nvarchar(100), seq.increment) AS increment,
+    CONVERT(nvarchar(100), seq.minimum_value) AS minimum_value,
+    CONVERT(nvarchar(100), seq.maximum_value) AS maximum_value,
+    seq.is_cycling,
+    seq.is_cached,
+    CONVERT(nvarchar(100), seq.cache_size) AS cache_size
+FROM {catalog}sys.sequences AS seq
+JOIN {catalog}sys.schemas AS s ON s.schema_id = seq.schema_id
+JOIN {catalog}sys.types AS ty
+  ON ty.user_type_id = seq.system_type_id
+ AND ty.is_user_defined = 0
+ORDER BY s.name, seq.name
+"#;
+
+const SCHEMA_COMMENTS_SQL: &str = r#"
+SELECT
+    s.name AS schema_name,
+    N'SCHEMA' AS comment_type,
+    CONVERT(nvarchar(128), NULL) AS object_name,
+    CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.schemas AS s
+  ON ep.class = 3
+ AND ep.major_id = s.schema_id
+ AND ep.minor_id = 0
+WHERE ep.name = N'MS_Description'
+UNION ALL
+SELECT
+    s.name AS schema_name,
+    N'SEQUENCE' AS comment_type,
+    seq.name AS object_name,
+    CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.sequences AS seq
+  ON ep.class = 1
+ AND ep.major_id = seq.object_id
+ AND ep.minor_id = 0
+JOIN {catalog}sys.schemas AS s ON s.schema_id = seq.schema_id
+WHERE ep.name = N'MS_Description'
+ORDER BY schema_name, comment_type, object_name
 "#;
 
 const TABLE_COLUMNS_SQL: &str = r#"
@@ -179,12 +251,14 @@ WHERE t.is_ms_shipped = 0
 ORDER BY s.name, t.name, i.index_id, ic.index_column_id
 "#;
 
-const COMMENTS_SQL: &str = r#"
+const TABLE_COMMENTS_SQL: &str = r#"
 SELECT
     s.name AS schema_name,
     t.name AS table_name,
-    CONVERT(bigint, ep.minor_id) AS minor_id,
-    c.name AS column_name,
+    CASE WHEN ep.minor_id = 0 THEN N'TABLE' ELSE N'COLUMN' END AS comment_type,
+    c.name AS object_name,
+    CONVERT(nvarchar(1), NULL) AS is_key_constraint,
+    CONVERT(nvarchar(1), NULL) AS is_constraint_index,
     CONVERT(nvarchar(max), ep.value) AS comment
 FROM {catalog}sys.extended_properties AS ep
 JOIN {catalog}sys.tables AS t
@@ -196,9 +270,50 @@ LEFT JOIN {catalog}sys.columns AS c
  AND c.column_id = ep.minor_id
 WHERE t.is_ms_shipped = 0
   AND ep.name = N'MS_Description'
-ORDER BY s.name, t.name, ep.minor_id
+UNION ALL
+SELECT
+    s.name AS schema_name,
+    t.name AS table_name,
+    N'CONSTRAINT' AS comment_type,
+    o.name AS object_name,
+    CONVERT(nvarchar(1), CASE WHEN o.type IN (N'PK', N'UQ') THEN 1 ELSE 0 END)
+        AS is_key_constraint,
+    CONVERT(nvarchar(1), NULL) AS is_constraint_index,
+    CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.objects AS o
+  ON ep.class = 1
+ AND ep.major_id = o.object_id
+ AND ep.minor_id = 0
+JOIN {catalog}sys.tables AS t ON t.object_id = o.parent_object_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE o.type IN (N'C', N'D', N'PK', N'UQ')
+  AND t.is_ms_shipped = 0
+  AND ep.name = N'MS_Description'
+UNION ALL
+SELECT
+    s.name AS schema_name,
+    t.name AS table_name,
+    N'INDEX' AS comment_type,
+    i.name AS object_name,
+    CONVERT(nvarchar(1), NULL) AS is_key_constraint,
+    CONVERT(nvarchar(1), CASE WHEN i.is_primary_key = 1 OR i.is_unique_constraint = 1 THEN 1 ELSE 0 END)
+        AS is_constraint_index,
+    CONVERT(nvarchar(max), ep.value) AS comment
+FROM {catalog}sys.extended_properties AS ep
+JOIN {catalog}sys.tables AS t
+  ON ep.class = 7
+ AND ep.major_id = t.object_id
+JOIN {catalog}sys.indexes AS i
+  ON i.object_id = ep.major_id
+ AND i.index_id = ep.minor_id
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE t.is_ms_shipped = 0
+  AND ep.name = N'MS_Description'
+ORDER BY schema_name, table_name, comment_type, object_name
 "#;
 
+type SchemaKey = (String, String);
 type TableKey = (String, String, String);
 type KeyConstraintDetails = (String, String, Vec<(i64, String, bool)>);
 type IndexDetails = (
@@ -225,17 +340,17 @@ impl MssqlStructFetcher {
     pub async fn get_create_database_statements(
         &mut self,
     ) -> anyhow::Result<Vec<MssqlCreateDatabaseStatement>> {
-        Ok(self
-            .get_database()
-            .await?
-            .into_iter()
-            .map(
-                |(database_name, collation_name)| MssqlCreateDatabaseStatement {
-                    database_name,
-                    collation_name,
-                },
-            )
-            .collect())
+        let Some((database_name, collation_name)) = self.get_database().await? else {
+            return Ok(Vec::new());
+        };
+        let mut statement = MssqlCreateDatabaseStatement {
+            database_name: database_name.clone(),
+            collation_name,
+            comments: Vec::new(),
+        };
+        self.attach_database_comments(&database_name, &mut statement)
+            .await?;
+        Ok(vec![statement])
     }
 
     pub async fn get_create_schema_statements(
@@ -245,38 +360,15 @@ impl MssqlStructFetcher {
         let Some((database_name, _)) = self.get_database().await? else {
             return Ok(Vec::new());
         };
-        let mut statements = Vec::new();
-        let sql = Self::catalog_sql(SCHEMAS_SQL, &database_name);
-        let mut connection = self.connection_pool.get().await?;
-        let rows = connection
-            .client_mut()
-            .query(&sql, &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
-            .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
-
-        let mut schemas = BTreeSet::new();
-        for row in rows {
-            let schema = Self::required_string(&row, "schema_name")?;
-            let table = Self::required_string(&row, "table_name")?;
-            if (!requested_schema.is_empty() && requested_schema != schema)
-                || self
-                    .filter
-                    .filter_tb_with_db(&database_name, &schema, &table)
-            {
-                continue;
-            }
-            schemas.insert(schema);
+        let mut statements = self.get_schemas(&database_name, requested_schema).await?;
+        if statements.is_empty() {
+            return Ok(Vec::new());
         }
-        for name in schemas {
-            statements.push(MssqlCreateSchemaStatement {
-                database_name: database_name.clone(),
-                schema_name: name,
-            });
-        }
-        Ok(statements)
+        self.attach_sequences(&database_name, requested_schema, &mut statements)
+            .await?;
+        self.attach_schema_comments(&database_name, requested_schema, &mut statements)
+            .await?;
+        Ok(statements.into_values().collect())
     }
 
     pub async fn get_create_table_statements(
@@ -300,9 +392,223 @@ impl MssqlStructFetcher {
             .await?;
         self.attach_indexes(&db, schema, table, &mut statements)
             .await?;
-        self.attach_comments(&db, schema, table, &mut statements)
+        self.attach_table_comments(&db, schema, table, &mut statements)
             .await?;
         Ok(statements.into_values().collect())
+    }
+
+    async fn get_database(&self) -> anyhow::Result<Option<(String, String)>> {
+        if self.db.is_empty() {
+            bail!(DtError::invalid_config(
+                "MSSQL struct fetcher requires a database"
+            ));
+        }
+        if self.filter.filter_schema(&self.db) {
+            return Ok(None);
+        }
+
+        let mut query = Query::new(DATABASE_SQL);
+        query.bind(&self.db);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = query
+            .query(connection.client_mut())
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+        let Some(row) = rows.first() else {
+            if self.allow_missing_database {
+                return Ok(None);
+            }
+            bail!(DtError::DatabaseObjectNotFound(
+                DbType::Mssql,
+                format!("database: {} not found", self.db),
+            ));
+        };
+
+        let database_name = Self::required_string(row, "database_name")?;
+        let collation_name =
+            MssqlColValueConvertor::from_query_optional_string(row, "collation_name")
+                .code(ErrorCode::MetadataReadFailed)?
+                .unwrap_or_default();
+        Ok(Some((database_name, collation_name)))
+    }
+
+    async fn attach_database_comments(
+        &self,
+        db: &str,
+        statement: &mut MssqlCreateDatabaseStatement,
+    ) -> anyhow::Result<()> {
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&Self::catalog_sql(DATABASE_COMMENT_SQL, db), &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+        for row in rows {
+            statement.comments.push(MssqlComment::Database {
+                comment: Self::required_string(&row, "comment")?,
+            });
+        }
+        Ok(())
+    }
+
+    async fn get_schemas(
+        &self,
+        db: &str,
+        requested_schema: &str,
+    ) -> anyhow::Result<BTreeMap<SchemaKey, MssqlCreateSchemaStatement>> {
+        let sql = Self::catalog_sql(SCHEMAS_SQL, db);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&sql, &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+
+        let mut statements = BTreeMap::new();
+        for row in rows {
+            let schema = Self::required_string(&row, "schema_name")?;
+            if !requested_schema.is_empty() && requested_schema != schema {
+                continue;
+            }
+            let table = MssqlColValueConvertor::from_query_optional_string(&row, "table_name")
+                .code(ErrorCode::MetadataReadFailed)?;
+            let has_sequence =
+                MssqlColValueConvertor::from_query_required_bool(&row, "has_sequence")
+                    .code(ErrorCode::MetadataReadFailed)?;
+            if !has_sequence
+                && table
+                    .as_ref()
+                    .is_some_and(|table| self.filter.filter_tb_with_db(db, &schema, table))
+            {
+                continue;
+            }
+            statements
+                .entry((db.to_string(), schema.clone()))
+                .or_insert_with(|| MssqlCreateSchemaStatement {
+                    database_name: db.to_string(),
+                    schema_name: schema,
+                    sequences: Vec::new(),
+                    comments: Vec::new(),
+                });
+        }
+        Ok(statements)
+    }
+
+    async fn attach_sequences(
+        &self,
+        db: &str,
+        requested_schema: &str,
+        statements: &mut BTreeMap<SchemaKey, MssqlCreateSchemaStatement>,
+    ) -> anyhow::Result<()> {
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&Self::catalog_sql(SEQUENCES_SQL, db), &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+
+        for row in rows {
+            let schema_name = Self::required_string(&row, "schema_name")?;
+            if !requested_schema.is_empty() && requested_schema != schema_name {
+                continue;
+            }
+            let type_name = Self::required_string(&row, "type_name")?;
+            let precision =
+                MssqlColValueConvertor::from_query_required_i64(&row, "numeric_precision")
+                    .code(ErrorCode::MetadataReadFailed)?;
+            let scale = MssqlColValueConvertor::from_query_required_i64(&row, "numeric_scale")
+                .code(ErrorCode::MetadataReadFailed)?;
+            let sequence_name = Self::required_string(&row, "sequence_name")?;
+            let cache_size = MssqlColValueConvertor::from_query_optional_string(&row, "cache_size")
+                .code(ErrorCode::MetadataReadFailed)?
+                .map(|value| value.parse::<u64>())
+                .transpose()
+                .map_err(|_| {
+                    DtError::UnsupportedTableStructure(format!(
+                        "MSSQL sequence {schema_name}.{sequence_name} has an invalid cache size"
+                    ))
+                })?;
+            let sequence = MssqlSequence {
+                sequence_name,
+                data_type: Self::format_sequence_type(&type_name, precision, scale),
+                start_value: Self::required_string(&row, "start_value")?,
+                increment: Self::required_string(&row, "increment")?,
+                minimum_value: Self::required_string(&row, "minimum_value")?,
+                maximum_value: Self::required_string(&row, "maximum_value")?,
+                is_cycling: MssqlColValueConvertor::from_query_required_bool(&row, "is_cycling")
+                    .code(ErrorCode::MetadataReadFailed)?,
+                is_cached: MssqlColValueConvertor::from_query_required_bool(&row, "is_cached")
+                    .code(ErrorCode::MetadataReadFailed)?,
+                cache_size,
+                comments: Vec::new(),
+            };
+            if let Some(statement) = statements.get_mut(&(db.to_string(), schema_name)) {
+                statement.sequences.push(sequence);
+            }
+        }
+        Ok(())
+    }
+
+    async fn attach_schema_comments(
+        &self,
+        db: &str,
+        requested_schema: &str,
+        statements: &mut BTreeMap<SchemaKey, MssqlCreateSchemaStatement>,
+    ) -> anyhow::Result<()> {
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&Self::catalog_sql(SCHEMA_COMMENTS_SQL, db), &[])
+            .await
+            .code(ErrorCode::MetadataReadFailed)?
+            .into_first_result()
+            .await
+            .code(ErrorCode::MetadataReadFailed)?;
+
+        for row in rows {
+            let schema = Self::required_string(&row, "schema_name")?;
+            if !requested_schema.is_empty() && requested_schema != schema {
+                continue;
+            }
+            let Some(statement) = statements.get_mut(&(db.to_string(), schema)) else {
+                continue;
+            };
+            let comment_type = Self::required_string(&row, "comment_type")?;
+            let comment = Self::required_string(&row, "comment")?;
+            match comment_type.as_str() {
+                "SCHEMA" => statement.comments.push(MssqlComment::Schema { comment }),
+                "SEQUENCE" => {
+                    let sequence_name = Self::required_string(&row, "object_name")?;
+                    if let Some(sequence) = statement
+                        .sequences
+                        .iter_mut()
+                        .find(|sequence| sequence.sequence_name == sequence_name)
+                    {
+                        sequence.comments.push(MssqlComment::Sequence { comment });
+                    }
+                }
+                _ => {
+                    return Err(DtError::DatabaseInvariant(
+                        DbType::Mssql,
+                        format!("unknown MSSQL schema comment type: {comment_type}"),
+                    )
+                    .into());
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn get_tables(
@@ -718,7 +1024,7 @@ impl MssqlStructFetcher {
         Ok(())
     }
 
-    async fn attach_comments(
+    async fn attach_table_comments(
         &self,
         db: &str,
         requested_schema: &str,
@@ -728,7 +1034,7 @@ impl MssqlStructFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = connection
             .client_mut()
-            .query(&Self::catalog_sql(COMMENTS_SQL, db), &[])
+            .query(&Self::catalog_sql(TABLE_COMMENTS_SQL, db), &[])
             .await
             .code(ErrorCode::MetadataReadFailed)?
             .into_first_result()
@@ -743,20 +1049,34 @@ impl MssqlStructFetcher {
             if let Some(statement) =
                 statements.get_mut(&(db.to_string(), schema.clone(), table.clone()))
             {
-                let minor_id = MssqlColValueConvertor::from_query_required_i64(&row, "minor_id")
-                    .code(ErrorCode::MetadataReadFailed)?;
-                let column_name =
-                    MssqlColValueConvertor::from_query_optional_string(&row, "column_name")
+                let comment_type = Self::required_string(&row, "comment_type")?;
+                let object_name =
+                    MssqlColValueConvertor::from_query_optional_string(&row, "object_name")
                         .code(ErrorCode::MetadataReadFailed)?
                         .unwrap_or_default();
-                statement.table.comments.push(if minor_id == 0 {
-                    MssqlComment::Table {
-                        comment: Self::required_string(&row, "comment")?,
-                    }
-                } else {
-                    MssqlComment::Column {
-                        column_name,
-                        comment: Self::required_string(&row, "comment")?,
+                let comment = Self::required_string(&row, "comment")?;
+                statement.table.comments.push(match comment_type.as_str() {
+                    "TABLE" => MssqlComment::Table { comment },
+                    "COLUMN" => MssqlComment::Column {
+                        column_name: object_name,
+                        comment,
+                    },
+                    "CONSTRAINT" => MssqlComment::Constraint {
+                        constraint_name: object_name,
+                        is_key: Self::required_string(&row, "is_key_constraint")? == "1",
+                        comment,
+                    },
+                    "INDEX" => MssqlComment::Index {
+                        index_name: object_name,
+                        is_constraint: Self::required_string(&row, "is_constraint_index")? == "1",
+                        comment,
+                    },
+                    _ => {
+                        return Err(DtError::DatabaseInvariant(
+                            DbType::Mssql,
+                            format!("unknown MSSQL comment type: {comment_type}"),
+                        )
+                        .into());
                     }
                 });
             }
@@ -777,44 +1097,6 @@ impl MssqlStructFetcher {
             && !self.filter.filter_tb_with_db(db, schema, table)
     }
 
-    async fn get_database(&self) -> anyhow::Result<Option<(String, String)>> {
-        if self.db.is_empty() {
-            bail!(DtError::invalid_config(
-                "MSSQL struct fetcher requires a database"
-            ));
-        }
-        if self.filter.filter_schema(&self.db) {
-            return Ok(None);
-        }
-
-        let mut query = Query::new(DATABASE_SQL);
-        query.bind(&self.db);
-        let mut connection = self.connection_pool.get().await?;
-        let rows = query
-            .query(connection.client_mut())
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
-            .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
-        let Some(row) = rows.first() else {
-            if self.allow_missing_database {
-                return Ok(None);
-            }
-            bail!(DtError::DatabaseObjectNotFound(
-                DbType::Mssql,
-                format!("database: {} not found", self.db),
-            ));
-        };
-
-        Ok(Some((
-            Self::required_string(row, "database_name")?,
-            MssqlColValueConvertor::from_query_optional_string(row, "collation_name")
-                .code(ErrorCode::MetadataReadFailed)?
-                .unwrap_or_default(),
-        )))
-    }
-
     fn catalog_sql(template: &str, db: &str) -> String {
         let catalog = if db.is_empty() {
             String::new()
@@ -827,6 +1109,15 @@ impl MssqlStructFetcher {
     fn required_string(row: &tiberius::Row, column: &str) -> anyhow::Result<String> {
         MssqlColValueConvertor::from_query_required_string(row, column)
             .code(ErrorCode::MetadataReadFailed)
+    }
+
+    fn format_sequence_type(type_name: &str, precision: i64, scale: i64) -> String {
+        let type_name = type_name.to_uppercase();
+        if matches!(type_name.as_str(), "DECIMAL" | "NUMERIC") {
+            format!("{type_name}({precision}, {scale})")
+        } else {
+            type_name
+        }
     }
 
     fn format_column_type(type_name: &str, max_length: i64, precision: i64, scale: i64) -> String {

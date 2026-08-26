@@ -750,7 +750,7 @@ mod tests {
             struct_meta::{
                 statement::{
                     mssql_create_database_statement::MssqlCreateDatabaseStatement,
-                    mssql_create_schema_statement::MssqlCreateSchemaStatement,
+                    mssql_create_schema_statement::{MssqlCreateSchemaStatement, MssqlSequence},
                     struct_statement::StructStatement,
                 },
                 struct_data::StructData,
@@ -1071,6 +1071,19 @@ mod tests {
             statement: StructStatement::MssqlCreateSchema(MssqlCreateSchemaStatement {
                 database_name: "src_db".to_string(),
                 schema_name: "src_schema".to_string(),
+                sequences: vec![MssqlSequence {
+                    sequence_name: "src_sequence".to_string(),
+                    data_type: "BIGINT".to_string(),
+                    start_value: "1".to_string(),
+                    increment: "1".to_string(),
+                    minimum_value: "1".to_string(),
+                    maximum_value: "100".to_string(),
+                    is_cycling: false,
+                    is_cached: false,
+                    cache_size: None,
+                    comments: Vec::new(),
+                }],
+                comments: Vec::new(),
             }),
         };
 
@@ -1084,6 +1097,7 @@ mod tests {
         };
         assert_eq!(statement.database_name, "dst_db");
         assert_eq!(statement.schema_name, "src_schema");
+        assert_eq!(statement.sequences[0].sequence_name, "src_sequence");
     }
 
     #[test]
@@ -1104,6 +1118,7 @@ mod tests {
             statement: StructStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
                 database_name: "src_db".to_string(),
                 collation_name: String::new(),
+                comments: Vec::new(),
             }),
         };
 
