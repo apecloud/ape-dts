@@ -6,7 +6,7 @@ use mongodb::{
 
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
+    error::{DtError, DtOptionExt},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -51,8 +51,7 @@ pub async fn get_server_version(client: &Client) -> anyhow::Result<MongoServerVe
         .default_database()
         .unwrap_or_else(|| client.database("admin"))
         .run_command(doc! { "buildInfo": 1 })
-        .await
-        .code(ErrorCode::MetadataReadFailed)?;
+        .await?;
     let version = build_info
         .get_str("version")
         .context(DtError::UnsupportedDatabaseVersion(

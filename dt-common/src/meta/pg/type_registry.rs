@@ -4,7 +4,6 @@ use futures::TryStreamExt;
 use sqlx::{postgres::PgRow, Pool, Postgres, Row};
 
 use super::{pg_col_type::PgColType, pg_value_type::PgValueType};
-use crate::error::{DtResultExt, ErrorCode};
 
 #[derive(Clone)]
 pub struct TypeRegistry {
@@ -40,7 +39,7 @@ impl TypeRegistry {
             ON (t.oid = e.id)
             WHERE n.nspname != 'pg_toast'";
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let col_type = self.parse_col_meta(&row)?;
             self.oid_to_type.insert(col_type.oid, col_type.clone());
         }

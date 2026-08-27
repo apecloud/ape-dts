@@ -3,7 +3,6 @@ use std::{cmp, collections::HashMap};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use dt_common::{
-    error::{DtResultExt, ErrorCode},
     log_error, log_warn,
     meta::{
         col_value::ColValue,
@@ -522,31 +521,21 @@ impl MongoSinker {
         match ddl_data.ddl_type {
             DdlType::MongoDropDatabase => {
                 let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client
-                    .database(&db)
-                    .drop()
-                    .await
-                    .code(ErrorCode::StatementFailed)?;
+                self.mongo_client.database(&db).drop().await?;
             }
 
             DdlType::MongoShardCollection => {
                 if self.ensure_shard_collection_command(&command).await? {
-                    self.run_admin_command(command)
-                        .await
-                        .code(ErrorCode::StatementFailed)?;
+                    self.run_admin_command(command).await?;
                 }
             }
 
             DdlType::MongoReshardCollection | DdlType::MongoRefineCollectionShardKey => {
-                self.run_admin_command(command)
-                    .await
-                    .code(ErrorCode::StatementFailed)?;
+                self.run_admin_command(command).await?;
             }
 
             DdlType::MongoRenameCollection => {
-                self.run_admin_command(command)
-                    .await
-                    .code(ErrorCode::StatementFailed)?;
+                self.run_admin_command(command).await?;
             }
 
             DdlType::MongoCreateCollection
@@ -555,11 +544,7 @@ impl MongoSinker {
             | DdlType::MongoDropIndex
             | DdlType::MongoCollMod => {
                 let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client
-                    .database(&db)
-                    .run_command(command)
-                    .await
-                    .code(ErrorCode::StatementFailed)?;
+                self.mongo_client.database(&db).run_command(command).await?;
             }
 
             _ => {}

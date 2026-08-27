@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtResultExt, ErrorCode},
+    error::{DtError, DtErrorContextExt, ErrorObject},
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         mssql::mssql_connection_pool::MssqlConnectionPool,
@@ -262,13 +262,14 @@ impl MssqlStructCheckFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = query
             .query(connection.client_mut())
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         let Some(row) = rows.first() else {
-            anyhow::bail!("MSSQL database {db} was not found");
+            anyhow::bail!(DtError::DatabaseNotFound(
+                DbType::Mssql,
+                format!("database {db} was not found")
+            ));
         };
         Self::parse_row(row, &["collation_name", "comment"])
     }
@@ -283,13 +284,18 @@ impl MssqlStructCheckFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = query
             .query(connection.client_mut())
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         let Some(row) = rows.first() else {
-            anyhow::bail!("MSSQL schema {db}.{schema} was not found");
+            anyhow::bail!(DtError::DatabaseObjectNotFound(
+                DbType::Mssql,
+                format!("schema {db}.{schema} was not found")
+            )
+            .object(ErrorObject {
+                schema: Some(schema.to_string()),
+                ..Default::default()
+            }));
         };
         Self::parse_row(row, &["comment"])
     }
@@ -299,11 +305,9 @@ impl MssqlStructCheckFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(SEQUENCES_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         rows.iter()
             .map(|row| {
                 Self::parse_row(
@@ -360,7 +364,15 @@ impl MssqlStructCheckFetcher {
             )
             .await?;
         if columns.is_empty() {
-            anyhow::bail!("MSSQL table {db}.{schema}.{table} was not found");
+            anyhow::bail!(DtError::DatabaseObjectNotFound(
+                DbType::Mssql,
+                format!("table {db}.{schema}.{table} was not found")
+            )
+            .object(ErrorObject {
+                schema: Some(schema.to_string()),
+                table: Some(table.to_string()),
+                ..Default::default()
+            }));
         }
 
         Ok(MssqlCheckTableInfo {
@@ -437,11 +449,9 @@ impl MssqlStructCheckFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = query
             .query(connection.client_mut())
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         rows.iter()
             .map(|row| Self::parse_row(row, columns))
             .collect()

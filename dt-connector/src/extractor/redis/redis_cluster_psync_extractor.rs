@@ -7,7 +7,7 @@ use dt_common::{
         config_enums::{DbType, ExtractType},
         connection_auth_config::ConnectionAuthConfig,
     },
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::DtError,
     log_info, log_warn,
     meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
     rdb_filter::RdbFilter,
@@ -69,7 +69,7 @@ impl Extractor for RedisClusterPsyncExtractor {
                 }
                 Err(err) => {
                     self.base_extractor.shut_down.store(true, Ordering::Release);
-                    return Err(err.code(ErrorCode::WorkerFailed));
+                    return Err(err.into());
                 }
             }
         }

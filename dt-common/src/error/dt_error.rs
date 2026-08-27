@@ -67,10 +67,16 @@ pub enum DtError {
     ReplicationCapacityExhausted(String),
 
     #[error("{0}")]
+    ResourceExhausted(String),
+
+    #[error("{0}")]
     UnsupportedTableStructure(String),
 
     #[error("{} table structure is unsupported: {1}", .0.diagnostic_name())]
     DatabaseUnsupportedTableStructure(DbType, String),
+
+    #[error("{0}")]
+    UnsupportedStatement(String),
 
     #[error("{0}")]
     ObjectNotFound(String),
@@ -82,13 +88,19 @@ pub enum DtError {
     DatabaseNotFound(DbType, String),
 
     #[error("{0}")]
-    MetadataReadFailed(String),
-
-    #[error("{0}")]
-    StatementFailed(String),
+    DatabaseOperationFailed(String),
 
     #[error("{} statement execution failed: {1}", .0.diagnostic_name())]
     DatabaseStatementFailed(DbType, String),
+
+    #[error("{0}")]
+    DatabaseOperationTimeout(String),
+
+    #[error("{0}")]
+    DatabaseOperationConflict(String),
+
+    #[error("{0}")]
+    DataDecodeFailed(String),
 
     #[error("{0}")]
     IntegrityViolation(String),
@@ -195,28 +207,31 @@ impl ClassifyError for DtError {
             DtError::UnsupportedDatabaseVersion(_, _) => ErrorCode::UnsupportedDatabaseVersion,
             DtError::CdcNotEnabled(_) => ErrorCode::CdcNotEnabled,
             DtError::ReplicationCapacityExhausted(_) => ErrorCode::ReplicationCapacityExhausted,
+            DtError::ResourceExhausted(_) => ErrorCode::ResourceExhausted,
             DtError::UnsupportedTableStructure(_)
             | DtError::DatabaseUnsupportedTableStructure(_, _) => {
                 ErrorCode::UnsupportedTableStructure
             }
+            DtError::UnsupportedStatement(_) => ErrorCode::UnsupportedStatement,
             DtError::ObjectNotFound(_)
             | DtError::DatabaseObjectNotFound(_, _)
             | DtError::DatabaseMetadataNotFound(_, _) => ErrorCode::ObjectNotFound,
             DtError::DatabaseNotFound(_, _) => ErrorCode::DatabaseNotFound,
-            DtError::MetadataReadFailed(_) => ErrorCode::MetadataReadFailed,
-            DtError::StatementFailed(_)
+            DtError::DatabaseOperationFailed(_)
             | DtError::DatabaseStatementFailed(_, _)
             | DtError::RedisRdbError(_)
             | DtError::RedisCmdError(_)
-            | DtError::RedisResultError(_) => ErrorCode::StatementFailed,
+            | DtError::RedisResultError(_) => ErrorCode::DatabaseOperationFailed,
+            DtError::DatabaseOperationTimeout(_) => ErrorCode::DatabaseOperationTimeout,
+            DtError::DatabaseOperationConflict(_) => ErrorCode::DatabaseOperationConflict,
+            DtError::DataDecodeFailed(_) => ErrorCode::DataDecodeFailed,
             DtError::IntegrityViolation(_) => ErrorCode::IntegrityViolation,
             DtError::CheckpointReadFailed(_) | DtError::DatabaseCheckpointReadFailed(_, _) => {
                 ErrorCode::CheckpointReadFailed
             }
             DtError::MySqlBinlogUnavailable(_) => ErrorCode::CheckpointReadFailed,
-            DtError::MySqlBinlogTableMapMissing(_) | DtError::MySqlBinlogDecode(_) => {
-                ErrorCode::StatementFailed
-            }
+            DtError::MySqlBinlogTableMapMissing(_) => ErrorCode::DatabaseOperationFailed,
+            DtError::MySqlBinlogDecode(_) => ErrorCode::DataDecodeFailed,
             DtError::IoFailed(_) => ErrorCode::IoFailed,
             DtError::WorkerFailed(_) => ErrorCode::WorkerFailed,
             DtError::OperationInterrupted(_) => ErrorCode::OperationInterrupted,
@@ -226,7 +241,7 @@ impl ClassifyError for DtError {
             DtError::MissingSourceClient
             | DtError::MissingDestinationClient
             | DtError::MissingTaskClient(_) => ErrorCode::InvariantViolated,
-            DtError::HttpRejected { .. } => ErrorCode::StatementFailed,
+            DtError::HttpRejected { .. } => ErrorCode::DatabaseOperationFailed,
             DtError::Unclassified(_) => ErrorCode::Unclassified,
         };
         let context = DtErrorContext::new()
@@ -294,7 +309,7 @@ mod tests {
         let context = error.classify();
         let expected_detail = error.to_string();
 
-        assert_eq!(context.code, Some(ErrorCode::StatementFailed));
+        assert_eq!(context.code, Some(ErrorCode::DatabaseOperationFailed));
         assert_eq!(context.detail.as_deref(), Some(expected_detail.as_str()));
     }
 }

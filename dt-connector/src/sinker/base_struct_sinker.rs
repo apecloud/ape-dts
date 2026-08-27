@@ -2,11 +2,8 @@ use std::cmp;
 
 use anyhow::bail;
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum,
-    error::{DtErrorContextExt, ErrorCode},
-    log_error, log_info,
-    meta::struct_meta::struct_data::StructData,
-    rdb_filter::RdbFilter,
+    config::config_enums::ConflictPolicyEnum, log_error, log_info,
+    meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
 use sqlx::{query, MySql, Pool, Postgres};
@@ -79,13 +76,13 @@ impl BaseStructSinker {
             DBConnPool::MySQL(pool) => match query(sql).execute(pool).await {
                 Ok(_) => Ok(()),
                 Err(error) => {
-                    bail! {error.code(ErrorCode::StatementFailed)}
+                    bail! {error}
                 }
             },
             DBConnPool::PostgreSQL(pool) => match query(sql).execute(pool).await {
                 Ok(_) => Ok(()),
                 Err(error) => {
-                    bail! {error.code(ErrorCode::StatementFailed)}
+                    bail! {error}
                 }
             },
         }

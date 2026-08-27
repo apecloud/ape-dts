@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use async_mutex::Mutex;
 use chrono::Local;
 use dt_common::{
@@ -177,7 +177,9 @@ impl StructCheckerHandle {
         for (key, sql) in sqls {
             let check_key = StructCheckKey::new(key.clone(), db, schema, tb);
             if sql_map.insert(check_key, sql).is_some() {
-                bail!("duplicate {side} structure key after routing: {key}");
+                bail!(DtError::InvariantViolated(format!(
+                    "duplicate {side} structure key after routing: {key}"
+                )));
             }
         }
         Ok(())
@@ -240,7 +242,7 @@ impl StructCheckerHandle {
                 let conn_pool = self
                     .conn_pool_mysql
                     .as_ref()
-                    .context("mysql connection pool not found")?
+                    .ok_or(DtError::MissingTaskClient(DbType::Mysql))?
                     .clone();
                 let meta_manager =
                     dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(
@@ -275,7 +277,7 @@ impl StructCheckerHandle {
                 let conn_pool = self
                     .conn_pool_pg
                     .as_ref()
-                    .context("postgres connection pool not found")?
+                    .ok_or(DtError::MissingTaskClient(DbType::Pg))?
                     .clone();
                 let mut fetcher = PgStructFetcher {
                     conn_pool,
@@ -334,7 +336,7 @@ impl StructCheckerHandle {
                 let connection_pool = self
                     .conn_pool_mssql
                     .as_ref()
-                    .context("MSSQL connection pool not found")?
+                    .ok_or(DtError::MissingTaskClient(DbType::Mssql))?
                     .clone();
                 let mut databases = namespaces.iter().cloned().collect::<Vec<_>>();
                 databases.sort();

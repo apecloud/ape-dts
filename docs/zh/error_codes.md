@@ -39,7 +39,7 @@ ERROR REPORT
 | `CF002` | `InvalidConfig` | 配置无效 |
 | `CF003` | `MissingConfigItem` | 缺少必要的配置项 |
 | `CN001` | `ConnectionFailed` | 无法建立端点连接，或者连接已经中断 |
-| `CN002` | `ConnectionTimeout` | 获取连接池连接超时 |
+| `CN002` | `ConnectionTimeout` | 建立连接或获取连接池连接超时 |
 | `CN003` | `TlsFailed` | 无法建立安全的数据库连接 |
 | `AU001` | `AuthenticationFailed` | 凭据被端点拒绝 |
 | `AU002` | `PermissionDenied` | 已认证账号缺少必要权限 |
@@ -48,10 +48,14 @@ ERROR REPORT
 | `PR003` | `CdcNotEnabled` | 源数据库未启用 CDC 所需配置 |
 | `PR004` | `ReplicationCapacityExhausted` | 没有可用的复制 slot 或 sender 容量 |
 | `PR005` | `UnsupportedTableStructure` | 表结构不受支持 |
+| `PR006` | `UnsupportedStatement` | 源端语句不受支持 |
+| `RS001` | `ResourceExhausted` | 源端或目标端达到资源限制 |
 | `MD001` | `ObjectNotFound` | 必要的表、topic 或其他端点对象不存在 |
 | `MD002` | `DatabaseNotFound` | 数据库不存在 |
-| `MD099` | `MetadataReadFailed` | 无法读取迁移所需的数据库系统信息 |
-| `DB001` | `StatementFailed` | 源端或目标端操作失败 |
+| `DB001` | `DatabaseOperationFailed` | 数据库操作失败 |
+| `DB002` | `DatabaseOperationTimeout` | 数据库操作超时 |
+| `DB003` | `DatabaseOperationConflict` | 数据库操作与并发操作或已有数据库状态冲突 |
+| `DT001` | `DataDecodeFailed` | 无法解码迁移数据 |
 | `IC001` | `IntegrityViolation` | 数据违反约束 |
 | `ST001` | `CheckpointReadFailed` | 无法读取 checkpoint 状态 |
 | `IO001` | `IoFailed` | I/O 操作失败 |
@@ -96,7 +100,7 @@ token 和私钥进行脱敏，之后这些内容才能进入用户视图。
 
 ```text
 ERROR REPORT
-  [DB001]: A source or destination operation failed
+  [DB001]: A database operation failed
   AFFECTED OBJECT: schema=public, table=orders, constraint=orders_pkey
   CAUSED BY:
     0: starting task
@@ -166,9 +170,10 @@ provider 原始错误码、类型化错误种类和 Rust 错误变体进行判�
 `DtErrorContext`。父级 `dt-common::error::classifier` 中的小型 chain registry 对 source
 chain 中保留的 provider cause 调用同一 trait。SQLx 分类器从具体 database error 推断
 MySQL 或 PostgreSQL。调用点不再传数据库类型，也不再额外挂 provider frame。已识别的
-provider condition 决定最终错误身份；显式操作 code 仅在 provider error 无法分类时兜底。
-provider 名称、原始码和具体错误文本进入 `details`。stage、endpoint 和 task ID 在仍明确
-知道其语义的执行位置单独挂载。
+provider condition 决定最终错误身份。所有已支持的 provider 分类器都将无法识别的 driver
+错误直接归为 `DB001`；项目主动产生的语义使用类型化 `DtError`。provider 名称、原始码和
+具体错误文本进入 `details`。stage、endpoint 和 task ID 在仍明确知道其语义的执行位置
+单独挂载。
 
 Provider 分类统一位于 `dt-common::error::provider`，不再放入各 crate 的 wrapper。
 业务模块使用 `DtError` 表达项目主动失败，使用普通 `anyhow::Context` 添加诊断文字，只在
@@ -179,13 +184,13 @@ Provider 分类统一位于 `dt-common::error::provider`，不再放入各 crate
 `anyhow::Error::downcast_ref` 识别 typed `DtError`，再遍历 source chain 分类具体 cause。
 classifier 直接提供 provider detail；未分类的非 marker error 使用自身脱敏后的
 `Display` 进入 `details`。`ErrorReport` 只按顺序应用返回的 `DtErrorContext`，没有任何
-code 时使用 `IN999`。失败路径测试和代码评审仍需覆盖 raw provider 无法提供的显式操作
-code 及调用点 metadata。
+code 时使用 `IN999`。失败路径测试和代码评审仍需覆盖 raw provider 无法提供的语义化项目
+错误及调用点 metadata。
 
-`MD099 MetadataReadFailed` 只作为读取或解析端点 catalog、控制面元数据失败时的
-默认码。Schema/结构本身是迁移对象，并不代表所有结构错误都是元数据读取错误。对象
-不存在使用 `MD001`/`MD002`，结构不受支持使用 `PR005`，版本或拓扑前置条件不满足
-使用 `PR001`/`PR002`，目标端拒绝 DDL 使用 `DB001`。
+读取端点 catalog 或控制面元数据失败时保留类型化 provider error，由 provider 分类器
+决定错误码。对象不存在使用 `MD001`/`MD002`，结构不受支持使用 `PR005`，Ape-DTS
+解析器不支持源端语句使用 `PR006`，版本或拓扑前置条件不满足使用 `PR001`/`PR002`，
+目标端拒绝 DDL 使用 `DB001`。源端 payload 或持久化迁移记录格式无效时使用 `DT001`。
 
 错误分类必须依据用户能够检查或修改什么，而不是依据发现错误的内部模块或数据结构。
 找不到 schema、table 或 column 时使用 `MD001`，并填写受影响对象；CDC row event 缺少
@@ -203,53 +208,72 @@ origin 字段。错误码同时用于以下首批 SQLx 分类映射：
 
 | Provider 错误 | Ape-DTS 错误码 |
 |---|---|
-| PostgreSQL `42P01`/`42703`/`42704`，MySQL `1054`/`1146` | `MD001` |
-| PostgreSQL `3D000`，MySQL `1049` | `MD002` |
-| PostgreSQL SQLSTATE 类别 `28`，MySQL `1045` | `AU001` |
-| PostgreSQL `42501`，MySQL `1044`/`1142`/`1143`/`1227`/`1370` | `AU002` |
-| PostgreSQL SQLSTATE 类别 `08` | `CN001` |
-| PostgreSQL SQLSTATE 类别 `23` | `IC001` |
-| MySQL `2002`/`2003`/`2006`/`2013` | `CN001` |
+| PostgreSQL 缺少 schema/table/column/object/function；MySQL 缺少 table/column/object/routine | `MD001` |
+| PostgreSQL `3D000`/`57P04`，MySQL `1049` | `MD002` |
+| PostgreSQL SQLSTATE 类别 `28`；MySQL 账号拒绝、锁定或访问被拒绝 | `AU001` |
+| PostgreSQL `42501`；MySQL 命令、对象或管理权限错误 | `AU002` |
+| PostgreSQL SQLSTATE 类别 `08` 和 shutdown；MySQL client/server 连接错误 | `CN001` |
+| PostgreSQL SQLSTATE 类别 `23`/`40002`；SQLx 完整性错误种类 | `IC001` |
+| PostgreSQL 序列化、死锁和锁冲突；MySQL 锁等待超时、死锁和 NOWAIT 冲突 | `DB003` |
+| PostgreSQL query canceled；MySQL query interrupted | `RT002` |
+| MySQL 语句执行时间超过上限 | `DB002` |
+| PostgreSQL 资源/程序限制；MySQL 磁盘、内存、表、连接或配额限制 | `RS001` |
+| PostgreSQL 不支持的功能类别；MySQL 不支持或未启用的功能 | `PR001` |
 | SQLx 连接配置错误 | `CF002` |
 | SQLx I/O、协议错误或连接池已关闭 | `CN001` |
 | SQLx 连接池超时 | `CN002` |
 | SQLx TLS 错误 | `CN003` |
+| SQLx 数据库类型不存在 | `MD001` |
+| SQLx 行或字段值解码错误 | `DT001` |
 | SQLx worker 崩溃 | `RT001` |
-| SQLx 完整性错误种类 | `IC001` |
 
-SQLx 调用点可以显式提供与操作相关的兜底错误码，例如 `DB001` 或 `ST001`。已识别的
-provider 分类决定报告错误码；仅当 provider error 无法分类时才使用显式 code。Provider
-原始码、constraint/table 元数据和源错误链信息仍保留在 detail 和 object 中。
+无法识别的 SQLx database 和 client variant 归为 `DB001`。Provider 原始码、
+constraint/table 元数据和源错误链信息仍保留在 detail 和 object 中。
 
-`tokio-postgres` 复制适配器使用相同的 PostgreSQL SQLSTATE 规则。URL 解析错误使用
-`CF002`，连接建立失败使用 `CN001`，复制命令被拒绝时使用该操作显式设置的错误码。
+`tokio-postgres` 复制适配器使用相同的 PostgreSQL SQLSTATE 规则，并且在不解析错误消息的
+前提下识别连接关闭、嵌套 I/O 超时和嵌套 OpenSSL 错误。
 
 其他首批 provider 映射如下：
 
 | Provider 错误 | Ape-DTS 错误码 |
 |---|---|
 | Redis 认证错误 / `NOAUTH` / `WRONGPASS` | `AU001` |
-| Redis `NOPERM` / `READONLY` | `AU002` |
+| Redis `NOPERM` | `AU002` |
+| Redis `READONLY` | `PR001` |
 | Redis 客户端配置无效 | `CF002` |
 | Redis 超时 | `CN002` |
 | Redis I/O、cluster down、master down 或缺少集群连接 | `CN001` |
-| MongoDB 认证错误或命令错误码 `18` | `AU001` |
+| Redis script 或 Sentinel master 不存在 | `MD001` |
+| Redis 不支持 RESP3 | `PR001` |
+| MongoDB 认证或重新认证错误 | `AU001` |
 | MongoDB 命令错误码 `13` | `AU002` |
-| MongoDB 命令错误码 `26` | `MD001` |
-| MongoDB 重复键错误码 `11000`/`11001`/`12582` | `IC001` |
-| MongoDB 客户端选项无效 / TLS 配置无效 | 调用点显式 code `CF002` / `CN003` |
-| MongoDB DNS、I/O、连接池清空、server selection 或 shutdown | `CN001`；I/O 超时为 `CN002` |
+| MongoDB namespace/index 或 GridFS file/chunk/revision 不存在 | `MD001` |
+| MongoDB 重复键或文档校验错误 | `IC001` |
+| MongoDB max-time 错误 / 写冲突 | `DB002` / `DB003` |
+| MongoDB 缺少 resume token / 不支持 session 或 server capability | `ST001` / `PR001` |
+| MongoDB 客户端选项无效 / TLS 配置无效 | `CF002` / `CN003` |
+| MongoDB DNS、I/O、响应无效、连接池清空、server selection 或 shutdown | `CN001`；I/O 超时为 `CN002` |
+| MongoDB `SystemOverloadedError` label | `RS001` |
 | Kafka 认证 / 授权错误 | `AU001` / `AU002` |
-| Kafka topic 或 partition 不存在 | `MD001` |
-| Kafka 超时 / broker 传输失败 | `CN002` / `CN001` |
-| HTTP 请求超时 / 连接失败 | `CN002` / `CN001` |
-| HTTP 非成功响应或响应体无效 | `DB001` |
+| Kafka topic、partition、group、resource 或 log directory 不存在 | `MD001` |
+| Kafka 连接超时 / 操作超时 / broker 传输失败 | `CN002` / `DB002` / `CN001` |
+| Kafka offset 不可用 / 操作冲突 / 资源限制 | `ST001` / `DB003` / `RS001` |
+| Kafka 文件系统或 broker log storage 错误 | `IO001` |
+| Kafka capability 不支持 / 操作中断 | `PR001` / `RT002` |
+| SQL Server 认证 / 权限 / 对象或数据库不存在 | `AU001` / `AU002` / `MD001` / `MD002` |
+| SQL Server 约束 / 并发冲突 / 资源限制 | `IC001` / `DB003` / `RS001` |
+| SQL Server 字段编码、转换或解析失败 | `DT001` |
+| SQL Server 传输、连接池超时或 TLS 错误 | `CN001` / `CN002` / `CN003` |
+| HTTP 连接超时 / 已建立连接上的请求超时 / 连接失败 | `CN002` / `DB002` / `CN001` |
+| HTTP `401`/`403`/`404`/`409`/`429` | `AU001`/`AU002`/`MD001`/`DB003`/`RS001` |
+| HTTP 响应 decode 错误 | `DT001` |
+| 其他 HTTP 状态、redirect 或 body 错误 | `IN999` |
 | MySQL binlog I/O 超时 / 其他传输失败 | `CN002` / `CN001` |
-| MySQL binlog GTID 无效 | `CF002` |
+| MySQL binlog URL 或 GTID 无效 / column type 不支持 | `CF002` / `PR005` |
 | MySQL binlog 错误 `1236`（请求的 binlog 已不可用） | `ST001` |
-| 其他 MySQL binlog 解码失败 | `DB001` |
+| 其他 MySQL binlog 解码失败 | `DT001` |
 
-Worker join 失败使用 `RT001`。由调用者显式分类的 URL 解析错误使用 `CF002`。Logger YAML
+Worker join 失败使用 `RT001`。Provider URL 解析 variant 使用 `CF002`。Logger YAML
 错误发生在启动期，由 `dt-main` 的 `expect` 边界直接输出；
 `DtError::Unclassified` 使用 `IN999`；不受支持或无法识别的原始错误只有在报告没有其他
 错误码时才补充 `IN999`。本地文件系统 `std::io::Error` 使用 `IO001`；网络 I/O 应保留

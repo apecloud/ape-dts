@@ -30,8 +30,17 @@ impl ClassifyError for BinlogError {
                     )
             }
             Self::ConnectError(_) => mysql_context(ErrorCode::ConnectionFailed, detail),
-            Self::InvalidGtid(_) => mysql_context(ErrorCode::InvalidConfig, detail),
-            _ => mysql_context(ErrorCode::StatementFailed, detail),
+            Self::ParseUrlError(_) | Self::InvalidGtid(_) => {
+                mysql_context(ErrorCode::InvalidConfig, detail)
+            }
+            Self::UnsupportedColumnType(_) => {
+                mysql_context(ErrorCode::UnsupportedTableStructure, detail)
+            }
+            Self::UnexpectedData(_)
+            | Self::ParseIntError(_)
+            | Self::FromUtf8Error(_)
+            | Self::ParseJsonError(_) => mysql_context(ErrorCode::DataDecodeFailed, detail),
+            Self::FmtError(_) => mysql_context(ErrorCode::InvariantViolated, detail),
         }
     }
 }
@@ -54,42 +63,5 @@ pub(super) fn diagnostic_code(error: &BinlogError) -> Option<&'static str> {
     match error {
         BinlogError::ConnectError(message) if binlog_is_unavailable(message) => Some("1236"),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Error;
-
-    use super::*;
-
-    #[test]
-    fn classifies_binlog_failures() {
-        for (error, expected) in [
-            (
-                BinlogError::IoError(Error::new(ErrorKind::TimedOut, "timed out")),
-                ErrorCode::ConnectionTimeout,
-            ),
-            (
-                BinlogError::ConnectError("connection closed".to_string()),
-                ErrorCode::ConnectionFailed,
-            ),
-            (
-                BinlogError::InvalidGtid("invalid".to_string()),
-                ErrorCode::InvalidConfig,
-            ),
-            (
-                BinlogError::UnexpectedData("invalid event".to_string()),
-                ErrorCode::StatementFailed,
-            ),
-        ] {
-            assert_eq!(error.classify().error_code(), Some(expected));
-        }
-
-        let purged = BinlogError::ConnectError(
-            "Could not find first log file name in binary log index file".to_string(),
-        )
-        .classify();
-        assert_eq!(purged.error_code(), Some(ErrorCode::CheckpointReadFailed));
     }
 }

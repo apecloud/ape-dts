@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::bail;
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtResultExt, ErrorCode},
+    error::DtError,
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         mssql::mssql_connection_pool::MssqlConnectionPool,
@@ -412,25 +412,22 @@ impl MssqlStructFetcher {
         let mut connection = self.connection_pool.get().await?;
         let rows = query
             .query(connection.client_mut())
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         let Some(row) = rows.first() else {
             if self.allow_missing_database {
                 return Ok(None);
             }
-            bail!(DtError::DatabaseObjectNotFound(
+            bail!(DtError::DatabaseNotFound(
                 DbType::Mssql,
-                format!("database: {} not found", self.db),
+                format!("database {} was not found", self.db),
             ));
         };
 
         let database_name = Self::required_string(row, "database_name")?;
         let collation_name =
-            MssqlColValueConvertor::from_query_optional_string(row, "collation_name")
-                .code(ErrorCode::MetadataReadFailed)?
+            MssqlColValueConvertor::from_query_optional_string(row, "collation_name")?
                 .unwrap_or_default();
         Ok(Some((database_name, collation_name)))
     }
@@ -444,11 +441,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(DATABASE_COMMENT_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         for row in rows {
             statement.comments.push(MssqlComment::Database {
                 comment: Self::required_string(&row, "comment")?,
@@ -467,11 +462,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&sql, &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         let mut statements = BTreeMap::new();
         for row in rows {
@@ -479,11 +472,9 @@ impl MssqlStructFetcher {
             if !requested_schema.is_empty() && requested_schema != schema {
                 continue;
             }
-            let table = MssqlColValueConvertor::from_query_optional_string(&row, "table_name")
-                .code(ErrorCode::MetadataReadFailed)?;
+            let table = MssqlColValueConvertor::from_query_optional_string(&row, "table_name")?;
             let has_sequence =
-                MssqlColValueConvertor::from_query_required_bool(&row, "has_sequence")
-                    .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_bool(&row, "has_sequence")?;
             if !has_sequence
                 && table
                     .as_ref()
@@ -513,11 +504,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(SEQUENCES_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         for row in rows {
             let schema_name = Self::required_string(&row, "schema_name")?;
@@ -526,20 +515,21 @@ impl MssqlStructFetcher {
             }
             let type_name = Self::required_string(&row, "type_name")?;
             let precision =
-                MssqlColValueConvertor::from_query_required_i64(&row, "numeric_precision")
-                    .code(ErrorCode::MetadataReadFailed)?;
-            let scale = MssqlColValueConvertor::from_query_required_i64(&row, "numeric_scale")
-                .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_i64(&row, "numeric_precision")?;
+            let scale = MssqlColValueConvertor::from_query_required_i64(&row, "numeric_scale")?;
             let sequence_name = Self::required_string(&row, "sequence_name")?;
-            let cache_size = MssqlColValueConvertor::from_query_optional_string(&row, "cache_size")
-                .code(ErrorCode::MetadataReadFailed)?
-                .map(|value| value.parse::<u64>())
-                .transpose()
-                .map_err(|_| {
-                    DtError::UnsupportedTableStructure(format!(
-                        "MSSQL sequence {schema_name}.{sequence_name} has an invalid cache size"
-                    ))
-                })?;
+            let cache_size =
+                MssqlColValueConvertor::from_query_optional_string(&row, "cache_size")?
+                    .map(|value| value.parse::<u64>())
+                    .transpose()
+                    .map_err(|_| {
+                        DtError::DatabaseUnsupportedTableStructure(
+                            DbType::Mssql,
+                            format!(
+                                "sequence {schema_name}.{sequence_name} has an invalid cache size"
+                            ),
+                        )
+                    })?;
             let sequence = MssqlSequence {
                 sequence_name,
                 data_type: Self::format_sequence_type(&type_name, precision, scale),
@@ -547,10 +537,8 @@ impl MssqlStructFetcher {
                 increment: Self::required_string(&row, "increment")?,
                 minimum_value: Self::required_string(&row, "minimum_value")?,
                 maximum_value: Self::required_string(&row, "maximum_value")?,
-                is_cycling: MssqlColValueConvertor::from_query_required_bool(&row, "is_cycling")
-                    .code(ErrorCode::MetadataReadFailed)?,
-                is_cached: MssqlColValueConvertor::from_query_required_bool(&row, "is_cached")
-                    .code(ErrorCode::MetadataReadFailed)?,
+                is_cycling: MssqlColValueConvertor::from_query_required_bool(&row, "is_cycling")?,
+                is_cached: MssqlColValueConvertor::from_query_required_bool(&row, "is_cached")?,
                 cache_size,
                 comments: Vec::new(),
             };
@@ -571,11 +559,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(SCHEMA_COMMENTS_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
@@ -621,19 +607,16 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(TABLE_COLUMNS_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         let mut results = BTreeMap::new();
         for row in rows {
             let schema_name =
-                MssqlColValueConvertor::from_query_required_string(&row, "schema_name")
-                    .code(ErrorCode::MetadataReadFailed)?;
-            let table_name = MssqlColValueConvertor::from_query_required_string(&row, "table_name")
-                .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_string(&row, "schema_name")?;
+            let table_name =
+                MssqlColValueConvertor::from_query_required_string(&row, "table_name")?;
             if !self.include_table(
                 db,
                 &schema_name,
@@ -645,40 +628,30 @@ impl MssqlStructFetcher {
             }
 
             let column_name =
-                MssqlColValueConvertor::from_query_required_string(&row, "column_name")
-                    .code(ErrorCode::MetadataReadFailed)?;
-            let type_name = MssqlColValueConvertor::from_query_required_string(&row, "type_name")
-                .code(ErrorCode::MetadataReadFailed)?;
-            let max_length = MssqlColValueConvertor::from_query_required_i64(&row, "max_length")
-                .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_string(&row, "column_name")?;
+            let type_name = MssqlColValueConvertor::from_query_required_string(&row, "type_name")?;
+            let max_length = MssqlColValueConvertor::from_query_required_i64(&row, "max_length")?;
             let precision =
-                MssqlColValueConvertor::from_query_required_i64(&row, "numeric_precision")
-                    .code(ErrorCode::MetadataReadFailed)?;
-            let scale = MssqlColValueConvertor::from_query_required_i64(&row, "numeric_scale")
-                .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_i64(&row, "numeric_precision")?;
+            let scale = MssqlColValueConvertor::from_query_required_i64(&row, "numeric_scale")?;
             let computed_definition =
-                MssqlColValueConvertor::from_query_optional_string(&row, "computed_definition")
-                    .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_optional_string(&row, "computed_definition")?;
             let is_memory_optimized =
-                MssqlColValueConvertor::from_query_required_bool(&row, "is_memory_optimized")
-                    .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_memory_optimized")?;
             let durability_desc = Self::required_string(&row, "durability_desc")?;
             let identity = if let Some(seed_value) =
-                MssqlColValueConvertor::from_query_optional_string(&row, "identity_seed")
-                    .code(ErrorCode::MetadataReadFailed)?
+                MssqlColValueConvertor::from_query_optional_string(&row, "identity_seed")?
             {
                 Some(MssqlIdentity {
                     seed_value,
                     increment_value: MssqlColValueConvertor::from_query_required_string(
                         &row,
                         "identity_increment",
-                    )
-                    .code(ErrorCode::MetadataReadFailed)?,
+                    )?,
                     is_not_for_replication: MssqlColValueConvertor::from_query_required_bool(
                         &row,
                         "identity_not_for_replication",
-                    )
-                    .code(ErrorCode::MetadataReadFailed)?,
+                    )?,
                 })
             } else {
                 None
@@ -689,8 +662,7 @@ impl MssqlStructFetcher {
                     is_persisted: MssqlColValueConvertor::from_query_required_bool(
                         &row,
                         "computed_persisted",
-                    )
-                    .code(ErrorCode::MetadataReadFailed)?,
+                    )?,
                 }
             } else {
                 MssqlColumnDefinition::Regular {
@@ -698,14 +670,12 @@ impl MssqlStructFetcher {
                     collation_name: MssqlColValueConvertor::from_query_optional_string(
                         &row,
                         "collation_name",
-                    )
-                    .code(ErrorCode::MetadataReadFailed)?
+                    )?
                     .unwrap_or_default(),
                     is_nullable: MssqlColValueConvertor::from_query_required_bool(
                         &row,
                         "is_nullable",
-                    )
-                    .code(ErrorCode::MetadataReadFailed)?,
+                    )?,
                     identity,
                 }
             };
@@ -728,10 +698,10 @@ impl MssqlStructFetcher {
 
             statement.table.columns.push(MssqlColumn {
                 column_name,
-                ordinal_position: u32::try_from(
-                    MssqlColValueConvertor::from_query_required_i64(&row, "ordinal_position")
-                        .code(ErrorCode::MetadataReadFailed)?,
-                )?,
+                ordinal_position: u32::try_from(MssqlColValueConvertor::from_query_required_i64(
+                    &row,
+                    "ordinal_position",
+                )?)?,
                 definition: column_definition,
             });
         }
@@ -749,11 +719,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(DEFAULT_CONSTRAINTS_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
@@ -786,11 +754,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(KEY_CONSTRAINTS_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         let mut grouped: BTreeMap<(String, String, String), KeyConstraintDetails> = BTreeMap::new();
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
@@ -805,11 +771,9 @@ impl MssqlStructFetcher {
                 .entry((schema, table, name))
                 .or_insert_with(|| (constraint_type, index_type, Vec::new()));
             entry.2.push((
-                MssqlColValueConvertor::from_query_required_i64(&row, "key_ordinal")
-                    .code(ErrorCode::MetadataReadFailed)?,
+                MssqlColValueConvertor::from_query_required_i64(&row, "key_ordinal")?,
                 Self::required_string(&row, "column_name")?,
-                MssqlColValueConvertor::from_query_required_bool(&row, "is_descending_key")
-                    .code(ErrorCode::MetadataReadFailed)?,
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_descending_key")?,
             ));
         }
 
@@ -819,9 +783,10 @@ impl MssqlStructFetcher {
                 "PRIMARY KEY" => MssqlKeyConstraintType::PrimaryKey,
                 "UNIQUE" => MssqlKeyConstraintType::Unique,
                 _ => {
-                    return Err(DtError::UnsupportedTableStructure(format!(
-                        "MSSQL constraint {name} uses unsupported type {constraint_type}"
-                    ))
+                    return Err(DtError::DatabaseUnsupportedTableStructure(
+                        DbType::Mssql,
+                        format!("constraint {name} uses unsupported type {constraint_type}"),
+                    )
                     .into())
                 }
             };
@@ -859,11 +824,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(CHECK_CONSTRAINTS_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
@@ -876,8 +839,7 @@ impl MssqlStructFetcher {
                 let not_for_replication = MssqlColValueConvertor::from_query_required_bool(
                     &row,
                     "is_not_for_replication",
-                )
-                .code(ErrorCode::MetadataReadFailed)?;
+                )?;
                 statement.table.constraints.push(MssqlConstraint {
                     constraint_name: Self::required_string(&row, "constraint_name")?,
                     kind: MssqlConstraintKind::Check {
@@ -886,13 +848,11 @@ impl MssqlStructFetcher {
                         is_disabled: MssqlColValueConvertor::from_query_required_bool(
                             &row,
                             "is_disabled",
-                        )
-                        .code(ErrorCode::MetadataReadFailed)?,
+                        )?,
                         is_not_trusted: MssqlColValueConvertor::from_query_required_bool(
                             &row,
                             "is_not_trusted",
-                        )
-                        .code(ErrorCode::MetadataReadFailed)?,
+                        )?,
                     },
                 });
             }
@@ -911,11 +871,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(INDEXES_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         let mut grouped: BTreeMap<(String, String, String), IndexDetails> = BTreeMap::new();
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
@@ -924,29 +882,23 @@ impl MssqlStructFetcher {
                 continue;
             }
             let name = Self::required_string(&row, "index_name")?;
-            let index_id = u32::try_from(
-                MssqlColValueConvertor::from_query_required_i64(&row, "index_id")
-                    .code(ErrorCode::MetadataReadFailed)?,
-            )?;
-            let index_type = MssqlColValueConvertor::from_query_required_u8(&row, "index_type")
-                .code(ErrorCode::MetadataReadFailed)?;
+            let index_id = u32::try_from(MssqlColValueConvertor::from_query_required_i64(
+                &row, "index_id",
+            )?)?;
+            let index_type = MssqlColValueConvertor::from_query_required_u8(&row, "index_type")?;
             let index_type_desc = Self::required_string(&row, "index_type_desc")?;
-            let unique = MssqlColValueConvertor::from_query_required_bool(&row, "is_unique")
-                .code(ErrorCode::MetadataReadFailed)?;
-            let disabled = MssqlColValueConvertor::from_query_required_bool(&row, "is_disabled")
-                .code(ErrorCode::MetadataReadFailed)?;
+            let unique = MssqlColValueConvertor::from_query_required_bool(&row, "is_unique")?;
+            let disabled = MssqlColValueConvertor::from_query_required_bool(&row, "is_disabled")?;
             let filter =
-                MssqlColValueConvertor::from_query_optional_string(&row, "filter_definition")
-                    .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_optional_string(&row, "filter_definition")?;
             let xml_primary_index_name =
-                MssqlColValueConvertor::from_query_optional_string(&row, "xml_primary_index_name")
-                    .code(ErrorCode::MetadataReadFailed)?;
-            let xml_secondary_type_desc =
-                MssqlColValueConvertor::from_query_optional_string(&row, "xml_secondary_type_desc")
-                    .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_optional_string(&row, "xml_primary_index_name")?;
+            let xml_secondary_type_desc = MssqlColValueConvertor::from_query_optional_string(
+                &row,
+                "xml_secondary_type_desc",
+            )?;
             let hash_bucket_count =
-                MssqlColValueConvertor::from_query_optional_string(&row, "hash_bucket_count")
-                    .code(ErrorCode::MetadataReadFailed)?
+                MssqlColValueConvertor::from_query_optional_string(&row, "hash_bucket_count")?
                     .map(|value| value.parse::<u64>())
                     .transpose()?;
             let entry = grouped.entry((schema, table, name)).or_insert_with(|| {
@@ -965,24 +917,22 @@ impl MssqlStructFetcher {
             });
             entry.9.push(MssqlIndexColumn {
                 column_name: Self::required_string(&row, "column_name")?,
-                index_column_id: u32::try_from(
-                    MssqlColValueConvertor::from_query_required_i64(&row, "index_column_id")
-                        .code(ErrorCode::MetadataReadFailed)?,
-                )?,
-                key_ordinal: u32::try_from(
-                    MssqlColValueConvertor::from_query_required_i64(&row, "key_ordinal")
-                        .code(ErrorCode::MetadataReadFailed)?,
-                )?,
+                index_column_id: u32::try_from(MssqlColValueConvertor::from_query_required_i64(
+                    &row,
+                    "index_column_id",
+                )?)?,
+                key_ordinal: u32::try_from(MssqlColValueConvertor::from_query_required_i64(
+                    &row,
+                    "key_ordinal",
+                )?)?,
                 is_descending_key: MssqlColValueConvertor::from_query_required_bool(
                     &row,
                     "is_descending_key",
-                )
-                .code(ErrorCode::MetadataReadFailed)?,
+                )?,
                 is_included_column: MssqlColValueConvertor::from_query_required_bool(
                     &row,
                     "is_included_column",
-                )
-                .code(ErrorCode::MetadataReadFailed)?,
+                )?,
             });
         }
 
@@ -1035,11 +985,9 @@ impl MssqlStructFetcher {
         let rows = connection
             .client_mut()
             .query(&Self::catalog_sql(TABLE_COMMENTS_SQL, db), &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
@@ -1051,8 +999,7 @@ impl MssqlStructFetcher {
             {
                 let comment_type = Self::required_string(&row, "comment_type")?;
                 let object_name =
-                    MssqlColValueConvertor::from_query_optional_string(&row, "object_name")
-                        .code(ErrorCode::MetadataReadFailed)?
+                    MssqlColValueConvertor::from_query_optional_string(&row, "object_name")?
                         .unwrap_or_default();
                 let comment = Self::required_string(&row, "comment")?;
                 statement.table.comments.push(match comment_type.as_str() {
@@ -1108,7 +1055,6 @@ impl MssqlStructFetcher {
 
     fn required_string(row: &tiberius::Row, column: &str) -> anyhow::Result<String> {
         MssqlColValueConvertor::from_query_required_string(row, column)
-            .code(ErrorCode::MetadataReadFailed)
     }
 
     fn format_sequence_type(type_name: &str, precision: i64, scale: i64) -> String {

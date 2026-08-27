@@ -4,7 +4,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
-    error::{DtResultExt, ErrorCode},
     log_error, log_info,
     meta::{
         mongo::mongo_shard::{list_shard_collections, MongoShardCollection},
@@ -125,10 +124,7 @@ impl MongoStructSinker {
             statement.database_name,
             statement.collection_name
         );
-        database
-            .run_command(command)
-            .await
-            .code(ErrorCode::StatementFailed)?;
+        database.run_command(command).await?;
         log_info!("mongo create collection succeed");
         Ok(())
     }
@@ -153,8 +149,7 @@ impl MongoStructSinker {
         self.mongo_client
             .database(&statement.database_name)
             .run_command(command)
-            .await
-            .code(ErrorCode::StatementFailed)?;
+            .await?;
         log_info!("mongo create indexes succeed");
         Ok(())
     }
@@ -194,8 +189,7 @@ impl MongoStructSinker {
         self.mongo_client
             .database("admin")
             .run_command(doc! { "enableSharding": db })
-            .await
-            .code(ErrorCode::StatementFailed)?;
+            .await?;
 
         let command = doc! {
             "shardCollection": shard_collection.ns.clone(),
@@ -206,8 +200,7 @@ impl MongoStructSinker {
         self.mongo_client
             .database("admin")
             .run_command(command)
-            .await
-            .code(ErrorCode::StatementFailed)?;
+            .await?;
         log_info!("mongo shard collection succeed");
         Ok(())
     }

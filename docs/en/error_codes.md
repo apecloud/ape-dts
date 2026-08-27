@@ -44,7 +44,7 @@ matches.
 | `CF002` | `InvalidConfig` | Configuration is invalid |
 | `CF003` | `MissingConfigItem` | A required configuration item is missing |
 | `CN001` | `ConnectionFailed` | An endpoint connection could not be established or was lost |
-| `CN002` | `ConnectionTimeout` | Connection-pool acquisition timed out |
+| `CN002` | `ConnectionTimeout` | Connecting or acquiring a pooled connection timed out |
 | `CN003` | `TlsFailed` | A secure database connection could not be established |
 | `AU001` | `AuthenticationFailed` | Credentials were rejected |
 | `AU002` | `PermissionDenied` | The authenticated account lacks permission |
@@ -53,10 +53,14 @@ matches.
 | `PR003` | `CdcNotEnabled` | The source database is not configured for CDC |
 | `PR004` | `ReplicationCapacityExhausted` | No replication slot or sender capacity is available |
 | `PR005` | `UnsupportedTableStructure` | A table structure is unsupported |
+| `PR006` | `UnsupportedStatement` | A source statement is unsupported |
+| `RS001` | `ResourceExhausted` | A source or destination resource limit was reached |
 | `MD001` | `ObjectNotFound` | A required table, topic, or other endpoint object does not exist |
 | `MD002` | `DatabaseNotFound` | A database does not exist |
-| `MD099` | `MetadataReadFailed` | Database information required by the migration could not be read |
-| `DB001` | `StatementFailed` | A source or destination operation failed |
+| `DB001` | `DatabaseOperationFailed` | A database operation failed |
+| `DB002` | `DatabaseOperationTimeout` | A database operation timed out |
+| `DB003` | `DatabaseOperationConflict` | A database operation conflicts with concurrent or existing database state |
+| `DT001` | `DataDecodeFailed` | Migration data could not be decoded |
 | `IC001` | `IntegrityViolation` | A constraint was violated |
 | `ST001` | `CheckpointReadFailed` | Checkpoint state could not be read |
 | `IO001` | `IoFailed` | An I/O operation failed |
@@ -109,7 +113,7 @@ under `CAUSED BY`, and an optional backtrace:
 
 ```text
 ERROR REPORT
-  [DB001]: A source or destination operation failed
+  [DB001]: A database operation failed
   AFFECTED OBJECT: schema=public, table=orders, constraint=orders_pkey
   CAUSED BY:
     0: starting task
@@ -205,11 +209,11 @@ the parent-level `dt-common::error::classifier` applies the same trait to
 supported provider causes preserved in the source chain.
 The SQLx classifier infers MySQL or PostgreSQL from the concrete database error.
 Call sites do not pass a database-family hint or attach a separate provider
-frame. A recognized provider condition owns the identity; an explicit
-operation code is used only as a fallback for an unclassified provider error.
-Provider name, original code, and concrete error text are stored in `details`.
-Stage, endpoint, and task ID are attached separately at the execution layer
-that knows them.
+frame. A recognized provider condition owns the identity. Every supported
+provider classifier maps an unrecognized driver error directly to `DB001`;
+project-owned semantics use a typed `DtError`. Provider name, original code,
+and concrete error text are stored in `details`. Stage, endpoint, and task ID
+are attached separately at the execution layer that knows them.
 
 Provider classification belongs in `dt-common::error::provider`, not in
 per-crate wrappers. Business modules use `DtError` for project-owned failures,
@@ -223,14 +227,15 @@ chain to classify concrete causes. A classifier supplies provider detail
 directly; an unclassified non-marker error uses its redacted `Display` as
 detail. `ErrorReport` only applies the returned `DtErrorContext` values in
 order. `IN999` is used when no code is available. Failure-path tests and code
-review remain necessary for explicit operation codes and call-site metadata
-that no raw provider error can supply.
+review remain necessary for project-owned semantic errors and call-site
+metadata that no raw provider error can supply.
 
-`MD099 MetadataReadFailed` is only the default for reading or decoding endpoint
-catalog and control metadata. A schema object being migrated does not make every
-structure error a metadata-read failure. Missing objects use `MD001`/`MD002`,
-unsupported structures use `PR005`, unmet version or topology requirements use
-`PR001`/`PR002`, and rejected destination DDL uses `DB001`.
+Failures while reading endpoint catalog or control metadata retain their typed
+provider error so that the provider classifier determines the code. Missing
+objects use `MD001`/`MD002`, unsupported structures use `PR005`, source
+statements unsupported by the Ape-DTS parser use `PR006`, unmet version or
+topology requirements use `PR001`/`PR002`, and rejected destination DDL uses
+`DB001`. Invalid source payloads and persisted migration records use `DT001`.
 
 Classify errors by what the user can verify or change, not by the internal module
 or data structure that detected the failure. A missing schema, table, or column
@@ -253,57 +258,75 @@ codes are also used internally for these initial SQLx mappings:
 
 | Provider error | Ape-DTS code |
 |---|---|
-| PostgreSQL `42P01`/`42703`/`42704`, MySQL `1054`/`1146` | `MD001` |
-| PostgreSQL `3D000`, MySQL `1049` | `MD002` |
-| PostgreSQL SQLSTATE class `28`, MySQL `1045` | `AU001` |
-| PostgreSQL `42501`, MySQL `1044`/`1142`/`1143`/`1227`/`1370` | `AU002` |
-| PostgreSQL SQLSTATE class `08` | `CN001` |
-| PostgreSQL SQLSTATE class `23` | `IC001` |
-| MySQL `2002`/`2003`/`2006`/`2013` | `CN001` |
+| PostgreSQL missing schema/table/column/object/function; MySQL missing table/column/object/routine | `MD001` |
+| PostgreSQL `3D000`/`57P04`, MySQL `1049` | `MD002` |
+| PostgreSQL SQLSTATE class `28`; MySQL access-denied, locked, or rejected account | `AU001` |
+| PostgreSQL `42501`; MySQL command, object, or administrative permission errors | `AU002` |
+| PostgreSQL SQLSTATE class `08` and shutdown errors; MySQL client/server connection errors | `CN001` |
+| PostgreSQL SQLSTATE class `23`/`40002`; SQLx integrity error kinds | `IC001` |
+| PostgreSQL serialization/deadlock/lock conflicts; MySQL lock timeout/deadlock/NOWAIT conflict | `DB003` |
+| PostgreSQL query canceled; MySQL query interrupted | `RT002` |
+| MySQL maximum statement execution time exceeded | `DB002` |
+| PostgreSQL resource/program limits; MySQL disk, memory, table, connection, or quota limits | `RS001` |
+| PostgreSQL unsupported feature class; MySQL unsupported or disabled feature | `PR001` |
 | SQLx connection configuration error | `CF002` |
 | SQLx I/O, protocol, or closed pool | `CN001` |
 | SQLx pool timeout | `CN002` |
 | SQLx TLS error | `CN003` |
+| SQLx missing database type | `MD001` |
+| SQLx row or value decode error | `DT001` |
 | SQLx worker crash | `RT001` |
-| SQLx integrity error kinds | `IC001` |
 
-SQLx call sites may explicitly supply an operation-specific fallback code such
-as `DB001` or `ST001`. A recognized provider classification owns the report
-identity; the explicit code is used only when the provider error is
-unclassified. The original provider code, constraint/table metadata, and source
-error information remain available through detail and object fields.
+Unrecognized SQLx database and client variants are `DB001`. The original
+provider code, constraint/table metadata, and source error information remain
+available through detail and object fields.
 
 The `tokio-postgres` replication adapter uses the same PostgreSQL SQLSTATE
-rules. URL parsing uses `CF002`, connection establishment uses `CN001`, and
-rejected replication commands use the operation-specific explicit code.
+rules. It also classifies closed connections, nested I/O timeouts, and nested
+OpenSSL failures without parsing error messages.
 
 Other initial provider mappings are:
 
 | Provider error | Ape-DTS code |
 |---|---|
 | Redis authentication / `NOAUTH` / `WRONGPASS` | `AU001` |
-| Redis `NOPERM` / `READONLY` | `AU002` |
+| Redis `NOPERM` | `AU002` |
+| Redis `READONLY` | `PR001` |
 | Redis invalid client configuration | `CF002` |
 | Redis timeout | `CN002` |
 | Redis I/O, cluster down, master down, or missing cluster connection | `CN001` |
-| MongoDB authentication or command code `18` | `AU001` |
+| Redis missing script or Sentinel master | `MD001` |
+| Redis unsupported RESP3 capability | `PR001` |
+| MongoDB authentication or reauthentication | `AU001` |
 | MongoDB command code `13` | `AU002` |
-| MongoDB command code `26` | `MD001` |
-| MongoDB duplicate-key codes `11000`/`11001`/`12582` | `IC001` |
-| MongoDB invalid client options / invalid TLS configuration | explicit call-site code `CF002` / `CN003` |
-| MongoDB DNS, I/O, pool-cleared, server-selection, or shutdown | `CN001` or `CN002` for I/O timeout |
+| MongoDB missing namespace/index or GridFS file/chunk/revision | `MD001` |
+| MongoDB duplicate-key or document-validation error | `IC001` |
+| MongoDB max-time error / write conflict | `DB002` / `DB003` |
+| MongoDB missing resume token / unsupported session or server capability | `ST001` / `PR001` |
+| MongoDB invalid client options / invalid TLS configuration | `CF002` / `CN003` |
+| MongoDB DNS, I/O, invalid response, pool-cleared, server-selection, or shutdown | `CN001` or `CN002` for I/O timeout |
+| MongoDB `SystemOverloadedError` label | `RS001` |
 | Kafka authentication / authorization | `AU001` / `AU002` |
-| Kafka unknown topic or partition | `MD001` |
-| Kafka timeout / broker transport failure | `CN002` / `CN001` |
-| HTTP request timeout / connection failure | `CN002` / `CN001` |
-| HTTP non-success response or invalid response body | `DB001` |
+| Kafka unknown topic, partition, group, resource, or log directory | `MD001` |
+| Kafka connection timeout / operation timeout / broker transport failure | `CN002` / `DB002` / `CN001` |
+| Kafka offset unavailable / operation conflict / resource limit | `ST001` / `DB003` / `RS001` |
+| Kafka filesystem or broker log-storage error | `IO001` |
+| Kafka unsupported capability / interrupted operation | `PR001` / `RT002` |
+| SQL Server authentication / permission / missing object or database | `AU001` / `AU002` / `MD001` / `MD002` |
+| SQL Server constraint / concurrency conflict / resource limit | `IC001` / `DB003` / `RS001` |
+| SQL Server value encoding, conversion, or parsing failure | `DT001` |
+| SQL Server transport, pool timeout, or TLS failure | `CN001` / `CN002` / `CN003` |
+| HTTP connection timeout / established-request timeout / connection failure | `CN002` / `DB002` / `CN001` |
+| HTTP `401`/`403`/`404`/`409`/`429` | `AU001`/`AU002`/`MD001`/`DB003`/`RS001` |
+| HTTP response decode failure | `DT001` |
+| Other HTTP status, redirect, or body failure | `IN999` |
 | MySQL binlog I/O timeout / other transport failure | `CN002` / `CN001` |
-| MySQL binlog invalid GTID | `CF002` |
+| MySQL binlog invalid URL or GTID / unsupported column type | `CF002` / `PR005` |
 | MySQL binlog error `1236` (requested binlog unavailable) | `ST001` |
-| Other MySQL binlog decoding failures | `DB001` |
+| Other MySQL binlog decoding failures | `DT001` |
 
-Worker join failures are `RT001`. URL parsing errors explicitly classified by
-their callers are `CF002`. Logger YAML errors occur during startup and are
+Worker join failures are `RT001`. Provider URL parsing variants are `CF002`.
+Logger YAML errors occur during startup and are
 surfaced directly by the `dt-main` `expect` boundary. `DtError::Unclassified`
 is `IN999`; an
 unsupported or unrecognized raw error adds `IN999` only when the report contains

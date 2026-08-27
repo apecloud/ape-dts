@@ -142,7 +142,6 @@ impl DatabaseRecovery {
                                     .error_code()
                                     .is_some_and(Self::is_missing_resume_store);
                                 let error = error
-                                    .code(ErrorCode::CheckpointReadFailed)
                                     .message("failed to query resume position from database")
                                     .object(ErrorObject {
                                         schema: Some(self.schema.clone()),
@@ -197,7 +196,6 @@ impl DatabaseRecovery {
                                     .error_code()
                                     .is_some_and(Self::is_missing_resume_store);
                                 let error = error
-                                    .code(ErrorCode::CheckpointReadFailed)
                                     .message("failed to query resume position from database")
                                     .object(ErrorObject {
                                         schema: Some(self.schema.clone()),
@@ -228,7 +226,6 @@ impl DatabaseRecovery {
                 let mut connection = pool
                     .get()
                     .await
-                    .code(ErrorCode::CheckpointReadFailed)
                     .message("failed to acquire MSSQL checkpoint connection")?;
                 let stream = match query.query(connection.client_mut()).await {
                     Ok(stream) => stream,
@@ -242,17 +239,14 @@ impl DatabaseRecovery {
                 for row in position_rows {
                     let resumer_type_str =
                         MssqlColValueConvertor::from_query_required_string(&row, "resumer_type")
-                            .code(ErrorCode::CheckpointReadFailed)
                             .message("failed to parse MSSQL checkpoint resumer_type")
                             .object(self.checkpoint_error_object())?;
                     let position_key =
                         MssqlColValueConvertor::from_query_required_string(&row, "position_key")
-                            .code(ErrorCode::CheckpointReadFailed)
                             .message("failed to parse MSSQL checkpoint position_key")
                             .object(self.checkpoint_error_object())?;
                     let position_data =
                         MssqlColValueConvertor::from_query_optional_string(&row, "position_data")
-                            .code(ErrorCode::CheckpointReadFailed)
                             .message("failed to parse MSSQL checkpoint position_data")
                             .object(self.checkpoint_error_object())?;
                     self.cache_resumer_record(&resumer_type_str, position_key, position_data);
@@ -341,7 +335,6 @@ impl DatabaseRecovery {
         }
 
         Err(error
-            .code(ErrorCode::CheckpointReadFailed)
             .message("failed to query resume position from MSSQL")
             .object(self.checkpoint_error_object()))
     }

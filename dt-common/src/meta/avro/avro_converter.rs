@@ -140,7 +140,7 @@ impl AvroConverter {
                     avro_type,
                 });
             }
-            let value = apache_avro::to_value(fields).context(DtError::StatementFailed(
+            let value = apache_avro::to_value(fields).context(DtError::InvariantViolated(
                 "failed to encode Avro field definitions".to_string(),
             ))?;
             Value::Union(1, Box::new(value))
@@ -258,7 +258,7 @@ impl AvroConverter {
 
     fn avro_to_fields(&self, value: Option<Value>) -> anyhow::Result<Vec<AvroFieldDef>> {
         if let Some(v) = value {
-            return apache_avro::from_value(&v).context(DtError::StatementFailed(
+            return apache_avro::from_value(&v).context(DtError::DataDecodeFailed(
                 "failed to decode Avro field definitions".to_string(),
             ));
         }

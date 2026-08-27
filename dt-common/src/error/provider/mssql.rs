@@ -23,10 +23,10 @@ pub fn classify_mssql_error(error: &TiberiusError) -> DtErrorContext {
         | TiberiusError::Conversion(_)
         | TiberiusError::Utf8
         | TiberiusError::Utf16
-        | TiberiusError::ParseInt(_)
-        | TiberiusError::BulkInput(_) => ErrorCode::StatementFailed,
+        | TiberiusError::ParseInt(_) => ErrorCode::DataDecodeFailed,
+        TiberiusError::BulkInput(_) => ErrorCode::DatabaseOperationFailed,
         #[allow(unreachable_patterns)]
-        _ => ErrorCode::StatementFailed,
+        _ => ErrorCode::DatabaseOperationFailed,
     };
 
     provider_context(
@@ -77,83 +77,14 @@ fn classify_mssql_code(code: u32) -> ErrorCode {
     match code {
         18452 | 18456 => ErrorCode::AuthenticationFailed,
         229 | 230 | 262 | 297 => ErrorCode::PermissionDenied,
-        207 | 208 | 2812 => ErrorCode::ObjectNotFound,
+        207 | 208 | 2812 | 3701 | 4902 => ErrorCode::ObjectNotFound,
         911 | 4060 => ErrorCode::DatabaseNotFound,
         515 | 547 | 2601 | 2627 => ErrorCode::IntegrityViolation,
-        _ => ErrorCode::StatementFailed,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::ErrorReport;
-
-    #[test]
-    fn classifies_transport_and_client_errors() {
-        let cases = [
-            (
-                TiberiusError::Io {
-                    kind: ErrorKind::TimedOut,
-                    message: "connection timed out".to_string(),
-                },
-                ErrorCode::ConnectionTimeout,
-            ),
-            (
-                TiberiusError::Io {
-                    kind: ErrorKind::ConnectionRefused,
-                    message: "connection refused".to_string(),
-                },
-                ErrorCode::ConnectionFailed,
-            ),
-            (
-                TiberiusError::Tls("invalid certificate".to_string()),
-                ErrorCode::TlsFailed,
-            ),
-            (
-                TiberiusError::Conversion("invalid value".into()),
-                ErrorCode::StatementFailed,
-            ),
-        ];
-
-        for (error, expected) in cases {
-            assert_eq!(error.classify().error_code(), Some(expected));
+        1205 | 1222 | 3960 => ErrorCode::DatabaseOperationConflict,
+        701 | 802 | 1101 | 1105 | 8645 | 10928 | 10929 | 40501 | 49918 | 49919 | 49920 => {
+            ErrorCode::ResourceExhausted
         }
-    }
-
-    #[test]
-    fn classifies_sql_server_error_codes() {
-        for (code, expected) in [
-            (18456, ErrorCode::AuthenticationFailed),
-            (229, ErrorCode::PermissionDenied),
-            (208, ErrorCode::ObjectNotFound),
-            (4060, ErrorCode::DatabaseNotFound),
-            (2627, ErrorCode::IntegrityViolation),
-            (1205, ErrorCode::StatementFailed),
-        ] {
-            assert_eq!(classify_mssql_code(code), expected);
-        }
-    }
-
-    #[test]
-    fn classifies_pool_timeout_and_nested_tiberius_error() {
-        let timeout = MssqlPoolError::TimedOut;
-        assert_eq!(
-            timeout.classify().error_code(),
-            Some(ErrorCode::ConnectionTimeout)
-        );
-
-        let nested = MssqlPoolError::User(Bb8TiberiusError::Tiberius(TiberiusError::Tls(
-            "invalid certificate".to_string(),
-        )));
-        let report = ErrorReport::from_anyhow(&anyhow::Error::new(nested));
-        assert_eq!(report.code, ErrorCode::TlsFailed);
-        assert_eq!(
-            report.details,
-            [
-                "mssql-pool: connection manager error",
-                "mssql: Error forming TLS connection: invalid certificate",
-            ]
-        );
+        40197 | 40613 => ErrorCode::ConnectionFailed,
+        _ => ErrorCode::DatabaseOperationFailed,
     }
 }

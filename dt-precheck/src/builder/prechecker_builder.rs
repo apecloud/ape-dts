@@ -2,7 +2,7 @@ use std::vec;
 
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
-    error::{DtError, DtErrorContextExt, DtResultExt, EndpointRole, ErrorCode},
+    error::{DtError, DtErrorContextExt, DtResultExt, EndpointRole},
     rdb_filter::RdbFilter,
 };
 
@@ -149,9 +149,10 @@ impl PrecheckerBuilder {
             };
             check_source_connection.log();
             check_sink_connection.log();
-            return Err(anyhow::anyhow!("database connection precheck failed")
-                .code(ErrorCode::ConnectionFailed)
-                .endpoint(endpoint));
+            return Err(anyhow::Error::new(DtError::ConnectionFailed(
+                "database connection precheck failed".to_string(),
+            ))
+            .endpoint(endpoint));
         }
 
         let mut check_results: Vec<anyhow::Result<CheckResult>> = vec![];
@@ -238,8 +239,9 @@ impl PrecheckerBuilder {
                     }
                 }
                 if error_count > 0 {
-                    let mut error = anyhow::anyhow!("one or more prerequisite checks failed")
-                        .code(ErrorCode::PrerequisiteNotMet);
+                    let mut error = anyhow::Error::new(DtError::PrerequisiteNotMet(
+                        "one or more prerequisite checks failed".to_string(),
+                    ));
                     if let Some(endpoint) = first_error_endpoint {
                         error = error.endpoint(endpoint);
                     }

@@ -73,7 +73,7 @@ impl DdlParser {
                         format!("code: {:?}, input: {}", e.code, to_string(e.input))
                     }
                 };
-                bail! {DtError::StatementFailed(format!("failed to parse sql: {}, error: {}", sql, error))}
+                bail! {DtError::UnsupportedStatement(format!("failed to parse sql: {}, error: {}", sql, error))}
             }
         }
     }
