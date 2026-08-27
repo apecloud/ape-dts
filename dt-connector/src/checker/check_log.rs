@@ -177,16 +177,106 @@ pub fn to_json_line<T: Serialize>(value: &T) -> Option<String> {
 #[derive(Serialize, Deserialize)]
 pub struct StructCheckLog {
     pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub db: String,
+    pub schema: String,
+    pub tb: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_db: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_tb: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src_sql: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dst_sql: Option<String>,
 }
 
-impl StructCheckLog {
-    pub fn new(key: &str, src_sql: Option<String>, dst_sql: Option<String>) -> Self {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructCheckKey {
+    pub key: String,
+    pub db: String,
+    pub schema: String,
+    pub tb: String,
+    segments: Vec<String>,
+    schema_index: Option<usize>,
+    tb_index: Option<usize>,
+    table_scoped: bool,
+}
+
+impl StructCheckKey {
+    pub fn new(db: &str, key: &str) -> Self {
+        let segments = key.split('.').map(str::to_string).collect::<Vec<_>>();
+        let object_type = segments.first().map(String::as_str).unwrap_or_default();
+        let (schema_index, tb_index, table_scoped) = match object_type {
+            "database" | "schema" => (Some(1), None, false),
+            "rbac" if segments.get(1).map(String::as_str) == Some("privilege") => {
+                match segments.get(2).map(String::as_str) {
+                    Some("table") | Some("sequence") => (Some(3), Some(4), true),
+                    Some("schema") => (Some(3), None, false),
+                    _ => (None, None, false),
+                }
+            }
+            "table" | "index" | "constraint" | "column_comment" | "table_comment"
+            | "sequence_owner" => (Some(1), Some(2), true),
+            "sequence" | "udt" | "udf" => (Some(1), Some(2), false),
+            _ => (None, None, false),
+        };
+        let schema = schema_index
+            .and_then(|index| segments.get(index))
+            .cloned()
+            .unwrap_or_default();
+        let tb = tb_index
+            .and_then(|index| segments.get(index))
+            .cloned()
+            .unwrap_or_default();
+
         Self {
             key: key.to_string(),
+            db: db.to_string(),
+            schema,
+            tb,
+            segments,
+            schema_index,
+            tb_index,
+            table_scoped,
+        }
+    }
+
+    pub fn with_location(&self, db: &str, schema: &str, tb: &str) -> Self {
+        let mut segments = self.segments.clone();
+        if let Some(index) = self.schema_index {
+            segments[index] = schema.to_string();
+        }
+        if let Some(index) = self.tb_index {
+            segments[index] = tb.to_string();
+        }
+        Self::new(db, &segments.join("."))
+    }
+
+    pub fn is_table_scoped(&self) -> bool {
+        self.table_scoped
+    }
+}
+
+impl StructCheckLog {
+    pub fn new(
+        key: &StructCheckKey,
+        target_key: &StructCheckKey,
+        src_sql: Option<String>,
+        dst_sql: Option<String>,
+    ) -> Self {
+        let db_changed = key.db != target_key.db;
+        let target_changed = key.schema != target_key.schema || key.tb != target_key.tb;
+        Self {
+            key: key.key.clone(),
+            db: key.db.clone(),
+            schema: key.schema.clone(),
+            tb: key.tb.clone(),
+            target_db: db_changed.then(|| target_key.db.clone()),
+            target_schema: target_changed.then(|| target_key.schema.clone()),
+            target_tb: target_changed.then(|| target_key.tb.clone()),
             src_sql,
             dst_sql,
         }
@@ -271,8 +361,10 @@ mod tests {
         assert!(legacy.db.is_empty());
         assert!(legacy.target_db.is_none());
 
+        let key = StructCheckKey::new("", "index.s1.t1.idx_1");
         let struct_log = StructCheckLog::new(
-            "index.s1.t1.idx_1",
+            &key,
+            &key,
             Some("CREATE INDEX idx_1 ON t1(c1)".to_string()),
             None,
         );
@@ -280,12 +372,25 @@ mod tests {
             json_line(&struct_log),
             json!({
                 "key": "index.s1.t1.idx_1",
+                "schema": "s1",
+                "tb": "t1",
                 "src_sql": "CREATE INDEX idx_1 ON t1(c1)"
             })
         );
-        assert!(json_line(&struct_log).get("schema").is_none());
-        assert!(json_line(&struct_log).get("tb").is_none());
         assert!(json_line(&struct_log).get("id_col_values").is_none());
+
+        let target_key = StructCheckKey::new("", "index.s2.t2.idx_1");
+        let routed_struct_log = StructCheckLog::new(&key, &target_key, None, None);
+        assert_eq!(
+            json_line(&routed_struct_log),
+            json!({
+                "key": "index.s1.t1.idx_1",
+                "schema": "s1",
+                "tb": "t1",
+                "target_schema": "s2",
+                "target_tb": "t2"
+            })
+        );
 
         let consistent_summary = CheckSummaryLog {
             start_time: "start".to_string(),
