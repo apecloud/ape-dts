@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use dt_common::{
-    error::{DtResultExt, ErrorCode},
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
     utils::limit_queue::LimitedQueue,
 };
@@ -40,9 +39,7 @@ impl Sinker for KafkaSinker {
                 partition: -1,
             });
         }
-        self.producer
-            .send_all(&messages)
-            .code(ErrorCode::StatementFailed)?;
+        self.producer.send_all(&messages)?;
         Ok(())
     }
 
@@ -85,9 +82,7 @@ impl KafkaSinker {
         //       making it impossible to see individual broker RT. This can be optimized in the future.
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
-        self.producer
-            .send_all(&messages)
-            .code(ErrorCode::StatementFailed)?;
+        self.producer.send_all(&messages)?;
         rts.push((
             start_time.elapsed().as_millis() as u64,
             messages.len() as u64,

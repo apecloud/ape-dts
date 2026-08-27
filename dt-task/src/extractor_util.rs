@@ -13,7 +13,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
-    error::{DtError, DtResultExt, ErrorCode},
+    error::DtError,
     meta::{
         avro::avro_converter::AvroConverter,
         dt_queue::DtQueue,
@@ -843,10 +843,12 @@ impl ExtractorUtil {
             tb: String,
             partition_col: String,
         }
-        let config: Vec<PartitionColsType> =
-            serde_json::from_str(config_str.trim_start_matches(JSON_PREFIX))
-                .code(ErrorCode::InvalidConfig)
-                .context("config [extractor].partition_cols is invalid JSON")?;
+        let config: Vec<PartitionColsType> = serde_json::from_str(
+            config_str.trim_start_matches(JSON_PREFIX),
+        )
+        .context(DtError::InvalidConfig(
+            "config [extractor].partition_cols is invalid JSON".to_string(),
+        ))?;
         for i in config {
             if matches!(db_type, DbType::Mssql) {
                 let db = Self::parse_mssql_identifier(&i.db)?;

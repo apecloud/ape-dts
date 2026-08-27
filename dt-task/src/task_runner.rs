@@ -21,7 +21,7 @@ use dt_common::{
         sinker_config::SinkerConfig,
         task_config::TaskConfig,
     },
-    error::{DtError, DtOptionExt, DtResultExt, EndpointRole, ErrorCode, Stage},
+    error::{DtError, DtOptionExt, DtResultExt, EndpointRole, Stage},
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::parse_size_limit,
@@ -839,14 +839,13 @@ impl TaskRunner {
         }
         let check_log_dir_base = self.check_log_dir(cfg);
         let checker_task_id = task_id.to_string();
-        let cdc_check_log_max_file_size = parse_size_limit(cfg.log_file_size())
-            .with_context(|| {
-                format!(
+        let cdc_check_log_max_file_size =
+            parse_size_limit(cfg.log_file_size()).with_context(|| {
+                DtError::InvalidConfig(format!(
                     "invalid config [checker_output].check_log_file_size: {}",
                     cfg.log_file_size()
-                )
-            })
-            .code(ErrorCode::InvalidConfig)?;
+                ))
+            })?;
         let cdc_check_log_max_rows = if cfg.log_max_rows() == 0 {
             log_warn!("checker_output.check_log_max_rows=0 is invalid. Using 1.");
             1

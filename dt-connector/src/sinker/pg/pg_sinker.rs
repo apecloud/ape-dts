@@ -4,7 +4,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
-    error::{DtResultExt, ErrorCode},
     log_error, log_info,
     meta::{
         ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
@@ -117,15 +116,9 @@ impl Sinker for PgSinker {
 
             let start_time = Instant::now();
 
-            let conn_pool = pool_options
-                .connect_with(conn_options)
-                .await
-                .code(ErrorCode::ConnectionFailed)?;
+            let conn_pool = pool_options.connect_with(conn_options).await?;
             let query = sqlx::query(&sql);
-            query
-                .execute(&conn_pool)
-                .await
-                .code(ErrorCode::StatementFailed)?;
+            query.execute(&conn_pool).await?;
 
             rts.push((start_time.elapsed().as_millis() as u64, 1));
             conn_pool.close().await;
@@ -213,16 +206,11 @@ impl PgSinker {
         let mut data_len = 0;
         let mut last_monitor_time = Instant::now();
 
-        let mut tx = self
-            .conn_pool
-            .begin()
-            .await
-            .code(ErrorCode::StatementFailed)?;
+        let mut tx = self.conn_pool.begin().await?;
         if let Some(sql) = self.get_data_marker_sql().await {
             sqlx::query(&sql)
                 .execute(&mut *tx)
                 .await
-                .code(ErrorCode::StatementFailed)
                 .with_context(|| format!("failed to execute data marker sql: [{}]", sql))?;
         }
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
@@ -237,16 +225,12 @@ impl PgSinker {
             let query = query_builder.create_pg_query(&query_info)?;
 
             let start_time = Instant::now();
-            query
-                .execute(&mut *tx)
-                .await
-                .code(ErrorCode::StatementFailed)
-                .with_context(|| {
-                    format!(
-                        "serial sink failed, sql: [{}], row_data: [{}]",
-                        query_info.sql, row_data
-                    )
-                })?;
+            query.execute(&mut *tx).await.with_context(|| {
+                format!(
+                    "serial sink failed, sql: [{}], row_data: [{}]",
+                    query_info.sql, row_data
+                )
+            })?;
 
             rts.push((start_time.elapsed().as_millis() as u64, 1));
             if last_monitor_time.elapsed().as_secs() >= monitor_interval {
@@ -262,7 +246,7 @@ impl PgSinker {
                 last_monitor_time = Instant::now();
             }
         }
-        tx.commit().await.code(ErrorCode::StatementFailed)?;
+        tx.commit().await?;
 
         if data_len > 0 || data_size > 0 {
             self.base_sinker
@@ -295,25 +279,12 @@ impl PgSinker {
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         if let Some(sql) = self.get_data_marker_sql().await {
-            let mut tx = self
-                .conn_pool
-                .begin()
-                .await
-                .code(ErrorCode::StatementFailed)?;
-            sqlx::query(&sql)
-                .execute(&mut *tx)
-                .await
-                .code(ErrorCode::StatementFailed)?;
-            query
-                .execute(&mut *tx)
-                .await
-                .code(ErrorCode::StatementFailed)?;
-            tx.commit().await.code(ErrorCode::StatementFailed)?;
+            let mut tx = self.conn_pool.begin().await?;
+            sqlx::query(&sql).execute(&mut *tx).await?;
+            query.execute(&mut *tx).await?;
+            tx.commit().await?;
         } else {
-            query
-                .execute(&self.conn_pool)
-                .await
-                .code(ErrorCode::StatementFailed)?;
+            query.execute(&self.conn_pool).await?;
         }
         rts.push((start_time.elapsed().as_millis() as u64, 1));
 
@@ -347,19 +318,9 @@ impl PgSinker {
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
         let exec_error = if let Some(sql) = self.get_data_marker_sql().await {
-            let mut tx = self
-                .conn_pool
-                .begin()
-                .await
-                .code(ErrorCode::StatementFailed)?;
-            sqlx::query(&sql)
-                .execute(&mut *tx)
-                .await
-                .code(ErrorCode::StatementFailed)?;
-            query
-                .execute(&mut *tx)
-                .await
-                .code(ErrorCode::StatementFailed)?;
+            let mut tx = self.conn_pool.begin().await?;
+            sqlx::query(&sql).execute(&mut *tx).await?;
+            query.execute(&mut *tx).await?;
             tx.commit().await
         } else {
             match query.execute(&self.conn_pool).await {

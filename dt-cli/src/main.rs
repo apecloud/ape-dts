@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand};
 use clap_complete::generate;
 use configparser::ini::Ini;
-use dt_common::error::{DtError, DtOptionExt, DtResultExt, ErrorCode, ErrorReport, Stage};
+use dt_common::error::{DtError, DtOptionExt, DtResultExt, ErrorReport, Stage};
 use serde::{Deserialize, Serialize};
 
 mod config;
@@ -555,9 +555,9 @@ fn handle_config(command: ConfigCommand) -> Result<()> {
     match command.command {
         ConfigSubcommand::Get => {
             let cfg = load_cli_config()?;
-            let output = serde_json::to_string_pretty(&cfg)
-                .code(ErrorCode::InvariantViolated)
-                .context("Failed to serialize dtscli configuration")?;
+            let output = serde_json::to_string_pretty(&cfg).context(DtError::InvariantViolated(
+                "Failed to serialize dtscli configuration".to_string(),
+            ))?;
             println!("{output}");
         }
         ConfigSubcommand::Set(args) => {
@@ -569,9 +569,9 @@ fn handle_config(command: ConfigCommand) -> Result<()> {
                 cfg.log_dir = log_dir;
             }
             save_cli_config(&cfg)?;
-            let output = serde_json::to_string_pretty(&cfg)
-                .code(ErrorCode::InvariantViolated)
-                .context("Failed to serialize dtscli configuration")?;
+            let output = serde_json::to_string_pretty(&cfg).context(DtError::InvariantViolated(
+                "Failed to serialize dtscli configuration".to_string(),
+            ))?;
             println!("{output}");
             warn_if_workspace_binaries_missing(&cfg);
         }
@@ -894,9 +894,9 @@ fn launch_persistent_task(
 
     metadata.dt_main = dt_main.display().to_string();
     metadata.pid = Some(pid);
-    let metadata_json = serde_json::to_string_pretty(&metadata)
-        .code(ErrorCode::InvariantViolated)
-        .context("Failed to serialize task metadata")?;
+    let metadata_json = serde_json::to_string_pretty(&metadata).context(
+        DtError::InvariantViolated("Failed to serialize task metadata".to_string()),
+    )?;
     fs::write(task_dir.join("metadata.json"), metadata_json).context(format!(
         "failed to write {}",
         task_dir.join("metadata.json").display()
@@ -1082,9 +1082,9 @@ fn handle_start(start: StartArgs) -> Result<()> {
 fn handle_show(args: ShowArgs) -> Result<()> {
     let task_dir = existing_task_dir(&args.task_name)?;
     let metadata = read_metadata(&task_dir)?;
-    let output = serde_json::to_string_pretty(&metadata)
-        .code(ErrorCode::InvariantViolated)
-        .context("Failed to serialize task metadata")?;
+    let output = serde_json::to_string_pretty(&metadata).context(DtError::InvariantViolated(
+        "Failed to serialize task metadata".to_string(),
+    ))?;
     println!("{output}");
     Ok(())
 }
@@ -1226,9 +1226,13 @@ fn load_cli_config() -> Result<CliConfig> {
     let content =
         fs::read_to_string(&path).context(format!("failed to read {}", path.display()))?;
     serde_json::from_str(&content)
-        .code(ErrorCode::InvalidConfig)
+        .with_context(|| {
+            DtError::InvalidConfig(format!(
+                "Failed to parse dtscli configuration [{}]",
+                path.display()
+            ))
+        })
         .stage(Stage::Bootstrap)
-        .with_context(|| format!("Failed to parse dtscli configuration [{}]", path.display()))
 }
 
 fn save_cli_config(cfg: &CliConfig) -> Result<()> {
@@ -1236,9 +1240,9 @@ fn save_cli_config(cfg: &CliConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context(format!("failed to create {}", parent.display()))?;
     }
-    let content = serde_json::to_string_pretty(cfg)
-        .code(ErrorCode::InvariantViolated)
-        .context("Failed to serialize dtscli configuration")?;
+    let content = serde_json::to_string_pretty(cfg).context(DtError::InvariantViolated(
+        "Failed to serialize dtscli configuration".to_string(),
+    ))?;
     fs::write(&path, content).context(format!("failed to write {}", path.display()))?;
     Ok(())
 }
@@ -1248,9 +1252,10 @@ fn cli_home() -> Result<PathBuf> {
         return Ok(PathBuf::from(home));
     }
     let home = env::var("HOME")
-        .code(ErrorCode::InvalidConfig)
-        .stage(Stage::Bootstrap)
-        .context("HOME is not set and APE_DTS_HOME is not configured")?;
+        .context(DtError::InvalidConfig(
+            "HOME is not set and APE_DTS_HOME is not configured".to_string(),
+        ))
+        .stage(Stage::Bootstrap)?;
     Ok(PathBuf::from(home).join(".ape-dts"))
 }
 
@@ -1503,14 +1508,12 @@ fn read_metadata(task_dir: &Path) -> Result<TaskMetadata> {
     let metadata_path = task_dir.join("metadata.json");
     let content = fs::read_to_string(&metadata_path)
         .context(format!("failed to read {}", metadata_path.display()))?;
-    serde_json::from_str(&content)
-        .code(ErrorCode::InvalidConfig)
-        .with_context(|| {
-            format!(
-                "Failed to parse task metadata [{}]",
-                task_dir.join("metadata.json").display()
-            )
-        })
+    serde_json::from_str(&content).with_context(|| {
+        DtError::InvalidConfig(format!(
+            "Failed to parse task metadata [{}]",
+            task_dir.join("metadata.json").display()
+        ))
+    })
 }
 
 fn read_pid(task_dir: &Path) -> Option<u32> {

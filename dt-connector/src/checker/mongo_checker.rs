@@ -187,7 +187,7 @@ impl MongoChecker {
             }
         }
         anyhow::bail!(
-            DtError::StatementFailed("MongoDB row data is missing _id".to_string())
+            DtError::InvariantViolated("MongoDB row data is missing _id".to_string())
                 .stage(Stage::Checker)
                 .object(ErrorObject {
                     schema: Some(row.schema.clone()),

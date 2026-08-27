@@ -3,13 +3,11 @@ use std::sync::{
     Arc,
 };
 
-use anyhow::bail;
 use dt_common::{
     config::{
         config_enums::DbType,
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
     },
-    error::DtError,
     log_debug, log_error, log_info,
     meta::{
         dcl_meta::{dcl_data::DclData, dcl_parser::DclParser},
@@ -237,14 +235,14 @@ impl BaseExtractor {
         query: &str,
     ) -> anyhow::Result<Option<DdlData>> {
         let parser = DdlParser::new(db_type.to_owned());
-        let parse_result = parser.parse(query);
-        if let Err(err) = parse_result {
-            let error = format!("failed to parse ddl, will try ignore it, please execute the ddl manually in target, sql: {}, error: {}", query, err);
-            log_error!("{}", error);
-            bail! {DtError::StatementFailed(error)
-
-            }
-        }
+        let parse_result = parser.parse(query).map_err(|err| {
+            let context = format!(
+                "failed to parse ddl, will ignore it; execute the ddl manually in the target, sql: {}, error: {}",
+                query, err
+            );
+            log_error!("{}", context);
+            err.context(context)
+        })?;
 
         // case 1, execute: use db_1; create table tb_1(id int);
         // binlog query.schema == db_1, schema from DdlParser == None
@@ -252,7 +250,7 @@ impl BaseExtractor {
         // binlog query.schema == empty, schema from DdlParser == db_1
         // case 3, execute: use db_1; create table db_2.tb_1(id int);
         // binlog query.schema == db_1, schema from DdlParser == db_2
-        if let Some(mut ddl_data) = parse_result? {
+        if let Some(mut ddl_data) = parse_result {
             ddl_data.default_schema = schema.to_string();
             ddl_data.query = query.to_string();
             Ok(Some(ddl_data))
@@ -268,19 +266,16 @@ impl BaseExtractor {
         query: &str,
     ) -> anyhow::Result<Option<DclData>> {
         let parser = DclParser::new(db_type.to_owned());
-        let parse_result = parser.parse(query);
-
-        if let Err(err) = parse_result {
-            let error = format!(
-                "failed to parse dcl, will try ignore it, sql: {}, error: {}",
+        let parse_result = parser.parse(query).map_err(|err| {
+            let context = format!(
+                "failed to parse dcl, will ignore it, sql: {}, error: {}",
                 query, err
             );
-            bail! {DtError::StatementFailed(error)
+            log_error!("{}", context);
+            err.context(context)
+        })?;
 
-            }
-        }
-
-        if let Some(dcl_data) = parse_result? {
+        if let Some(dcl_data) = parse_result {
             Ok(Some(dcl_data))
         } else {
             Ok(None)

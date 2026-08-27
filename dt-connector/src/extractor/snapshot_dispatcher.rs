@@ -1,10 +1,6 @@
 use std::{collections::VecDeque, future::Future, sync::Arc};
 
-use dt_common::{
-    error::{DtError, DtResultExt, ErrorCode},
-    monitor::task_monitor_handle::TaskMonitorHandle,
-    runtime_trace,
-};
+use dt_common::{error::DtError, monitor::task_monitor_handle::TaskMonitorHandle, runtime_trace};
 use tokio::task::JoinSet;
 
 use super::{
@@ -76,7 +72,7 @@ impl SnapshotDispatcher {
         }
 
         while let Some(result) = join_set.join_next().await {
-            let result = result.code(ErrorCode::WorkerFailed)??;
+            let result = result??;
             state = on_done(state, result).await?;
 
             while join_set.len() < parallel_size {

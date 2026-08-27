@@ -6,7 +6,7 @@ use dt_common::{
     config::{
         config_enums::DbType, connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS,
     },
-    error::{DtError, DtResultExt, ErrorCode},
+    error::DtError,
     meta::mongo::mongo_version::get_server_version,
     rdb_filter::RdbFilter,
 };
@@ -90,11 +90,7 @@ impl MongoFetcher {
         };
 
         let doc_command = doc! {command: 1};
-        client
-            .database("admin")
-            .run_command(doc_command)
-            .await
-            .code(ErrorCode::StatementFailed)
+        Ok(client.database("admin").run_command(doc_command).await?)
     }
 
     pub async fn execute_for_db(&self, command: &str) -> anyhow::Result<Document> {
@@ -105,10 +101,7 @@ impl MongoFetcher {
             )},
         };
 
-        let dbs = client
-            .list_databases()
-            .await
-            .code(ErrorCode::StatementFailed)?;
+        let dbs = client.list_databases().await?;
         if dbs.is_empty() {
             bail! {DtError::DatabaseNotFound(
                 DbType::Mongo,
@@ -121,8 +114,7 @@ impl MongoFetcher {
         let doc = client
             .database(&dbs[0].name)
             .run_command(doc_command)
-            .await
-            .code(ErrorCode::StatementFailed)?;
+            .await?;
         Ok(doc)
     }
 }

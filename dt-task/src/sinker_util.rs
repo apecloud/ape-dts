@@ -3,7 +3,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use dt_common::{
     config::{config_enums::DbType, sinker_config::SinkerConfig, task_config::TaskConfig},
-    error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
+    error::{DtError, DtOptionExt},
     meta::{
         avro::avro_converter::AvroConverter,
         mongo::mongo_shard::{is_mongos, list_shard_collections},
@@ -66,7 +66,9 @@ macro_rules! create_filter {
 
 impl SinkerUtil {
     fn parse_http_endpoint(value: &str) -> anyhow::Result<(Url, String, String)> {
-        let url = Url::parse(value).code(ErrorCode::InvalidConfig)?;
+        let url = Url::parse(value).with_context(|| {
+            DtError::InvalidConfig(format!("invalid destination HTTP URL: {value}"))
+        })?;
         let host = url
             .host_str()
             .map(str::to_string)
@@ -326,8 +328,7 @@ impl SinkerUtil {
                     let producer = Producer::from_hosts(brokers.clone())
                         .with_ack_timeout(Duration::from_secs(ack_timeout_secs))
                         .with_required_acks(acks)
-                        .create()
-                        .code(ErrorCode::ConnectionFailed)?;
+                        .create()?;
                     // the sending performance of RdkafkaSinker is much worse than KafkaSinker
                     let sinker = KafkaSinker {
                         batch_size,
@@ -492,8 +493,7 @@ impl SinkerUtil {
                     let http_client = reqwest::Client::builder()
                         .http1_title_case_headers()
                         .redirect(custom)
-                        .build()
-                        .code(ErrorCode::InvalidConfig)?;
+                        .build()?;
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
                         &url,
                         &DbType::StarRocks,
@@ -573,8 +573,7 @@ impl SinkerUtil {
                     let http_client = reqwest::Client::builder()
                         .http1_title_case_headers()
                         .redirect(custom)
-                        .build()
-                        .code(ErrorCode::InvalidConfig)?;
+                        .build()?;
                     let sinker = ClickhouseSinker {
                         http_client,
                         host,

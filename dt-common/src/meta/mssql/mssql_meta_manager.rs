@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, DtResultExt, ErrorCode, ErrorObject},
+    error::{DtError, DtErrorContextExt, DtResultExt, ErrorObject},
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         ddl_meta::ddl_data::DdlData,
@@ -196,17 +196,12 @@ impl MssqlMetaManager {
         let rows = connection
             .client_mut()
             .query(DATABASES_SQL, &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         rows.iter()
-            .map(|row| {
-                MssqlColValueConvertor::from_query_required_string(row, "database_name")
-                    .code(ErrorCode::MetadataReadFailed)
-            })
+            .map(|row| MssqlColValueConvertor::from_query_required_string(row, "database_name"))
             .collect()
     }
 
@@ -216,17 +211,12 @@ impl MssqlMetaManager {
         let rows = connection
             .client_mut()
             .query(&sql, &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         rows.iter()
-            .map(|row| {
-                MssqlColValueConvertor::from_query_required_string(row, "schema_name")
-                    .code(ErrorCode::MetadataReadFailed)
-            })
+            .map(|row| MssqlColValueConvertor::from_query_required_string(row, "schema_name"))
             .collect()
     }
 
@@ -236,17 +226,12 @@ impl MssqlMetaManager {
         let mut connection = self.connection_pool.get().await?;
         let rows = query
             .query(connection.client_mut())
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         rows.iter()
-            .map(|row| {
-                MssqlColValueConvertor::from_query_required_string(row, "table_name")
-                    .code(ErrorCode::MetadataReadFailed)
-            })
+            .map(|row| MssqlColValueConvertor::from_query_required_string(row, "table_name"))
             .collect()
     }
 
@@ -256,11 +241,9 @@ impl MssqlMetaManager {
         let rows = connection
             .client_mut()
             .query(&sql, &[])
-            .await
-            .code(ErrorCode::MetadataReadFailed)?
+            .await?
             .into_first_result()
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+            .await?;
 
         rows.iter()
             .map(|row| {
@@ -310,11 +293,9 @@ impl MssqlMetaManager {
         let rows = query
             .query(connection.client_mut())
             .await
-            .code(ErrorCode::MetadataReadFailed)
             .object(Self::table_object(schema, tb))?
             .into_first_result()
             .await
-            .code(ErrorCode::MetadataReadFailed)
             .object(Self::table_object(schema, tb))?;
 
         let mut cols = Vec::with_capacity(rows.len());
@@ -326,25 +307,20 @@ impl MssqlMetaManager {
         let mut generated_always_type_map = HashMap::with_capacity(rows.len());
         let mut rowversion_cols = HashSet::new();
         for row in rows {
-            let col = MssqlColValueConvertor::from_query_required_string(&row, "column_name")
-                .code(ErrorCode::MetadataReadFailed)?;
+            let col = MssqlColValueConvertor::from_query_required_string(&row, "column_name")?;
             let user_type_name =
-                MssqlColValueConvertor::from_query_required_string(&row, "user_type_name")
-                    .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_string(&row, "user_type_name")?;
             let system_type_name =
-                MssqlColValueConvertor::from_query_required_string(&row, "system_type_name")
-                    .code(ErrorCode::MetadataReadFailed)?;
-            let max_length = MssqlColValueConvertor::from_query_required_i16(&row, "max_length")
-                .code(ErrorCode::MetadataReadFailed)?;
-            let is_nullable = MssqlColValueConvertor::from_query_required_bool(&row, "is_nullable")
-                .code(ErrorCode::MetadataReadFailed)?;
-            let is_identity = MssqlColValueConvertor::from_query_required_bool(&row, "is_identity")
-                .code(ErrorCode::MetadataReadFailed)?;
-            let is_computed = MssqlColValueConvertor::from_query_required_bool(&row, "is_computed")
-                .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_string(&row, "system_type_name")?;
+            let max_length = MssqlColValueConvertor::from_query_required_i16(&row, "max_length")?;
+            let is_nullable =
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_nullable")?;
+            let is_identity =
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_identity")?;
+            let is_computed =
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_computed")?;
             let generated_always_type =
-                MssqlColValueConvertor::from_query_required_u8(&row, "generated_always_type")
-                    .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_u8(&row, "generated_always_type")?;
             let col_type = parse_mssql_col_type_with_length(&system_type_name, max_length)
                 .map_err(|error| {
                     DtError::DatabaseUnsupportedTableStructure(
@@ -410,22 +386,18 @@ impl MssqlMetaManager {
         let rows = query
             .query(connection.client_mut())
             .await
-            .code(ErrorCode::MetadataReadFailed)
             .object(Self::table_object(schema, tb))?
             .into_first_result()
             .await
-            .code(ErrorCode::MetadataReadFailed)
             .object(Self::table_object(schema, tb))?;
 
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
         for row in rows {
-            let index_name = MssqlColValueConvertor::from_query_required_string(&row, "index_name")
-                .code(ErrorCode::MetadataReadFailed)?;
+            let index_name =
+                MssqlColValueConvertor::from_query_required_string(&row, "index_name")?;
             let is_primary_key =
-                MssqlColValueConvertor::from_query_required_bool(&row, "is_primary_key")
-                    .code(ErrorCode::MetadataReadFailed)?;
-            let col = MssqlColValueConvertor::from_query_required_string(&row, "column_name")
-                .code(ErrorCode::MetadataReadFailed)?;
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_primary_key")?;
+            let col = MssqlColValueConvertor::from_query_required_string(&row, "column_name")?;
             let key_name = if is_primary_key {
                 RDB_PRIMARY_KEY_FLAG.to_string()
             } else {

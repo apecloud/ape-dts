@@ -7,7 +7,7 @@ use dt_common::{
         connection_auth_config::ConnectionAuthConfig,
         ssl_config::{SslConfig, SslMode},
     },
-    error::{DtError, DtOptionExt, DtResultExt, ErrorCode},
+    error::{DtError, DtOptionExt, DtResultExt},
     log_info, log_warn,
 };
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
@@ -33,10 +33,7 @@ impl PgCdcClient {
         let (config, ssl_config) = self.build_replication_config()?;
         let client = match ssl_config.ssl_mode {
             SslMode::Disable => {
-                let (client, connection) = config
-                    .connect(NoTls)
-                    .await
-                    .code(ErrorCode::ConnectionFailed)?;
+                let (client, connection) = config.connect(NoTls).await?;
                 tokio::spawn(async move {
                     log_info!("postgres replication connection starts",);
                     if let Err(e) = connection.await {
@@ -47,10 +44,7 @@ impl PgCdcClient {
             }
             _ => {
                 let connector = Self::build_tls_connector(&ssl_config)?;
-                let (client, connection) = config
-                    .connect(connector)
-                    .await
-                    .code(ErrorCode::ConnectionFailed)?;
+                let (client, connection) = config.connect(connector).await?;
                 tokio::spawn(async move {
                     log_info!("postgres replication connection starts",);
                     if let Err(e) = connection.await {
@@ -65,7 +59,11 @@ impl PgCdcClient {
 
     fn build_replication_config(&self) -> anyhow::Result<(Config, SslConfig)> {
         let (sanitized_url, url_ssl_config) = Self::parse_url_ssl_config(&self.url)?;
-        let mut config: Config = Config::from_str(&sanitized_url).code(ErrorCode::InvalidConfig)?;
+        let mut config: Config =
+            Config::from_str(&sanitized_url).context(DtError::DatabaseInvalidConfig(
+                DbType::Pg,
+                "failed to parse PostgreSQL replication URL".to_string(),
+            ))?;
         config.replication_mode(ReplicationMode::Logical);
 
         let mut effective_ssl_config = url_ssl_config.unwrap_or_else(Self::disabled_ssl_config);
@@ -209,20 +207,14 @@ impl PgCdcClient {
             "SELECT * FROM {} WHERE pubname = '{}'",
             "pg_catalog.pg_publication", pub_name
         );
-        let res = client
-            .simple_query(&query)
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+        let res = client.simple_query(&query).await?;
         let pub_exists = res.len() > 1;
         log_info!("publication: {} exists: {}", pub_name, pub_exists);
 
         if !pub_exists {
             let query = format!("CREATE PUBLICATION {} FOR ALL TABLES", pub_name);
             log_info!("execute: {}", query);
-            client
-                .simple_query(&query)
-                .await
-                .code(ErrorCode::StatementFailed)?;
+            client.simple_query(&query).await?;
         }
 
         // check slot exists
@@ -257,10 +249,7 @@ impl PgCdcClient {
                     "pg_drop_replication_slot", self.slot_name
                 );
                 log_info!("execute: {}", query);
-                client
-                    .simple_query(&query)
-                    .await
-                    .code(ErrorCode::StatementFailed)?;
+                client.simple_query(&query).await?;
             }
 
             let query = format!(
@@ -269,10 +258,7 @@ impl PgCdcClient {
             );
             log_info!("execute: {}", query);
 
-            let res = client
-                .simple_query(&query)
-                .await
-                .code(ErrorCode::StatementFailed)?;
+            let res = client.simple_query(&query).await?;
             // get the lsn for the newly created slot
             start_lsn = res
                 .iter()
@@ -307,10 +293,7 @@ impl PgCdcClient {
             "SELECT * FROM {} WHERE slot_name = '{}'",
             "pg_catalog.pg_replication_slots", self.slot_name
         );
-        let res = client
-            .simple_query(&query)
-            .await
-            .code(ErrorCode::MetadataReadFailed)?;
+        let res = client.simple_query(&query).await?;
         let slot_exists = res.len() > 1;
         log_info!("slot: {} exists: {}", self.slot_name, slot_exists);
 
@@ -335,14 +318,8 @@ impl PgCdcClient {
         let (pub_name, start_lsn) = self.prepare_slot(client).await?;
 
         // set extra_float_digits to max so no precision will lose
-        client
-            .simple_query("SET extra_float_digits=3")
-            .await
-            .code(ErrorCode::StatementFailed)?;
-        client
-            .simple_query("SET TIME ZONE 'UTC'")
-            .await
-            .code(ErrorCode::StatementFailed)?;
+        client.simple_query("SET extra_float_digits=3").await?;
+        client.simple_query("SET TIME ZONE 'UTC'").await?;
 
         // start replication slot
         let options = format!(
@@ -355,10 +332,7 @@ impl PgCdcClient {
         );
         log_info!("execute: {}", query);
 
-        let copy_stream = client
-            .copy_both_simple::<bytes::Bytes>(&query)
-            .await
-            .code(ErrorCode::StatementFailed)?;
+        let copy_stream = client.copy_both_simple::<bytes::Bytes>(&query).await?;
         let stream = LogicalReplicationStream::new(copy_stream);
         Ok((stream, start_lsn))
     }

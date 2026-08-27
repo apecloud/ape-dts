@@ -5,7 +5,7 @@ use dt_common::meta::{
     rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
 };
 use dt_common::{
-    error::{DtResultExt, ErrorCode, ErrorReport},
+    error::{ErrorCode, ErrorReport},
     log_debug,
 };
 
@@ -160,12 +160,8 @@ impl RdbMerger {
     }
 
     fn check_key_changed(tb_meta: &RdbTbMeta, row_data: &RowData) -> anyhow::Result<bool> {
-        let before = row_data
-            .require_before()
-            .code(ErrorCode::InvariantViolated)?;
-        let after = row_data
-            .require_after()
-            .code(ErrorCode::InvariantViolated)?;
+        let before = row_data.require_before()?;
+        let after = row_data.require_after()?;
         for key_cols in tb_meta.key_map.values() {
             for col in key_cols {
                 if before.get(col) != after.get(col) {

@@ -719,7 +719,7 @@ impl RecheckKey {
                     .get(col)
                     .cloned()
                     .map(|value| (col.clone(), value))
-                    .or_dt_error(DtError::StatementFailed(format!(
+                    .or_dt_error(DtError::InvariantViolated(format!(
                         "missing ID column value: {col}"
                     )))
                     .stage(Stage::Checker)

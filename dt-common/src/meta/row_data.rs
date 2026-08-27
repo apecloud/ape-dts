@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
-    error::{DtError, DtResultExt, ErrorObject},
+    error::{DtError, DtOptionExt, DtResultExt, ErrorObject},
     meta::adaptor::{
         mssql_col_value_convertor::MssqlColValueConvertor,
         mysql_col_value_convertor::MysqlColValueConvertor,
@@ -150,10 +150,12 @@ impl RowData {
             }
             let col_val =
                 MysqlColValueConvertor::from_query_mysql_compatible(row, col, col_type, db_type)
-                    .context(DtError::StatementFailed(format!(
-                        "failed to convert column {}.{}.{}",
-                        tb_meta.basic.schema, tb_meta.basic.tb, col
-                    )))
+                    .with_context(|| {
+                        format!(
+                            "failed to convert column {}.{}.{}",
+                            tb_meta.basic.schema, tb_meta.basic.tb, col
+                        )
+                    })
                     .object(ErrorObject {
                         schema: Some(tb_meta.basic.schema.clone()),
                         table: Some(tb_meta.basic.tb.clone()),
@@ -178,10 +180,12 @@ impl RowData {
             }
 
             let col_value = PgColValueConvertor::from_query(row, col, col_type)
-                .context(DtError::StatementFailed(format!(
-                    "failed to convert column {}.{}.{}",
-                    tb_meta.basic.schema, tb_meta.basic.tb, col
-                )))
+                .with_context(|| {
+                    format!(
+                        "failed to convert column {}.{}.{}",
+                        tb_meta.basic.schema, tb_meta.basic.tb, col
+                    )
+                })
                 .object(ErrorObject {
                     schema: Some(tb_meta.basic.schema.clone()),
                     table: Some(tb_meta.basic.tb.clone()),
@@ -207,10 +211,12 @@ impl RowData {
 
             let col_value =
                 MssqlColValueConvertor::from_query(row, col, tb_meta.get_col_type(col)?)
-                    .context(DtError::StatementFailed(format!(
-                        "failed to convert column {}.{}.{}",
-                        tb_meta.basic.schema, tb_meta.basic.tb, col
-                    )))
+                    .with_context(|| {
+                        format!(
+                            "failed to convert column {}.{}.{}",
+                            tb_meta.basic.schema, tb_meta.basic.tb, col
+                        )
+                    })
                     .object(ErrorObject {
                         schema: Some(tb_meta.basic.schema.clone()),
                         table: Some(tb_meta.basic.tb.clone()),
@@ -248,39 +254,39 @@ impl RowData {
     }
 
     pub fn require_after(&self) -> anyhow::Result<&HashMap<String, ColValue>> {
-        self.after.as_ref().with_context(|| {
-            format!(
+        self.after
+            .as_ref()
+            .or_dt_error(DtError::InvariantViolated(format!(
                 "row_data after is missing, schema: {}, tb: {}",
                 self.schema, self.tb
-            )
-        })
+            )))
     }
 
     pub fn require_before(&self) -> anyhow::Result<&HashMap<String, ColValue>> {
-        self.before.as_ref().with_context(|| {
-            format!(
+        self.before
+            .as_ref()
+            .or_dt_error(DtError::InvariantViolated(format!(
                 "row_data before is missing, schema: {}, tb: {}",
                 self.schema, self.tb
-            )
-        })
+            )))
     }
 
     pub fn require_after_mut(&mut self) -> anyhow::Result<&mut HashMap<String, ColValue>> {
-        self.after.as_mut().with_context(|| {
-            format!(
+        self.after
+            .as_mut()
+            .or_dt_error(DtError::InvariantViolated(format!(
                 "row_data after is missing, schema: {}, tb: {}",
                 self.schema, self.tb
-            )
-        })
+            )))
     }
 
     pub fn require_before_mut(&mut self) -> anyhow::Result<&mut HashMap<String, ColValue>> {
-        self.before.as_mut().with_context(|| {
-            format!(
+        self.before
+            .as_mut()
+            .or_dt_error(DtError::InvariantViolated(format!(
                 "row_data before is missing, schema: {}, tb: {}",
                 self.schema, self.tb
-            )
-        })
+            )))
     }
 
     fn convert_raw_string_col_values(col_values: &mut HashMap<String, ColValue>) {

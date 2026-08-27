@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use dt_common::{
     config::{
         config_enums::{DbType, RdbTransactionIsolation, SinkType, TaskKind, TaskType},
@@ -13,7 +13,7 @@ use dt_common::{
         sinker_config::{BasicSinkerConfig, SinkerConfig},
         task_config::TaskConfig,
     },
-    error::{DtError, DtResultExt, EndpointRole, ErrorCode},
+    error::{DtError, DtResultExt, EndpointRole},
     log_info, log_warn,
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
@@ -148,10 +148,7 @@ impl TaskUtil {
             }
         }
 
-        conn_pool
-            .connect_with(conn_options)
-            .await
-            .code(ErrorCode::ConnectionFailed)
+        Ok(conn_pool.connect_with(conn_options).await?)
     }
 
     pub fn build_mysql_conn_settings(
@@ -229,10 +226,7 @@ impl TaskUtil {
             });
         }
 
-        let conn_pool = pool_options
-            .connect_with(conn_options)
-            .await
-            .code(ErrorCode::ConnectionFailed)?;
+        let conn_pool = pool_options.connect_with(conn_options).await?;
         Ok(conn_pool)
     }
 
@@ -411,9 +405,13 @@ impl TaskUtil {
     ) -> anyhow::Result<mongodb::Client> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
-        let mut client_options = ClientOptions::parse(&final_url)
-            .await
-            .code(ErrorCode::InvalidConfig)?;
+        let mut client_options =
+            ClientOptions::parse(&final_url)
+                .await
+                .context(DtError::DatabaseInvalidConfig(
+                    DbType::Mongo,
+                    "failed to parse MongoDB client options".to_string(),
+                ))?;
         // app_name only for debug usage
         if let Some(app) = app_name {
             client_options.app_name = Some(app.to_string());
@@ -423,7 +421,10 @@ impl TaskUtil {
         }
         client_options.max_pool_size = max_pool_size;
 
-        Client::with_options(client_options).code(ErrorCode::InvalidConfig)
+        Client::with_options(client_options).context(DtError::DatabaseInvalidConfig(
+            DbType::Mongo,
+            "failed to create MongoDB client".to_string(),
+        ))
     }
 
     pub fn check_enable_sqlx_log(log_level: &str) -> bool {
@@ -524,7 +525,7 @@ impl TaskUtil {
 
         let mut total_records = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
             let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
@@ -578,7 +579,7 @@ WHERE
 
         let mut total_length = 0;
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let schema: String = row.try_get(0)?;
             let table_name: String = row.try_get(1)?;
             let row_count: i64 = row.try_get(2)?;
@@ -611,11 +612,9 @@ WHERE
             let mut connection = connection_pool.get().await?;
             let rows = query
                 .query(connection.client_mut())
-                .await
-                .code(ErrorCode::MetadataReadFailed)?
+                .await?
                 .into_first_result()
-                .await
-                .code(ErrorCode::MetadataReadFailed)?;
+                .await?;
             for row in rows {
                 let db = MssqlColValueConvertor::from_query_required_string(&row, "database_name")?;
                 let schema =
@@ -717,7 +716,7 @@ WHERE
             FROM information_schema.schemata
             WHERE catalog_name = current_database()";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let schema: String = row.try_get(0)?;
             if SystemDb::is_system_db(&schema, &DbType::Pg) {
                 continue;
@@ -774,7 +773,7 @@ WHERE
             schema
         );
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let tb: String = row.try_get(0)?;
             tbs.push(tb);
         }
@@ -793,7 +792,7 @@ WHERE
 
         let sql = "SELECT schema_name FROM information_schema.schemata";
         let mut rows = sqlx::query(sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let db = SqlUtil::try_get_mysql_string(&row, 0)?;
             if SystemDb::is_system_db(&db, &DbType::Mysql) {
                 continue;
@@ -818,7 +817,7 @@ WHERE
             WHERE table_schema = ? 
             AND table_type = 'BASE TABLE'";
         let mut rows = sqlx::query(sql).bind(db).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let tb = SqlUtil::try_get_mysql_string(&row, 0)?;
             tbs.push(tb);
         }

@@ -2,7 +2,6 @@ use std::cmp;
 
 use async_trait::async_trait;
 use dt_common::{
-    error::{DtErrorContextExt, ErrorCode},
     meta::{avro::avro_converter::AvroConverter, row_data::RowData},
     utils::limit_queue::LimitedQueue,
 };
@@ -70,7 +69,7 @@ impl RdkafkaSinker {
         for future in futures {
             let start_time = Instant::now();
             if let Err((error, _message)) = future.await {
-                return Err(error.code(ErrorCode::StatementFailed));
+                return Err(error.into());
             }
             rts.push((start_time.elapsed().as_millis() as u64, 1));
         }

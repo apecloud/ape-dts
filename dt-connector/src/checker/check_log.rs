@@ -2,7 +2,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Context;
 use dt_common::{
-    error::{DtResultExt, ErrorCode, Stage},
+    error::{DtError, DtResultExt, Stage},
     meta::col_value::ColValue,
     utils::serialize_util::SerializeUtil,
 };
@@ -198,7 +198,9 @@ impl FromStr for CheckLog {
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         serde_json::from_str(str)
             .with_context(|| format!("invalid check log: [{}]", str))
-            .code(ErrorCode::StatementFailed)
+            .dt_error(DtError::DataDecodeFailed(
+                "failed to parse checker log".to_string(),
+            ))
             .stage(Stage::Checker)
     }
 }

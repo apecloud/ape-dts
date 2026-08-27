@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
-use dt_common::error::{DtError, DtOptionExt, DtResultExt, ErrorCode, Stage};
+use dt_common::error::{DtError, DtOptionExt, DtResultExt, Stage};
 use url::Url;
 
 const SERVER_ID_MIN: u64 = 10001;
@@ -100,9 +100,8 @@ pub fn infer_db_type(url: &str, explicit: Option<DbType>) -> Result<DbType> {
         }
     } else if matches!(inferred, DbType::Pg) {
         let parsed = Url::parse(url)
-            .code(ErrorCode::InvalidConfig)
-            .stage(Stage::Bootstrap)
-            .with_context(|| format!("Invalid endpoint URL [{url}]"))?;
+            .with_context(|| DtError::InvalidConfig(format!("Invalid endpoint URL [{url}]")))
+            .stage(Stage::Bootstrap)?;
         if parsed.path().trim_matches('/').is_empty() {
             bail!(DtError::invalid_config(format!(
                 "Database is required in inferred {} URL [{url}]",

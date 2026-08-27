@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtResultExt, ErrorCode},
+    error::DtError,
     meta::{col_value::ColValue, row_data::RowData, row_type::RowType},
     utils::{limit_queue::LimitedQueue, sql_util::SqlUtil},
 };
@@ -97,11 +97,7 @@ impl ClickhouseSinker {
 
         let start_time = Instant::now();
         let mut rts = LimitedQueue::new(1);
-        let response = self
-            .http_client
-            .execute(request)
-            .await
-            .code(ErrorCode::StatementFailed)?;
+        let response = self.http_client.execute(request).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self
             .base_sinker
@@ -184,12 +180,12 @@ impl ClickhouseSinker {
             .request(Method::POST, url)
             .basic_auth(&self.username, password)
             .body(body);
-        post.build().code(ErrorCode::StatementFailed)
+        Ok(post.build()?)
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        response.text().await.code(ErrorCode::StatementFailed)?;
+        response.text().await?;
         if status_code != StatusCode::OK {
             return Err(DtError::HttpRejected {
                 status: status_code.as_u16(),

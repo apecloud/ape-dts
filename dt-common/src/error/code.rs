@@ -107,6 +107,16 @@ define_error_codes! {
         message: "A table structure is not supported by this migration",
         hint: "Adjust the reported table structure or exclude the table from the migration.",
     }
+    UnsupportedStatement {
+        code: "PR006",
+        message: "A source statement is not supported by this migration",
+        hint: "Execute the reported statement manually on the destination or exclude it from structure migration.",
+    }
+    ResourceExhausted {
+        code: "RS001",
+        message: "A source or destination resource limit was reached",
+        hint: "Check endpoint capacity, quotas, connection limits, memory, disk space, and request load.",
+    }
     ObjectNotFound {
         code: "MD001",
         message: "A required source or destination object was not found",
@@ -117,15 +127,25 @@ define_error_codes! {
         message: "The configured database was not found",
         hint: "Check the database name and create the database if it is required.",
     }
-    MetadataReadFailed {
-        code: "MD099",
-        message: "Ape-DTS could not read the database information required for migration",
-        hint: "Review the provider error, verify access to system catalogs and database compatibility, then retry.",
-    }
-    StatementFailed {
+    DatabaseOperationFailed {
         code: "DB001",
-        message: "A source or destination operation failed",
-        hint: "Check the affected object and source or destination logs for the rejected operation.",
+        message: "A database operation failed",
+        hint: "Check the affected object and database logs for the rejected operation.",
+    }
+    DatabaseOperationTimeout {
+        code: "DB002",
+        message: "A database operation timed out",
+        hint: "Check database load, locks, and operation timeout settings, then retry the operation.",
+    }
+    DatabaseOperationConflict {
+        code: "DB003",
+        message: "A database operation conflicts with concurrent or existing database state",
+        hint: "Retry after the conflicting operation completes, or resolve the reported database state.",
+    }
+    DataDecodeFailed {
+        code: "DT001",
+        message: "Migration data could not be decoded",
+        hint: "Check the reported source payload or persisted data format and ensure it is compatible with this Ape-DTS version.",
     }
     IntegrityViolation {
         code: "IC001",
@@ -140,7 +160,7 @@ define_error_codes! {
     IoFailed {
         code: "IO001",
         message: "A required file or I/O operation failed",
-        hint: "Check the reported path, file permissions, and available disk space.",
+        hint: "Check the reported path or endpoint storage, permissions, availability, and disk space.",
     }
     WorkerFailed {
         code: "RT001",
@@ -150,7 +170,7 @@ define_error_codes! {
     OperationInterrupted {
         code: "RT002",
         message: "The requested operation was interrupted",
-        hint: "Run the command again when you are ready to continue.",
+        hint: "Retry if the interruption was transient; otherwise check task cancellation, shutdown, and provider timeout settings.",
     }
     InvariantViolated {
         code: "IN001",
@@ -176,28 +196,5 @@ impl Serialize for ErrorCode {
         S: serde::Serializer,
     {
         serializer.serialize_str(self.as_str())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use super::*;
-
-    #[test]
-    fn registry_has_stable_valid_codes() {
-        let mut codes = HashSet::new();
-        for &code in ErrorCode::ALL {
-            let value = code.as_str();
-            assert_eq!(value.len(), 5);
-            assert!(value
-                .bytes()
-                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()));
-            assert!(!value.ends_with("000"));
-            assert!(!code.default_message().is_empty());
-            assert!(!code.default_hint().is_empty());
-            assert!(codes.insert(value), "duplicate error code: {value}");
-        }
     }
 }

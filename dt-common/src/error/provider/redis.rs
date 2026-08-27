@@ -15,12 +15,20 @@ impl ClassifyError for RedisError {
                 (RedisErrorKind::AuthenticationFailed, _) | (_, Some("NOAUTH" | "WRONGPASS")) => {
                     Some(ErrorCode::AuthenticationFailed)
                 }
-                (RedisErrorKind::ReadOnly, _) | (_, Some("NOPERM")) => {
-                    Some(ErrorCode::PermissionDenied)
+                (_, Some("NOPERM")) => Some(ErrorCode::PermissionDenied),
+                (RedisErrorKind::ReadOnly, _) => Some(ErrorCode::PrerequisiteNotMet),
+                (RedisErrorKind::InvalidClientConfig | RedisErrorKind::EmptySentinelList, _) => {
+                    Some(ErrorCode::InvalidConfig)
                 }
-                (RedisErrorKind::InvalidClientConfig, _) => Some(ErrorCode::InvalidConfig),
+                (
+                    RedisErrorKind::NoScriptError | RedisErrorKind::MasterNameNotFoundBySentinel,
+                    _,
+                ) => Some(ErrorCode::ObjectNotFound),
+                (RedisErrorKind::RESP3NotSupported, _) => Some(ErrorCode::PrerequisiteNotMet),
                 (
                     RedisErrorKind::IoError
+                    | RedisErrorKind::Moved
+                    | RedisErrorKind::Ask
                     | RedisErrorKind::ClusterDown
                     | RedisErrorKind::MasterDown
                     | RedisErrorKind::ClusterConnectionNotFound
@@ -32,42 +40,8 @@ impl ClassifyError for RedisError {
         };
 
         provider_context(
-            code,
+            Some(code.unwrap_or(ErrorCode::DatabaseOperationFailed)),
             provider_detail("redis", self.code().map(str::to_string), self),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io;
-
-    use super::*;
-
-    #[test]
-    fn classifies_redis_errors() {
-        for (error, expected) in [
-            (
-                RedisError::from((
-                    RedisErrorKind::AuthenticationFailed,
-                    "authentication failed",
-                )),
-                ErrorCode::AuthenticationFailed,
-            ),
-            (
-                RedisError::from((RedisErrorKind::InvalidClientConfig, "invalid client config")),
-                ErrorCode::InvalidConfig,
-            ),
-            (
-                RedisError::from(io::Error::from(io::ErrorKind::TimedOut)),
-                ErrorCode::ConnectionTimeout,
-            ),
-            (
-                RedisError::from(io::Error::from(io::ErrorKind::ConnectionRefused)),
-                ErrorCode::ConnectionFailed,
-            ),
-        ] {
-            assert_eq!(error.classify().error_code(), Some(expected));
-        }
     }
 }

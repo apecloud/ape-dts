@@ -6,7 +6,7 @@ use std::{
 use anyhow::bail;
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt, ErrorCode},
+    error::DtError,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
         struct_meta::{
@@ -601,7 +601,7 @@ impl MysqlStructFetcher {
                 }
             }
             Err(error) => {
-                bail! {error.code(ErrorCode::StatementFailed)}
+                bail! {error}
             }
         }
         Ok(text)

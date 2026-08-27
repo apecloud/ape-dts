@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
-use dt_common::{
-    error::{DtResultExt, ErrorCode},
-    meta::{
-        adaptor::pg_col_value_convertor::PgColValueConvertor,
-        col_value::ColValue,
-        pg::{pg_col_type::PgColType, pg_value_type::PgValueType},
-    },
+use dt_common::meta::{
+    adaptor::pg_col_value_convertor::PgColValueConvertor,
+    col_value::ColValue,
+    pg::{pg_col_type::PgColType, pg_value_type::PgValueType},
 };
 use futures::TryStreamExt;
 use sqlx::{postgres::PgRow, Pool, Postgres, Row};
@@ -230,7 +227,7 @@ impl PgStructCheckFetcher {
     ) -> anyhow::Result<Vec<HashMap<String, String>>> {
         let mut results = Vec::new();
         let mut rows = sqlx::query(sql).fetch(&self.conn_pool);
-        while let Some(row) = rows.try_next().await.code(ErrorCode::MetadataReadFailed)? {
+        while let Some(row) = rows.try_next().await? {
             let res = Self::parse_row(&row, col_names, col_types)?;
             results.push(res);
         }

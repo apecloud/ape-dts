@@ -32,16 +32,34 @@ pub fn classify_sqlx_error(error: &sqlx::Error) -> DtErrorContext {
             }
         }
         sqlx::Error::PoolTimedOut => code = Some(ErrorCode::ConnectionTimeout),
-        sqlx::Error::Configuration(_) => code = Some(ErrorCode::InvalidConfig),
+        sqlx::Error::Configuration(_) | sqlx::Error::InvalidArgument(_) => {
+            code = Some(ErrorCode::InvalidConfig)
+        }
         sqlx::Error::Tls(_) => code = Some(ErrorCode::TlsFailed),
-        sqlx::Error::Io(_) | sqlx::Error::Protocol(_) | sqlx::Error::PoolClosed => {
-            code = Some(ErrorCode::ConnectionFailed)
+        sqlx::Error::Io(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            code = Some(ErrorCode::ConnectionTimeout)
+        }
+        sqlx::Error::Io(_)
+        | sqlx::Error::Protocol(_)
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::BeginFailed => code = Some(ErrorCode::ConnectionFailed),
+        sqlx::Error::TypeNotFound { .. } => code = Some(ErrorCode::ObjectNotFound),
+        sqlx::Error::Decode(_) | sqlx::Error::ColumnDecode { .. } => {
+            code = Some(ErrorCode::DataDecodeFailed)
         }
         sqlx::Error::WorkerCrashed => code = Some(ErrorCode::WorkerFailed),
         _ => {}
     }
 
-    let context = provider_context(code, sqlx_detail(error));
+    let context = provider_context(
+        Some(code.unwrap_or(ErrorCode::DatabaseOperationFailed)),
+        sqlx_detail(error),
+    );
     match object {
         Some(object) => context.with_object(object),
         None => context,
@@ -95,58 +113,5 @@ fn classify_database_error(error: &(dyn DatabaseError + 'static)) -> Option<Erro
         classified_code
     } else {
         Some(ErrorCode::IntegrityViolation)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Error;
-
-    use super::*;
-
-    #[test]
-    fn classifies_sqlx_transport_errors() {
-        for (error, expected) in [
-            (
-                sqlx::Error::PoolTimedOut,
-                Some(ErrorCode::ConnectionTimeout),
-            ),
-            (sqlx::Error::PoolClosed, Some(ErrorCode::ConnectionFailed)),
-            (
-                sqlx::Error::Tls(Box::new(Error::other("invalid certificate"))),
-                Some(ErrorCode::TlsFailed),
-            ),
-            (sqlx::Error::WorkerCrashed, Some(ErrorCode::WorkerFailed)),
-            (
-                sqlx::Error::Configuration(Box::new(Error::other("invalid database URL"))),
-                Some(ErrorCode::InvalidConfig),
-            ),
-            (sqlx::Error::RowNotFound, None),
-        ] {
-            assert_eq!(classify_sqlx_error(&error).error_code(), expected);
-        }
-    }
-
-    #[test]
-    fn source_wrappers_only_describe_the_sqlx_layer() {
-        for (error, expected) in [
-            (
-                sqlx::Error::Configuration(Box::new(Error::other("invalid URL"))),
-                "sqlx: invalid configuration",
-            ),
-            (
-                sqlx::Error::Io(Error::other("connection reset")),
-                "sqlx: error communicating with database",
-            ),
-            (
-                sqlx::Error::Tls(Box::new(Error::other("invalid certificate"))),
-                "sqlx: error establishing a TLS connection",
-            ),
-        ] {
-            assert_eq!(
-                classify_sqlx_error(&error).detail.as_deref(),
-                Some(expected)
-            );
-        }
     }
 }

@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn provider_code_owns_identity_while_context_supplies_scope() {
         let error = anyhow::Error::new(sqlx::Error::PoolTimedOut)
-            .code(ErrorCode::StatementFailed)
+            .code(ErrorCode::DatabaseOperationFailed)
             .stage(Stage::Sinker)
             .endpoint(EndpointRole::Destination)
             .context("pipeline.start failed");
@@ -265,12 +265,12 @@ mod tests {
     }
 
     #[test]
-    fn explicit_code_is_fallback_for_unclassified_provider_error() {
-        let error = sqlx::Error::RowNotFound.code(ErrorCode::StatementFailed);
+    fn provider_classifies_unknown_driver_error_as_operation_failed() {
+        let error = anyhow::Error::new(sqlx::Error::RowNotFound);
 
         let report = ErrorReport::from_anyhow(&error);
 
-        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(report.code, ErrorCode::DatabaseOperationFailed);
         assert_eq!(
             report.details,
             ["sqlx: no rows returned by a query that expected to return at least one row"]
@@ -315,7 +315,7 @@ mod tests {
             "invalid snapshot payload".to_string(),
         ));
         let report = ErrorReport::from_anyhow(&redis_error);
-        assert_eq!(report.code, ErrorCode::StatementFailed);
+        assert_eq!(report.code, ErrorCode::DatabaseOperationFailed);
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
     fn scalar_directions_are_field_specific_and_arrays_remove_duplicates() {
         let error = anyhow!("same detail")
             .code(ErrorCode::ConnectionTimeout)
-            .code(ErrorCode::StatementFailed)
+            .code(ErrorCode::DatabaseOperationFailed)
             .message("same message")
             .message("same message")
             .stage(Stage::Extractor)

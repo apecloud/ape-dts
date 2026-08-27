@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use dt_common::{
     config::config_enums::DbType,
-    error::{DtError, DtResultExt, ErrorCode},
+    error::DtError,
     log_error,
     meta::{
         col_value::ColValue,
@@ -154,11 +154,7 @@ impl StarRocksSinker {
         let request = self.build_request(&url, op, body)?;
 
         let start_time = Instant::now();
-        let response = self
-            .http_client
-            .execute(request)
-            .await
-            .code(ErrorCode::StatementFailed)?;
+        let response = self.http_client.execute(request).await?;
         rts.push((start_time.elapsed().as_millis() as u64, 1));
         let task_id = self.base_sinker.task_id_for_db_schema_tb("", &db, &tb);
         self.base_sinker.ensure_monitor_for(&task_id);
@@ -277,12 +273,12 @@ impl StarRocksSinker {
                 _ => {}
             }
         }
-        put.build().code(ErrorCode::StatementFailed)
+        Ok(put.build()?)
     }
 
     async fn check_response(response: Response) -> anyhow::Result<()> {
         let status_code = response.status();
-        let response_text = &response.text().await.code(ErrorCode::StatementFailed)?;
+        let response_text = &response.text().await?;
         if status_code != StatusCode::OK {
             return Err(DtError::HttpRejected {
                 status: status_code.as_u16(),
