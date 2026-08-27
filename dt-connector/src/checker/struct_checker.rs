@@ -77,12 +77,14 @@ pub struct StructCheckerHandle {
 }
 
 fn struct_table_summary(
+    db_type: &DbType,
     key: &StructCheckKey,
     checked_count: usize,
     miss: bool,
     diff: bool,
 ) -> Option<CheckTableSummaryLog> {
-    let object_type = key.key.split('.').next()?;
+    let mut parts = key.key.splitn(4, '.');
+    let object_type = parts.next()?;
     if !matches!(
         object_type,
         "table"
@@ -99,10 +101,19 @@ fn struct_table_summary(
         return None;
     }
 
+    let (db, schema, tb) = if matches!(db_type, DbType::Mssql) {
+        (key.db.clone(), key.schema.clone(), key.tb.clone())
+    } else {
+        (
+            String::new(),
+            parts.next()?.to_string(),
+            parts.next()?.to_string(),
+        )
+    };
     Some(CheckTableSummaryLog {
-        db: key.db.clone(),
-        schema: key.schema.clone(),
-        tb: key.tb.clone(),
+        db,
+        schema,
+        tb,
         checked_count,
         miss_count: usize::from(miss),
         diff_count: usize::from(diff),
@@ -377,6 +388,7 @@ impl StructCheckerHandle {
     ) -> anyhow::Result<CheckSummaryLog> {
         let dst_map = self.build_dst_sql_map(namespaces).await?;
         Ok(Self::compare_sql_maps(
+            &self.db_type,
             src_sql_map,
             dst_map,
             &self.start_time,
@@ -386,6 +398,7 @@ impl StructCheckerHandle {
     }
 
     fn compare_sql_maps(
+        db_type: &DbType,
         src_sql_map: &StructSqlMap,
         mut dst_map: StructSqlMap,
         start_time: &str,
@@ -403,7 +416,7 @@ impl StructCheckerHandle {
             let dst_sql = dst_map.remove(key);
             let is_miss = dst_sql.is_none();
             let is_diff = dst_sql.as_ref().is_some_and(|dst_sql| dst_sql != src_sql);
-            if let Some(table) = struct_table_summary(key, 1, is_miss, is_diff) {
+            if let Some(table) = struct_table_summary(db_type, key, 1, is_miss, is_diff) {
                 summary.merge_table(table);
             }
             if !is_miss && !is_diff {
@@ -434,7 +447,7 @@ impl StructCheckerHandle {
 
         for (key, dst_sql) in dst_map {
             summary.diff_count += 1;
-            if let Some(table) = struct_table_summary(&key, 0, false, true) {
+            if let Some(table) = struct_table_summary(db_type, &key, 0, false, true) {
                 summary.merge_table(table);
             }
             if log_enabled {
@@ -558,6 +571,7 @@ mod tests {
         ]);
 
         let summary = StructCheckerHandle::compare_sql_maps(
+            &DbType::Mysql,
             &src_sql_map,
             BTreeMap::new(),
             "start",
@@ -588,8 +602,14 @@ mod tests {
             ("index.s1.extra.i1", "s1", "extra", "create index target"),
         ]);
 
-        let summary =
-            StructCheckerHandle::compare_sql_maps(&src_sql_map, dst_sql_map, "start", false, false);
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &DbType::Pg,
+            &src_sql_map,
+            dst_sql_map,
+            "start",
+            false,
+            false,
+        );
 
         assert!(!summary.is_consistent);
         assert_eq!(summary.checked_count, 3);
@@ -690,6 +710,22 @@ mod tests {
     }
 
     #[test]
+    fn non_mssql_summary_uses_legacy_key_path() {
+        for db_type in [DbType::Mysql, DbType::Pg] {
+            let key = StructCheckKey::new(
+                "table.key_schema.key_table".to_string(),
+                "path_db",
+                "path_schema",
+                "path_table",
+            );
+            let summary = struct_table_summary(&db_type, &key, 1, false, false).unwrap();
+            assert!(summary.db.is_empty());
+            assert_eq!(summary.schema, "key_schema");
+            assert_eq!(summary.tb, "key_table");
+        }
+    }
+
+    #[test]
     fn mssql_sequence_and_comment_use_schema_level_summary() {
         for object_type in ["sequence", "sequence_comment"] {
             let key = StructCheckKey::new(
@@ -698,7 +734,7 @@ mod tests {
                 "schema.with.dot",
                 "",
             );
-            let summary = struct_table_summary(&key, 1, false, false).unwrap();
+            let summary = struct_table_summary(&DbType::Mssql, &key, 1, false, false).unwrap();
             assert_eq!(summary.db, "test_db");
             assert_eq!(summary.schema, "schema.with.dot");
             assert!(summary.tb.is_empty());
