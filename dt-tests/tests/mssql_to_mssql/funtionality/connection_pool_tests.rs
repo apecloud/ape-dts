@@ -653,7 +653,7 @@ mod test {
                 .into_results()
                 .await?;
             session.commit().await?;
-            session.post().await?;
+            session.finalize().await?;
         }
 
         {
@@ -669,7 +669,7 @@ mod test {
                 .into_results()
                 .await?;
             session.commit().await?;
-            session.post().await?;
+            session.finalize().await?;
         }
 
         let mut connection = pool.get().await?;

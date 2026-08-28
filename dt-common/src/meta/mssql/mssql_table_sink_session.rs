@@ -1,12 +1,21 @@
 use anyhow::{bail, Context};
+use tiberius::TokenRow;
 
 use super::{
+    mssql_col_type::MssqlColType,
     mssql_connection_pool::{MssqlClient, MssqlConnectionPool, MssqlPooledConnection},
     mssql_tb_meta::MssqlTbMeta,
 };
-use crate::{config::config_enums::DbType, utils::sql_util::SqlUtil};
+use crate::{
+    config::config_enums::DbType,
+    meta::{
+        adaptor::mssql_col_value_convertor::MssqlColValueConvertor, row_data::RowData,
+        row_type::RowType,
+    },
+    utils::sql_util::SqlUtil,
+};
 
-#[must_use = "call post after table writes so the MSSQL session can be reused safely"]
+#[must_use = "call finalize after table writes so the MSSQL session can be reused safely"]
 pub struct MssqlTableSinkSession<'pool, 'meta> {
     connection: MssqlPooledConnection<'pool>,
     tb_meta: &'meta MssqlTbMeta,
@@ -33,7 +42,7 @@ impl<'pool, 'meta> MssqlTableSinkSession<'pool, 'meta> {
 
         if let Some(statement) = identity_insert_statement.as_deref() {
             // IDENTITY_INSERT is session-scoped. Keep the connection marked
-            // until the matching post statement has completed successfully.
+            // until it has been disabled successfully.
             connection.mark_for_discard();
             execute_control_statement(connection.client_mut(), statement).await?;
         }
@@ -54,6 +63,94 @@ impl<'pool, 'meta> MssqlTableSinkSession<'pool, 'meta> {
         self.tb_meta
     }
 
+    pub fn can_bulk_insert(&self, rows: &[RowData]) -> bool {
+        let Some(first) = rows.first() else {
+            return false;
+        };
+        if !matches!(first.row_type, RowType::Insert) {
+            return false;
+        }
+
+        let Ok(columns) = self.bulk_insert_columns() else {
+            return false;
+        };
+        first
+            .require_after()
+            .is_ok_and(|after| columns.iter().all(|(col, _)| after.contains_key(*col)))
+    }
+
+    pub async fn bulk_insert(&mut self, rows: &[RowData]) -> anyhow::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let columns = self.bulk_insert_columns()?;
+
+        // Finish all fallible RowData conversion before opening the TDS bulk stream.
+        let token_rows = rows
+            .iter()
+            .map(|row_data| {
+                let after = row_data.require_after()?;
+                let mut token_row = TokenRow::with_capacity(columns.len());
+                for (col, col_type) in &columns {
+                    let value = after.get(*col).with_context(|| {
+                        format!(
+                            "MSSQL bulk insert row is missing column {}.{}.{}",
+                            self.tb_meta.basic.schema, self.tb_meta.basic.tb, col
+                        )
+                    })?;
+                    token_row.push(MssqlColValueConvertor::to_column_data(value, col_type)?);
+                }
+                Ok(token_row)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let table = SqlUtil::render_rdb_table(
+            &DbType::Mssql,
+            &self.tb_meta.basic.db,
+            &self.tb_meta.basic.schema,
+            &self.tb_meta.basic.tb,
+        );
+        self.connection.mark_for_discard();
+        let result: tiberius::Result<()> = async {
+            let mut request = self.connection.client_mut().bulk_insert(&table).await?;
+            for token_row in token_rows {
+                request.send(token_row).await?;
+            }
+            request.finalize().await?;
+            Ok(())
+        }
+        .await;
+
+        result
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("failed to bulk insert rows into {table}"))?;
+        self.clear_discard_mark_if_clean();
+        Ok(())
+    }
+
+    fn bulk_insert_columns(&self) -> anyhow::Result<Vec<(&str, MssqlColType)>> {
+        if let Some(identity_col) = self.tb_meta.identity_col.as_deref() {
+            bail!("MSSQL bulk insert cannot preserve identity column {identity_col}");
+        }
+
+        let columns = self
+            .tb_meta
+            .basic
+            .cols
+            .iter()
+            .filter(|col| self.tb_meta.is_writable_col(col))
+            .map(|col| {
+                let col_type = *self.tb_meta.get_col_type(col)?;
+                Self::ensure_bulk_insert_type_supported(col, &col_type)?;
+                Ok((col.as_str(), col_type))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        if columns.is_empty() {
+            bail!("MSSQL bulk insert has no writable columns");
+        }
+        Ok(columns)
+    }
+
     pub async fn begin(&mut self) -> anyhow::Result<()> {
         if self.transaction_active {
             bail!("MSSQL table sink session already has an active transaction");
@@ -65,16 +162,16 @@ impl<'pool, 'meta> MssqlTableSinkSession<'pool, 'meta> {
         Ok(())
     }
 
-    pub async fn post(&mut self) -> anyhow::Result<()> {
+    pub async fn finalize(&mut self) -> anyhow::Result<()> {
         if self.transaction_active {
-            bail!("MSSQL table sink session must commit or roll back before post");
+            bail!("MSSQL table sink session must commit or roll back before finalize");
         }
         if !self.identity_insert_enabled {
             return Ok(());
         }
 
         let statement = Self::identity_insert_statement(self.tb_meta, false)
-            .context("MSSQL table sink session IDENTITY_INSERT post statement is missing")?;
+            .context("MSSQL table sink session IDENTITY_INSERT OFF statement is missing")?;
         execute_control_statement(self.connection.client_mut(), &statement).await?;
         self.identity_insert_enabled = false;
         self.clear_discard_mark_if_clean();
@@ -107,6 +204,25 @@ impl<'pool, 'meta> MssqlTableSinkSession<'pool, 'meta> {
         if !self.identity_insert_enabled && !self.transaction_active {
             self.connection.clear_discard_mark();
         }
+    }
+
+    fn ensure_bulk_insert_type_supported(col: &str, col_type: &MssqlColType) -> anyhow::Result<()> {
+        // With `tds73`, Tiberius converts NaiveDateTime only to DateTime2:
+        // https://github.com/prisma/tiberius/blob/0e2897a276166503ba78fe3e1cee501e9a034021/src/tds/time/chrono.rs#L106-L128
+        if matches!(
+            col_type,
+            MssqlColType::Money
+                | MssqlColType::Money4
+                | MssqlColType::Datetime4
+                | MssqlColType::Datetime
+                | MssqlColType::Datetimen
+                | MssqlColType::Text
+                | MssqlColType::Image
+                | MssqlColType::NText
+        ) {
+            bail!("MSSQL bulk insert does not support column {col} type {col_type:?}");
+        }
+        Ok(())
     }
 
     fn identity_insert_statement(tb_meta: &MssqlTbMeta, enabled: bool) -> Option<String> {

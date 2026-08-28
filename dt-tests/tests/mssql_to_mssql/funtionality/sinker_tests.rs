@@ -28,6 +28,8 @@ mod test {
     const TEST_DATABASE: &str = "ape_dts";
     const TEST_SCHEMA: &str = "ape_dts_sinker_test";
     const TEST_TABLE: &str = "transaction_rows";
+    const BULK_TEST_TABLE: &str = "bulk_rows";
+    const PARAMETER_TEST_TABLE: &str = "parameter_rows";
 
     async fn create_pool() -> anyhow::Result<MssqlConnectionPool> {
         let endpoint =
@@ -42,6 +44,8 @@ mod test {
             &format!(
                 "USE [{TEST_DATABASE}];
                  DROP TABLE IF EXISTS [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_DATABASE}].[{TEST_SCHEMA}].[{BULK_TEST_TABLE}];
+                 DROP TABLE IF EXISTS [{TEST_DATABASE}].[{TEST_SCHEMA}].[{PARAMETER_TEST_TABLE}];
                  IF SCHEMA_ID(N'{TEST_SCHEMA}') IS NOT NULL
                     EXEC(N'DROP SCHEMA [{TEST_SCHEMA}]');"
             ),
@@ -66,6 +70,16 @@ mod test {
                         DEFAULT CONVERT(datetime2, '9999-12-31 23:59:59.9999999'),
                     version rowversion NOT NULL,
                     PERIOD FOR SYSTEM_TIME (valid_from, valid_to)
+                 );
+                 CREATE TABLE [{TEST_DATABASE}].[{TEST_SCHEMA}].[{BULK_TEST_TABLE}] (
+                    id int NOT NULL PRIMARY KEY,
+                    code nvarchar(20) NOT NULL,
+                    happened_at datetime2(7) NOT NULL
+                 );
+                 CREATE TABLE [{TEST_DATABASE}].[{TEST_SCHEMA}].[{PARAMETER_TEST_TABLE}] (
+                    id int NOT NULL PRIMARY KEY,
+                    datetime_value datetime NOT NULL,
+                    smalldatetime_value smalldatetime NOT NULL
                  );"
             ),
         )
@@ -100,14 +114,55 @@ mod test {
         )
     }
 
-    async fn row_count(pool: &MssqlConnectionPool) -> anyhow::Result<i64> {
+    fn bulk_row(id: i32, code: &str) -> RowData {
+        RowData::new(
+            TEST_DATABASE.to_string(),
+            TEST_SCHEMA.to_string(),
+            BULK_TEST_TABLE.to_string(),
+            0,
+            RowType::Insert,
+            None,
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(id)),
+                ("code".to_string(), ColValue::String(code.to_string())),
+                (
+                    "happened_at".to_string(),
+                    ColValue::DateTime("2026-08-13 12:34:56.1234567".to_string()),
+                ),
+            ])),
+        )
+    }
+
+    fn parameter_row(id: i32) -> RowData {
+        RowData::new(
+            TEST_DATABASE.to_string(),
+            TEST_SCHEMA.to_string(),
+            PARAMETER_TEST_TABLE.to_string(),
+            0,
+            RowType::Insert,
+            None,
+            Some(HashMap::from([
+                ("id".to_string(), ColValue::Long(id)),
+                (
+                    "datetime_value".to_string(),
+                    ColValue::DateTime("2026-08-13 12:34:56.123".to_string()),
+                ),
+                (
+                    "smalldatetime_value".to_string(),
+                    ColValue::DateTime("2026-08-13 12:34:00".to_string()),
+                ),
+            ])),
+        )
+    }
+
+    async fn row_count(pool: &MssqlConnectionPool, table: &str) -> anyhow::Result<i64> {
         let mut connection = pool.get().await?;
         let row = connection
             .client_mut()
             .query(
                 &format!(
                     "SELECT COUNT_BIG(*) AS row_count \
-                     FROM [{TEST_DATABASE}].[{TEST_SCHEMA}].[{TEST_TABLE}]"
+                     FROM [{TEST_DATABASE}].[{TEST_SCHEMA}].[{table}]"
                 ),
                 &[],
             )
@@ -115,6 +170,26 @@ mod test {
             .into_row()
             .await?
             .context("MSSQL sinker test row count query returned no row")?;
+        MssqlColValueConvertor::from_query_required_i64(&row, "row_count")
+    }
+
+    async fn matching_parameter_row_count(pool: &MssqlConnectionPool) -> anyhow::Result<i64> {
+        let mut connection = pool.get().await?;
+        let row = connection
+            .client_mut()
+            .query(
+                &format!(
+                    "SELECT COUNT_BIG(*) AS row_count \
+                     FROM [{TEST_DATABASE}].[{TEST_SCHEMA}].[{PARAMETER_TEST_TABLE}] \
+                     WHERE datetime_value = CONVERT(datetime, '2026-08-13T12:34:56.123') \
+                       AND smalldatetime_value = CONVERT(smalldatetime, '2026-08-13T12:34:00')"
+                ),
+                &[],
+            )
+            .await?
+            .into_row()
+            .await?
+            .context("MSSQL sinker parameter row count query returned no row")?;
         MssqlColValueConvertor::from_query_required_i64(&row, "row_count")
     }
 
@@ -133,6 +208,60 @@ mod test {
             .into_row()
             .await?;
         Ok(row.and_then(|row| row.get::<&str, _>("code").map(str::to_owned)))
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn batch_insert_selects_bulk_or_parameter_binding_by_table() -> anyhow::Result<()> {
+        let pool = create_pool().await?;
+        prepare(&pool).await?;
+
+        let result = async {
+            let bulk_rows = vec![bulk_row(1, "bulk-1"), bulk_row(2, "bulk-2")];
+            let parameter_rows = vec![parameter_row(1), parameter_row(2)];
+            let mut meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
+
+            let bulk_meta = meta_manager
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, BULK_TEST_TABLE)
+                .await?
+                .clone();
+            {
+                let mut bulk_session = pool.get_table_sink_session(&bulk_meta).await?;
+                assert!(bulk_session.can_bulk_insert(&bulk_rows));
+                bulk_session.finalize().await?;
+            }
+
+            let parameter_meta = meta_manager
+                .get_tb_meta(TEST_DATABASE, TEST_SCHEMA, PARAMETER_TEST_TABLE)
+                .await?
+                .clone();
+            {
+                let mut parameter_session = pool.get_table_sink_session(&parameter_meta).await?;
+                assert!(!parameter_session.can_bulk_insert(&parameter_rows));
+                parameter_session.finalize().await?;
+            }
+
+            let mut sinker = MssqlSinker::new(
+                pool.clone(),
+                meta_manager,
+                None,
+                2,
+                false,
+                BaseSinker::default(),
+            );
+            sinker.sink_dml(bulk_rows, true).await?;
+            sinker.sink_dml(parameter_rows, true).await?;
+
+            assert_eq!(row_count(&pool, BULK_TEST_TABLE).await?, 2);
+            assert_eq!(row_count(&pool, PARAMETER_TEST_TABLE).await?, 2);
+            assert_eq!(matching_parameter_row_count(&pool).await?, 2);
+            anyhow::Ok(())
+        }
+        .await;
+
+        let cleanup_result = cleanup(&pool).await;
+        result?;
+        cleanup_result
     }
 
     #[tokio::test]
@@ -161,7 +290,7 @@ mod test {
             assert!(error.contains("duplicate") || error.contains("2627"));
             assert_eq!(code_for_id(&pool, 10).await?.as_deref(), Some("original"));
             assert_eq!(code_for_id(&pool, 11).await?, None);
-            assert_eq!(row_count(&pool).await?, 1);
+            assert_eq!(row_count(&pool, TEST_TABLE).await?, 1);
 
             MssqlTestEndpoint::execute_batch(
                 &pool,
@@ -172,7 +301,7 @@ mod test {
             )
             .await?;
             sinker.sink_dml(vec![row(20, "explicit")], true).await?;
-            assert_eq!(row_count(&pool).await?, 3);
+            assert_eq!(row_count(&pool, TEST_TABLE).await?, 3);
             anyhow::Ok(())
         }
         .await;
@@ -184,7 +313,7 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn replace_fallback_runs_all_single_rows_in_one_transaction() -> anyhow::Result<()> {
+    async fn upsert_fallback_runs_all_single_rows_in_one_transaction() -> anyhow::Result<()> {
         let pool = create_pool().await?;
         prepare(&pool).await?;
 
@@ -205,25 +334,25 @@ mod test {
             sinker.replace = true;
 
             // The multi-row insert conflicts on id=10. Both rows are then
-            // replaced serially inside one fallback transaction.
+            // upserted serially inside one fallback transaction.
             sinker
                 .sink_dml(vec![row(10, "updated"), row(12, "third")], true)
                 .await?;
             assert_eq!(code_for_id(&pool, 10).await?.as_deref(), Some("updated"));
             assert_eq!(code_for_id(&pool, 12).await?.as_deref(), Some("third"));
-            assert_eq!(row_count(&pool).await?, 3);
+            assert_eq!(row_count(&pool, TEST_TABLE).await?, 3);
 
             // Row 10 succeeds first, then row 11 violates the unique code
             // constraint. One shared transaction must roll both changes back.
             let error = sinker
                 .sink_dml(vec![row(10, "duplicate"), row(11, "duplicate")], true)
                 .await
-                .expect_err("serial sink fallback should fail on the second replace row");
+                .expect_err("serial sink fallback should fail on the second upsert row");
             let error = format!("{error:#}");
             assert!(error.contains("duplicate") || error.contains("2601"));
             assert_eq!(code_for_id(&pool, 10).await?.as_deref(), Some("updated"));
             assert_eq!(code_for_id(&pool, 11).await?.as_deref(), Some("second"));
-            assert_eq!(row_count(&pool).await?, 3);
+            assert_eq!(row_count(&pool, TEST_TABLE).await?, 3);
 
             MssqlTestEndpoint::execute_batch(
                 &pool,
@@ -233,7 +362,7 @@ mod test {
                 ),
             )
             .await?;
-            assert_eq!(row_count(&pool).await?, 4);
+            assert_eq!(row_count(&pool, TEST_TABLE).await?, 4);
             anyhow::Ok(())
         }
         .await;

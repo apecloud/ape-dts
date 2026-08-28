@@ -5,7 +5,7 @@ use tiberius::{
     numeric::BigDecimal,
     time::chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime},
     xml::XmlData,
-    FromSql, IntoSql, Query, Row, Uuid,
+    ColumnData, FromSql, IntoSql, Query, Row, Uuid,
 };
 
 use crate::{
@@ -328,6 +328,48 @@ impl MssqlColValueConvertor {
         })
     }
 
+    pub fn to_column_data<'a>(
+        value: &'a ColValue,
+        col_type: &MssqlColType,
+    ) -> anyhow::Result<ColumnData<'a>> {
+        let kind = col_value_kind(col_type);
+        if !matches!(value, ColValue::None | ColValue::UnchangedToast) && !kind.matches(value) {
+            bail!(invalid_value(
+                value,
+                &format!("MSSQL {col_type:?}"),
+                format!("expected ColValue::{}", kind.type_name()),
+            ));
+        }
+
+        let result = match kind {
+            MssqlColValueKind::Bool => Self::column_data_as(value, as_bool_checked),
+            MssqlColValueKind::UnsignedTiny => Self::column_data_as(value, as_u8_checked),
+            MssqlColValueKind::Short => Self::column_data_as(value, as_i16_checked),
+            MssqlColValueKind::Long => Self::column_data_as(value, as_i32_checked),
+            MssqlColValueKind::LongLong => Self::column_data_as(value, as_i64_checked),
+            MssqlColValueKind::Float => Self::column_data_as(value, as_f32_checked),
+            MssqlColValueKind::Double => Self::column_data_as(value, as_f64_checked),
+            MssqlColValueKind::Decimal => Self::column_data_as(value, as_big_decimal),
+            MssqlColValueKind::String => match col_type {
+                MssqlColType::Guid => Self::column_data_as(value, parse_uuid),
+                MssqlColType::Xml => Self::column_data_as(value, parse_xml),
+                _ => Self::column_data_as(value, as_text),
+            },
+            MssqlColValueKind::Blob => Self::column_data_as(value, as_binary),
+            MssqlColValueKind::Date => Self::column_data_as(value, parse_date),
+            MssqlColValueKind::Time => Self::column_data_as(value, parse_time),
+            MssqlColValueKind::DateTime => Self::column_data_as(value, parse_datetime),
+            MssqlColValueKind::Timestamp => Self::column_data_as(value, parse_datetime_offset),
+        };
+
+        result.with_context(|| {
+            format!(
+                "failed to convert ColValue::{} to MSSQL {col_type:?} ColumnData",
+                value.type_name()
+            )
+        })
+    }
+
     fn bind_as<'a, T>(
         query: &mut Query<'a>,
         value: &'a ColValue,
@@ -345,6 +387,23 @@ impl MssqlColValueConvertor {
         };
         query.bind(value);
         Ok(())
+    }
+
+    fn column_data_as<'a, T>(
+        value: &'a ColValue,
+        convert: impl FnOnce(&'a ColValue) -> anyhow::Result<T>,
+    ) -> anyhow::Result<ColumnData<'a>>
+    where
+        Option<T>: IntoSql<'a> + 'a,
+    {
+        let value = match value {
+            ColValue::None => None,
+            ColValue::UnchangedToast => bail!(DtError::InvariantViolated(
+                "cannot convert ColValue::UnchangedToast to MSSQL ColumnData".to_string(),
+            )),
+            value => Some(convert(value)?),
+        };
+        Ok(value.into_sql())
     }
 }
 
