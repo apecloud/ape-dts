@@ -3,7 +3,7 @@ use std::{collections::HashMap, str::FromStr};
 use anyhow::Context;
 use dt_common::{
     error::{DtError, DtResultExt, Stage},
-    meta::{col_value::ColValue, struct_meta::statement::struct_statement::StructKeyType},
+    meta::{col_value::ColValue, struct_meta::statement::struct_statement::StructKey},
     utils::serialize_util::SerializeUtil,
 };
 use serde::{Deserialize, Serialize};
@@ -195,63 +195,32 @@ pub struct StructCheckLog {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructCheckKey {
-    pub key: String,
+    pub key: StructKey,
     pub db: String,
     pub schema: String,
     pub tb: String,
-    segments: Vec<String>,
-    schema_index: Option<usize>,
-    tb_index: Option<usize>,
-    table_scoped: bool,
-    key_type: Option<StructKeyType>,
 }
 
 impl StructCheckKey {
-    pub fn new(db: &str, key: &str) -> Self {
-        let segments = key.split('.').map(str::to_string).collect::<Vec<_>>();
-        let key_type = StructKeyType::from_key(key);
-        let schema_index = key_type.and_then(StructKeyType::schema_index);
-        let tb_index = key_type.and_then(StructKeyType::table_index);
-        let table_scoped = key_type.is_some_and(StructKeyType::is_table_scoped);
-        let schema = schema_index
-            .and_then(|index| segments.get(index))
-            .cloned()
-            .unwrap_or_default();
-        let tb = tb_index
-            .and_then(|index| segments.get(index))
-            .cloned()
-            .unwrap_or_default();
-
+    pub fn new(db: &str, key: StructKey) -> Self {
         Self {
-            key: key.to_string(),
+            schema: key.schema().to_string(),
+            tb: key.table().to_string(),
+            key,
             db: db.to_string(),
-            schema,
-            tb,
-            segments,
-            schema_index,
-            tb_index,
-            table_scoped,
-            key_type,
         }
     }
 
     pub fn with_location(&self, db: &str, schema: &str, tb: &str) -> Self {
-        let mut segments = self.segments.clone();
-        if let Some(index) = self.schema_index {
-            segments[index] = schema.to_string();
-        }
-        if let Some(index) = self.tb_index {
-            segments[index] = tb.to_string();
-        }
-        Self::new(db, &segments.join("."))
+        Self::new(db, self.key.with_location(schema, tb))
     }
 
     pub fn is_table_scoped(&self) -> bool {
-        self.table_scoped
+        self.key.is_table_scoped()
     }
 
     pub fn is_sequence(&self) -> bool {
-        self.key_type == Some(StructKeyType::Sequence)
+        self.key.is_sequence()
     }
 }
 
@@ -265,7 +234,7 @@ impl StructCheckLog {
         let db_changed = key.db != target_key.db;
         let target_changed = key.schema != target_key.schema || key.tb != target_key.tb;
         Self {
-            key: key.key.clone(),
+            key: key.key.to_string(),
             db: key.db.clone(),
             schema: key.schema.clone(),
             tb: key.tb.clone(),
@@ -292,6 +261,7 @@ impl FromStr for CheckLog {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::meta::struct_meta::statement::struct_statement::StructKeyType;
     use serde_json::json;
 
     use super::*;
@@ -356,7 +326,10 @@ mod tests {
         assert!(legacy.db.is_empty());
         assert!(legacy.target_db.is_none());
 
-        let key = StructCheckKey::new("", "index.s1.t1.idx_1");
+        let key = StructCheckKey::new(
+            "",
+            StructKey::new(StructKeyType::Index, ["s1", "t1", "idx_1"]),
+        );
         let struct_log = StructCheckLog::new(
             &key,
             &key,
@@ -374,7 +347,10 @@ mod tests {
         );
         assert!(json_line(&struct_log).get("id_col_values").is_none());
 
-        let target_key = StructCheckKey::new("", "index.s2.t2.idx_1");
+        let target_key = StructCheckKey::new(
+            "",
+            StructKey::new(StructKeyType::Index, ["s2", "t2", "idx_1"]),
+        );
         let routed_struct_log = StructCheckLog::new(&key, &target_key, None, None);
         assert_eq!(
             json_line(&routed_struct_log),
@@ -387,11 +363,24 @@ mod tests {
             })
         );
 
-        let column_privilege =
-            StructCheckKey::new("", "rbac.privilege.column.s1.t1.SELECT.user.NO");
+        let column_privilege = StructCheckKey::new(
+            "",
+            StructKey::new(
+                StructKeyType::RbacPrivilegeColumn,
+                ["s1", "t1", "SELECT", "user", "NO"],
+            ),
+        );
         assert_eq!(column_privilege.schema, "s1");
         assert_eq!(column_privilege.tb, "t1");
         assert!(column_privilege.is_table_scoped());
+
+        let special_identifier = StructCheckKey::new(
+            "",
+            StructKey::new(StructKeyType::Index, ["a.b", "t.1", "idx.1"]),
+        );
+        assert_eq!(special_identifier.schema, "a.b");
+        assert_eq!(special_identifier.tb, "t.1");
+        assert_eq!(special_identifier.key.to_string(), "index.a.b.t.1.idx.1");
 
         let consistent_summary = CheckSummaryLog {
             start_time: "start".to_string(),

@@ -11,7 +11,10 @@ use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, Stage},
     log_diff, log_info, log_miss, log_sql, log_summary,
-    meta::struct_meta::{struct_data::StructData, structure::structure_type::StructureType},
+    meta::struct_meta::{
+        statement::struct_statement::StructKey, struct_data::StructData,
+        structure::structure_type::StructureType,
+    },
     monitor::{
         counter_type::CounterType, task_metrics::TaskMetricsType,
         task_monitor_handle::TaskMonitorHandle,
@@ -43,7 +46,7 @@ pub struct StructCheckerHandle {
     global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     monitor: TaskMonitorHandle,
     monitor_task_id: String,
-    src_sql_map: BTreeMap<String, StructCheckItem>,
+    src_sql_map: BTreeMap<StructKey, StructCheckItem>,
     schemas: HashSet<String>,
     start_time: String,
 }
@@ -57,7 +60,7 @@ struct StructCheckItem {
 
 impl StructCheckItem {
     #[cfg(test)]
-    fn unrouted(key: &str, sql: &str) -> Self {
+    fn unrouted(key: StructKey, sql: &str) -> Self {
         let key = StructCheckKey::new("", key);
         Self {
             source_key: key.clone(),
@@ -157,8 +160,8 @@ impl StructCheckerHandle {
         }
 
         for ((source_key, _), (target_key, sql)) in source_sqls.into_iter().zip(target_sqls) {
-            let source_key = StructCheckKey::new(&source_db, &source_key);
-            let target_check_key = StructCheckKey::new(&target_db, &target_key);
+            let source_key = StructCheckKey::new(&source_db, source_key);
+            let target_check_key = StructCheckKey::new(&target_db, target_key.clone());
             if !target_check_key.schema.is_empty() {
                 self.schemas.insert(target_check_key.schema.clone());
             }
@@ -199,7 +202,7 @@ impl StructCheckerHandle {
     async fn build_dst_sql_map(
         &self,
         schemas: &HashSet<String>,
-    ) -> anyhow::Result<BTreeMap<String, String>> {
+    ) -> anyhow::Result<BTreeMap<StructKey, String>> {
         let mut dst_map = BTreeMap::new();
         match self.db_type {
             DbType::Mysql => {
@@ -272,7 +275,7 @@ impl StructCheckerHandle {
 
     async fn compare_once(
         &self,
-        src_sql_map: &BTreeMap<String, StructCheckItem>,
+        src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
         schemas: &HashSet<String>,
         log_enabled: bool,
     ) -> anyhow::Result<CheckSummaryLog> {
@@ -288,8 +291,8 @@ impl StructCheckerHandle {
     }
 
     fn compare_sql_maps(
-        src_sql_map: &BTreeMap<String, StructCheckItem>,
-        mut dst_map: BTreeMap<String, String>,
+        src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
+        mut dst_map: BTreeMap<StructKey, String>,
         router: Option<&RdbRouter>,
         start_time: &str,
         log_enabled: bool,
@@ -344,7 +347,7 @@ impl StructCheckerHandle {
 
         for (key, dst_sql) in dst_map {
             summary.diff_count += 1;
-            let target_key = StructCheckKey::new("", &key);
+            let target_key = StructCheckKey::new("", key);
             let source_key = Self::source_key_from_target(&target_key, router);
             if let Some(table) = struct_table_summary(&source_key, &target_key, 0, false, true) {
                 summary.merge_table(table);
@@ -434,22 +437,23 @@ impl StructCheckerHandle {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::meta::struct_meta::statement::struct_statement::StructKeyType;
+
     use super::*;
 
     #[test]
     fn missing_target_database_and_table_are_reported_as_miss() {
+        let database_key = StructKey::new(StructKeyType::Database, ["test_db"]);
+        let table_key = StructKey::new(StructKeyType::Table, ["test_db", "test_tb"]);
         let src_sql_map = BTreeMap::from([
             (
-                "database.test_db".to_string(),
-                StructCheckItem::unrouted(
-                    "database.test_db",
-                    "CREATE DATABASE IF NOT EXISTS `test_db`",
-                ),
+                database_key.clone(),
+                StructCheckItem::unrouted(database_key, "CREATE DATABASE IF NOT EXISTS `test_db`"),
             ),
             (
-                "table.test_db.test_tb".to_string(),
+                table_key.clone(),
                 StructCheckItem::unrouted(
-                    "table.test_db.test_tb",
+                    table_key,
                     "CREATE TABLE IF NOT EXISTS `test_db`.`test_tb` (`id` int)",
                 ),
             ),
@@ -472,5 +476,41 @@ mod tests {
         assert_eq!(summary.tables[0].schema, "test_db");
         assert_eq!(summary.tables[0].tb, "test_tb");
         assert_eq!(summary.tables[0].miss_count, 1);
+    }
+
+    #[test]
+    fn keys_with_same_display_but_different_identifier_boundaries_match_independently() {
+        let dotted_schema = StructKey::new(StructKeyType::Table, ["a.b", "c"]);
+        let dotted_table = StructKey::new(StructKeyType::Table, ["a", "b.c"]);
+        assert_eq!(dotted_schema.to_string(), dotted_table.to_string());
+        assert_ne!(dotted_schema, dotted_table);
+
+        let src_sql_map = BTreeMap::from([
+            (
+                dotted_schema.clone(),
+                StructCheckItem::unrouted(dotted_schema.clone(), "CREATE TABLE dotted_schema"),
+            ),
+            (
+                dotted_table.clone(),
+                StructCheckItem::unrouted(dotted_table.clone(), "CREATE TABLE dotted_table"),
+            ),
+        ]);
+        let dst_sql_map = BTreeMap::from([
+            (dotted_schema, "CREATE TABLE dotted_schema".to_string()),
+            (dotted_table, "CREATE TABLE dotted_table".to_string()),
+        ]);
+
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &src_sql_map,
+            dst_sql_map,
+            None,
+            "start",
+            false,
+            false,
+        );
+
+        assert!(summary.is_consistent);
+        assert_eq!(summary.checked_count, 2);
+        assert_eq!(summary.tables.len(), 2);
     }
 }

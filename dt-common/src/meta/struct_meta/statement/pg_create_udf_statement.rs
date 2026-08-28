@@ -1,4 +1,4 @@
-use crate::meta::struct_meta::statement::struct_statement::StructKeyType;
+use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::structure_type::StructureType;
 use crate::meta::struct_meta::structure::user_defined::PgUdf;
 use crate::rdb_filter::RdbFilter;
@@ -9,19 +9,22 @@ pub struct PgCreateUdfStatement {
 }
 
 impl PgCreateUdfStatement {
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if filter.filter_structure(&StructureType::Udf) {
             return Ok(sqls);
         }
 
         let sql = self.udf.create_statement.to_string();
-        let key = format!(
-            "{}.{}.{}({})",
+        let key = StructKey::new(
             StructKeyType::Udf,
-            self.udf.schema_name,
-            self.udf.function_name,
-            self.udf.identity_arguments
+            [
+                self.udf.schema_name.clone(),
+                format!(
+                    "{}({})",
+                    self.udf.function_name, self.udf.identity_arguments
+                ),
+            ],
         );
         sqls.push((key, sql));
         Ok(sqls)
