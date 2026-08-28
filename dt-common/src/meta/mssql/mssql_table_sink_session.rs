@@ -111,19 +111,26 @@ impl<'pool, 'meta> MssqlTableSinkSession<'pool, 'meta> {
             &self.tb_meta.basic.tb,
         );
         self.connection.mark_for_discard();
-        let result: tiberius::Result<()> = async {
+        let result: anyhow::Result<()> = async {
             let mut request = self.connection.client_mut().bulk_insert(&table).await?;
             for token_row in token_rows {
-                request.send(token_row).await?;
+                if let Err(err) = request.send(token_row).await {
+                    let finalize_error = request.finalize().await.err();
+                    let err = anyhow::Error::from(err);
+                    return Err(match finalize_error {
+                        Some(finalize_error) => err.context(format!(
+                            "MSSQL bulk insert finalize also failed: {finalize_error}"
+                        )),
+                        None => err,
+                    });
+                }
             }
             request.finalize().await?;
             Ok(())
         }
         .await;
 
-        result
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("failed to bulk insert rows into {table}"))?;
+        result.with_context(|| format!("failed to bulk insert rows into {table}"))?;
         self.clear_discard_mark_if_clean();
         Ok(())
     }
