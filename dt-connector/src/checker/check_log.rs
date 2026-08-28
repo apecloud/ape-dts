@@ -3,7 +3,7 @@ use std::{collections::HashMap, str::FromStr};
 use anyhow::Context;
 use dt_common::{
     error::{DtError, DtResultExt, Stage},
-    meta::col_value::ColValue,
+    meta::{col_value::ColValue, struct_meta::statement::struct_statement::StructKeyType},
     utils::serialize_util::SerializeUtil,
 };
 use serde::{Deserialize, Serialize};
@@ -203,26 +203,16 @@ pub struct StructCheckKey {
     schema_index: Option<usize>,
     tb_index: Option<usize>,
     table_scoped: bool,
+    key_type: Option<StructKeyType>,
 }
 
 impl StructCheckKey {
     pub fn new(db: &str, key: &str) -> Self {
         let segments = key.split('.').map(str::to_string).collect::<Vec<_>>();
-        let object_type = segments.first().map(String::as_str).unwrap_or_default();
-        let (schema_index, tb_index, table_scoped) = match object_type {
-            "database" | "schema" => (Some(1), None, false),
-            "rbac" if segments.get(1).map(String::as_str) == Some("privilege") => {
-                match segments.get(2).map(String::as_str) {
-                    Some("table") | Some("sequence") => (Some(3), Some(4), true),
-                    Some("schema") => (Some(3), None, false),
-                    _ => (None, None, false),
-                }
-            }
-            "table" | "index" | "constraint" | "column_comment" | "table_comment"
-            | "sequence_owner" => (Some(1), Some(2), true),
-            "sequence" | "udt" | "udf" => (Some(1), Some(2), false),
-            _ => (None, None, false),
-        };
+        let key_type = StructKeyType::from_key(key);
+        let schema_index = key_type.and_then(StructKeyType::schema_index);
+        let tb_index = key_type.and_then(StructKeyType::table_index);
+        let table_scoped = key_type.is_some_and(StructKeyType::is_table_scoped);
         let schema = schema_index
             .and_then(|index| segments.get(index))
             .cloned()
@@ -241,6 +231,7 @@ impl StructCheckKey {
             schema_index,
             tb_index,
             table_scoped,
+            key_type,
         }
     }
 
@@ -257,6 +248,10 @@ impl StructCheckKey {
 
     pub fn is_table_scoped(&self) -> bool {
         self.table_scoped
+    }
+
+    pub fn is_sequence(&self) -> bool {
+        self.key_type == Some(StructKeyType::Sequence)
     }
 }
 
@@ -391,6 +386,12 @@ mod tests {
                 "target_tb": "t2"
             })
         );
+
+        let column_privilege =
+            StructCheckKey::new("", "rbac.privilege.column.s1.t1.SELECT.user.NO");
+        assert_eq!(column_privilege.schema, "s1");
+        assert_eq!(column_privilege.tb, "t1");
+        assert!(column_privilege.is_table_scoped());
 
         let consistent_summary = CheckSummaryLog {
             start_time: "start".to_string(),

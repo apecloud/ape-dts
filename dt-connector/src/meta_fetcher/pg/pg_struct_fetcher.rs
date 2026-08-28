@@ -7,7 +7,7 @@ use dt_common::meta::struct_meta::{
         pg_create_schema_statement::PgCreateSchemaStatement,
         pg_create_table_statement::PgCreateTableStatement,
         pg_create_udf_statement::PgCreateUdfStatement,
-        pg_create_udt_statement::PgCreateUdtStatement,
+        pg_create_udt_statement::PgCreateUdtStatement, struct_statement::StructKeyType,
     },
     structure::{
         column::{Column, ColumnDefault},
@@ -960,7 +960,12 @@ impl PgStructFetcher {
             }
 
             results.push(PgPrivilege {
-                key: format!("rbac.privilege.schema.{}.{}", schema_name, grantee),
+                key: format!(
+                    "{}.{}.{}",
+                    StructKeyType::RbacPrivilegeSchema,
+                    schema_name,
+                    grantee
+                ),
                 origin: grant_command,
             });
         }
@@ -1005,8 +1010,12 @@ impl PgStructFetcher {
 
             results.push(PgPrivilege {
                 key: format!(
-                    "rbac.privilege.table.{}.{}.{}.{}",
-                    schema_name, table_name, grantee, is_grantable
+                    "{}.{}.{}.{}.{}",
+                    StructKeyType::RbacPrivilegeTable,
+                    schema_name,
+                    table_name,
+                    grantee,
+                    is_grantable
                 ),
                 origin: grant_command,
             });
@@ -1097,8 +1106,13 @@ impl PgStructFetcher {
 
                 results.push(PgPrivilege {
                     key: format!(
-                        "rbac.privilege.column.{}.{}.{}.{}.{}",
-                        schema, table, privilege_type, grantee, is_grantable
+                        "{}.{}.{}.{}.{}.{}",
+                        StructKeyType::RbacPrivilegeColumn,
+                        schema,
+                        table,
+                        privilege_type,
+                        grantee,
+                        is_grantable
                     ),
                     origin: grant_command,
                 });
@@ -1182,8 +1196,12 @@ impl PgStructFetcher {
 
             results.push(PgPrivilege {
                 key: format!(
-                    "rbac.privilege.sequence.{}.{}.{}.{}",
-                    schema, sequence, grantee, is_grantable
+                    "{}.{}.{}.{}.{}",
+                    StructKeyType::RbacPrivilegeSequence,
+                    schema,
+                    sequence,
+                    grantee,
+                    is_grantable
                 ),
                 origin: grant_command,
             });

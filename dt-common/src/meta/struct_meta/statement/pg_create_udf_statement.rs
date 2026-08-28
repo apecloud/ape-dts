@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::StructKeyType;
 use crate::meta::struct_meta::structure::structure_type::StructureType;
 use crate::meta::struct_meta::structure::user_defined::PgUdf;
 use crate::rdb_filter::RdbFilter;
@@ -16,8 +17,11 @@ impl PgCreateUdfStatement {
 
         let sql = self.udf.create_statement.to_string();
         let key = format!(
-            "udf.{}.{}({})",
-            self.udf.schema_name, self.udf.function_name, self.udf.identity_arguments
+            "{}.{}.{}({})",
+            StructKeyType::Udf,
+            self.udf.schema_name,
+            self.udf.function_name,
+            self.udf.identity_arguments
         );
         sqls.push((key, sql));
         Ok(sqls)

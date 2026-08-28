@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::StructKeyType;
 use crate::meta::struct_meta::structure::{
     rbac::PgPrivilege, rbac::PgRole, rbac::PgRoleMember, structure_type::StructureType,
 };
@@ -70,7 +71,7 @@ impl PgCreateRbacStatement {
                 sql = format!("{} WITH {}", sql, options.join(" "));
             }
 
-            sqls.push((format!("rbac.role.{}", role.name), sql));
+            sqls.push((format!("{}.{}", StructKeyType::RbacRole, role.name), sql));
 
             if !role.rol_configs.is_empty() {
                 for config in &role.rol_configs {
@@ -83,7 +84,7 @@ impl PgCreateRbacStatement {
                         let alter_sql =
                             format!("ALTER ROLE \"{}\" SET {} TO '{}'", role.name, param, value);
                         sqls.push((
-                            format!("rbac.role_config.{}.{}", role.name, param),
+                            format!("{}.{}.{}", StructKeyType::RbacRoleConfig, role.name, param),
                             alter_sql,
                         ));
                     }
@@ -99,8 +100,11 @@ impl PgCreateRbacStatement {
                 }
                 sqls.push((
                     format!(
-                        "rbac.member.{}.{}.{}",
-                        member.role, member.member, member.admin_option
+                        "{}.{}.{}.{}",
+                        StructKeyType::RbacMember,
+                        member.role,
+                        member.member,
+                        member.admin_option
                     ),
                     sql,
                 ));

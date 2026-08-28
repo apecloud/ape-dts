@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::StructKeyType;
 use crate::meta::struct_meta::structure::{database::Database, structure_type::StructureType};
 use crate::rdb_filter::RdbFilter;
 
@@ -31,7 +32,7 @@ impl MysqlCreateDatabaseStatement {
             )
         }
 
-        let key = format!("database.{}", self.database.name.clone());
+        let key = format!("{}.{}", StructKeyType::Database, self.database.name);
         sqls.push((key, sql));
         Ok(sqls)
     }

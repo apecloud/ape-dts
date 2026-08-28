@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::StructKeyType;
 use crate::meta::struct_meta::structure::structure_type::StructureType;
 use crate::meta::struct_meta::structure::user_defined::PgUdt;
 use crate::rdb_filter::RdbFilter;
@@ -15,7 +16,12 @@ impl PgCreateUdtStatement {
         }
 
         let sql = self.udt.create_statement.to_string();
-        let key = format!("udt.{}.{}", self.udt.schema_name, self.udt.typ_name);
+        let key = format!(
+            "{}.{}.{}",
+            StructKeyType::Udt,
+            self.udt.schema_name,
+            self.udt.typ_name
+        );
         sqls.push((key, sql));
         Ok(sqls)
     }

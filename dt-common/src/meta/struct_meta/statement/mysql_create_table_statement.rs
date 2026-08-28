@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::StructKeyType;
 use crate::meta::struct_meta::structure::column::ColumnDefault;
 use crate::meta::struct_meta::structure::index::IndexType;
 use crate::meta::struct_meta::structure::{
@@ -37,8 +38,10 @@ impl MysqlCreateTableStatement {
 
         if !filter.filter_structure(&StructureType::Table) {
             let key = format!(
-                "table.{}.{}",
-                self.table.database_name, self.table.table_name
+                "{}.{}.{}",
+                StructKeyType::Table,
+                self.table.database_name,
+                self.table.table_name
             );
             sqls.push((key, Self::table_to_sql(&mut self.table)));
         }
@@ -67,8 +70,11 @@ impl MysqlCreateTableStatement {
                     }
                     _ => {
                         let standalone_key = format!(
-                            "index.{}.{}.{}",
-                            i.database_name, i.table_name, i.index_name
+                            "{}.{}.{}.{}",
+                            StructKeyType::Index,
+                            i.database_name,
+                            i.table_name,
+                            i.index_name
                         );
                         sqls.push((standalone_key, Self::index_to_sql(i)))
                     }
@@ -76,8 +82,10 @@ impl MysqlCreateTableStatement {
             }
             if !idx_appends.is_empty() {
                 let key = format!(
-                    "index.{}.{}",
-                    self.indexes[0].database_name, self.indexes[0].table_name
+                    "{}.{}.{}",
+                    StructKeyType::Index,
+                    self.indexes[0].database_name,
+                    self.indexes[0].table_name
                 );
                 sqls.push((
                     key,
@@ -94,8 +102,11 @@ impl MysqlCreateTableStatement {
         if !filter.filter_structure(&StructureType::Constraint) {
             for i in self.constraints.iter() {
                 let key = format!(
-                    "constraint.{}.{}.{}",
-                    i.database_name, i.table_name, i.constraint_name
+                    "{}.{}.{}.{}",
+                    StructKeyType::Constraint,
+                    i.database_name,
+                    i.table_name,
+                    i.constraint_name
                 );
                 sqls.push((key, Self::constraint_to_sql(i)));
             }

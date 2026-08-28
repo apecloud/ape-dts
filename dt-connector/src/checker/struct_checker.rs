@@ -74,7 +74,7 @@ fn struct_table_summary(
     miss: bool,
     diff: bool,
 ) -> Option<CheckTableSummaryLog> {
-    if !key.is_table_scoped() && !key.key.starts_with("sequence.") {
+    if !key.is_table_scoped() && !key.is_sequence() {
         return None;
     }
 
@@ -128,16 +128,6 @@ impl StructCheckerHandle {
         }
     }
 
-    fn schema_from_key(key: &str) -> Option<&str> {
-        let mut parts = key.splitn(5, '.');
-        match parts.next()? {
-            "rbac" => (parts.next() == Some("privilege"))
-                .then(|| parts.nth(1))
-                .flatten(),
-            _ => parts.next(),
-        }
-    }
-
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
         let source_db = struct_data.db.clone();
         let mut source_statement = struct_data.statement.clone();
@@ -167,16 +157,16 @@ impl StructCheckerHandle {
         }
 
         for ((source_key, _), (target_key, sql)) in source_sqls.into_iter().zip(target_sqls) {
-            if let Some(schema) =
-                Self::schema_from_key(&target_key).filter(|schema| !schema.is_empty())
-            {
-                self.schemas.insert(schema.to_string());
+            let source_key = StructCheckKey::new(&source_db, &source_key);
+            let target_check_key = StructCheckKey::new(&target_db, &target_key);
+            if !target_check_key.schema.is_empty() {
+                self.schemas.insert(target_check_key.schema.clone());
             }
             self.src_sql_map.insert(
-                target_key.clone(),
+                target_key,
                 StructCheckItem {
-                    source_key: StructCheckKey::new(&source_db, &source_key),
-                    target_key: StructCheckKey::new(&target_db, &target_key),
+                    source_key,
+                    target_key: target_check_key,
                     sql,
                 },
             );

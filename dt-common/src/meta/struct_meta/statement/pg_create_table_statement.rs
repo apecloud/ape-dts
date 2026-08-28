@@ -4,6 +4,7 @@ use crate::config::config_enums::DbType;
 use crate::error::DtError;
 use crate::meta::ddl_meta::ddl_parser::DdlParser;
 use crate::meta::ddl_meta::ddl_statement::DdlStatement;
+use crate::meta::struct_meta::statement::struct_statement::StructKeyType;
 use crate::meta::struct_meta::structure::column::ColumnDefault;
 use crate::meta::struct_meta::structure::{
     column::Column,
@@ -67,31 +68,52 @@ impl PgCreateTableStatement {
 
         if !filter.filter_structure(&StructureType::Table) {
             for i in self.sequences.iter() {
-                let key = format!("sequence.{}.{}", i.schema_name, i.sequence_name);
+                let key = format!(
+                    "{}.{}.{}",
+                    StructKeyType::Sequence,
+                    i.schema_name,
+                    i.sequence_name
+                );
                 sqls.push((key, Self::sequence_to_sql(i)));
             }
 
-            let key = format!("table.{}.{}", self.table.schema_name, self.table.table_name);
+            let key = format!(
+                "{}.{}.{}",
+                StructKeyType::Table,
+                self.table.schema_name,
+                self.table.table_name
+            );
             sqls.push((key, Self::table_to_sql(&mut self.table)));
 
             for i in self.sequence_owners.iter() {
                 let key = format!(
-                    "sequence_owner.{}.{}.{}",
-                    i.schema_name, i.table_name, i.sequence_name
+                    "{}.{}.{}.{}",
+                    StructKeyType::SequenceOwner,
+                    i.schema_name,
+                    i.table_name,
+                    i.sequence_name
                 );
                 sqls.push((key, Self::sequence_owner_to_sql(i)));
             }
 
             for i in self.column_comments.iter() {
                 let key = format!(
-                    "column_comment.{}.{}.{}",
-                    i.schema_name, i.table_name, i.column_name
+                    "{}.{}.{}.{}",
+                    StructKeyType::ColumnComment,
+                    i.schema_name,
+                    i.table_name,
+                    i.column_name
                 );
                 sqls.push((key, Self::comment_to_sql(i)));
             }
 
             for i in self.table_comments.iter() {
-                let key = format!("table_comment.{}.{}", i.schema_name, i.table_name);
+                let key = format!(
+                    "{}.{}.{}",
+                    StructKeyType::TableComment,
+                    i.schema_name,
+                    i.table_name
+                );
                 sqls.push((key, Self::comment_to_sql(i)));
             }
         }
@@ -111,8 +133,11 @@ impl PgCreateTableStatement {
             }
 
             let key = format!(
-                "constraint.{}.{}.{}",
-                i.schema_name, i.table_name, i.constraint_name
+                "{}.{}.{}.{}",
+                StructKeyType::Constraint,
+                i.schema_name,
+                i.table_name,
+                i.constraint_name
             );
             sqls.push((key, Self::constraint_to_sql(i)));
         }
@@ -131,7 +156,13 @@ impl PgCreateTableStatement {
                 }
             }
 
-            let key = format!("index.{}.{}.{}", i.schema_name, i.table_name, i.index_name);
+            let key = format!(
+                "{}.{}.{}.{}",
+                StructKeyType::Index,
+                i.schema_name,
+                i.table_name,
+                i.index_name
+            );
             sqls.push((key, Self::index_to_sql(i)?));
         }
 
