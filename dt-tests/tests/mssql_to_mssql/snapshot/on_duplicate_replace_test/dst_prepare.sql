@@ -32,7 +32,7 @@ INSERT INTO [ape_dts].on_duplicate_replace.conflict_rows VALUES
     (1, N'target-existing'), (4, N'target-primary-conflict');
 SET IDENTITY_INSERT [ape_dts].on_duplicate_replace.unique_rows ON;
 INSERT INTO [ape_dts].on_duplicate_replace.unique_rows (id, code, value)
-VALUES (99, N'code-1', N'target-unique-conflict');
+VALUES (1, N'code-1', N'target-unique-conflict');
 SET IDENTITY_INSERT [ape_dts].on_duplicate_replace.unique_rows OFF;
 INSERT INTO [ape_dts].on_duplicate_replace.nullable_unique_rows VALUES
     (99, NULL, N'target-null-conflict');
