@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MssqlColValueKind {
+pub(super) enum MssqlColValueKind {
     Bool,
     UnsignedTiny,
     Short,
@@ -33,7 +33,7 @@ enum MssqlColValueKind {
 }
 
 impl MssqlColValueKind {
-    fn type_name(self) -> &'static str {
+    pub(super) fn type_name(self) -> &'static str {
         match self {
             Self::Bool => "Bool",
             Self::UnsignedTiny => "UnsignedTiny",
@@ -52,7 +52,7 @@ impl MssqlColValueKind {
         }
     }
 
-    fn matches(self, value: &ColValue) -> bool {
+    pub(super) fn matches(self, value: &ColValue) -> bool {
         matches!(
             (self, value),
             (Self::Bool, ColValue::Bool(_))
@@ -285,49 +285,6 @@ impl MssqlColValueConvertor {
         Ok(parsed)
     }
 
-    pub fn bind<'a>(
-        query: &mut Query<'a>,
-        value: &'a ColValue,
-        col_type: &MssqlColType,
-    ) -> anyhow::Result<()> {
-        let kind = col_value_kind(col_type);
-        if !matches!(value, ColValue::None | ColValue::UnchangedToast) && !kind.matches(value) {
-            bail!(invalid_value(
-                value,
-                &format!("MSSQL {col_type:?}"),
-                format!("expected ColValue::{}", kind.type_name()),
-            ));
-        }
-
-        let result = match kind {
-            MssqlColValueKind::Bool => Self::bind_as(query, value, as_bool_checked),
-            MssqlColValueKind::UnsignedTiny => Self::bind_as(query, value, as_u8_checked),
-            MssqlColValueKind::Short => Self::bind_as(query, value, as_i16_checked),
-            MssqlColValueKind::Long => Self::bind_as(query, value, as_i32_checked),
-            MssqlColValueKind::LongLong => Self::bind_as(query, value, as_i64_checked),
-            MssqlColValueKind::Float => Self::bind_as(query, value, as_f32_checked),
-            MssqlColValueKind::Double => Self::bind_as(query, value, as_f64_checked),
-            MssqlColValueKind::Decimal => Self::bind_as(query, value, as_big_decimal),
-            MssqlColValueKind::String => match col_type {
-                MssqlColType::Guid => Self::bind_as(query, value, parse_uuid),
-                MssqlColType::Xml => Self::bind_as(query, value, parse_xml),
-                _ => Self::bind_as(query, value, as_text),
-            },
-            MssqlColValueKind::Blob => Self::bind_as(query, value, as_binary),
-            MssqlColValueKind::Date => Self::bind_as(query, value, parse_date),
-            MssqlColValueKind::Time => Self::bind_as(query, value, parse_time),
-            MssqlColValueKind::DateTime => Self::bind_as(query, value, parse_datetime),
-            MssqlColValueKind::Timestamp => Self::bind_as(query, value, parse_datetime_offset),
-        };
-
-        result.with_context(|| {
-            format!(
-                "failed to bind ColValue::{} as MSSQL {col_type:?}",
-                value.type_name()
-            )
-        })
-    }
-
     pub fn to_column_data<'a>(
         value: &'a ColValue,
         col_type: &MssqlColType,
@@ -370,7 +327,7 @@ impl MssqlColValueConvertor {
         })
     }
 
-    fn bind_as<'a, T>(
+    pub(super) fn bind_as<'a, T>(
         query: &mut Query<'a>,
         value: &'a ColValue,
         convert: impl FnOnce(&'a ColValue) -> anyhow::Result<T>,
@@ -407,7 +364,7 @@ impl MssqlColValueConvertor {
     }
 }
 
-fn col_value_kind(col_type: &MssqlColType) -> MssqlColValueKind {
+pub(super) fn col_value_kind(col_type: &MssqlColType) -> MssqlColValueKind {
     match col_type {
         MssqlColType::Bit | MssqlColType::Bitn => MssqlColValueKind::Bool,
         MssqlColType::Int1 => MssqlColValueKind::UnsignedTiny,
@@ -439,7 +396,11 @@ fn col_value_kind(col_type: &MssqlColType) -> MssqlColValueKind {
     }
 }
 
-fn invalid_value(value: &ColValue, target: &str, detail: impl std::fmt::Display) -> anyhow::Error {
+pub(super) fn invalid_value(
+    value: &ColValue,
+    target: &str,
+    detail: impl std::fmt::Display,
+) -> anyhow::Error {
     DtError::DatabaseStatementFailed(
         DbType::Mssql,
         format!(
@@ -450,7 +411,7 @@ fn invalid_value(value: &ColValue, target: &str, detail: impl std::fmt::Display)
     .into()
 }
 
-fn as_bool_checked(value: &ColValue) -> anyhow::Result<bool> {
+pub(super) fn as_bool_checked(value: &ColValue) -> anyhow::Result<bool> {
     match value {
         ColValue::Bool(value) => Ok(*value),
         _ => Err(invalid_value(value, "bit", "incompatible value type")),
@@ -491,35 +452,35 @@ fn parse_finite_f64(value: &str) -> anyhow::Result<f64> {
     }
 }
 
-fn as_u8_checked(value: &ColValue) -> anyhow::Result<u8> {
+pub(super) fn as_u8_checked(value: &ColValue) -> anyhow::Result<u8> {
     match value {
         ColValue::UnsignedTiny(value) => Ok(*value),
         _ => Err(invalid_value(value, "tinyint", "incompatible value type")),
     }
 }
 
-fn as_i16_checked(value: &ColValue) -> anyhow::Result<i16> {
+pub(super) fn as_i16_checked(value: &ColValue) -> anyhow::Result<i16> {
     match value {
         ColValue::Short(value) => Ok(*value),
         _ => Err(invalid_value(value, "smallint", "incompatible value type")),
     }
 }
 
-fn as_i32_checked(value: &ColValue) -> anyhow::Result<i32> {
+pub(super) fn as_i32_checked(value: &ColValue) -> anyhow::Result<i32> {
     match value {
         ColValue::Long(value) => Ok(*value),
         _ => Err(invalid_value(value, "int", "incompatible value type")),
     }
 }
 
-fn as_i64_checked(value: &ColValue) -> anyhow::Result<i64> {
+pub(super) fn as_i64_checked(value: &ColValue) -> anyhow::Result<i64> {
     match value {
         ColValue::LongLong(value) => Ok(*value),
         _ => Err(invalid_value(value, "bigint", "incompatible value type")),
     }
 }
 
-fn as_f32_checked(value: &ColValue) -> anyhow::Result<f32> {
+pub(super) fn as_f32_checked(value: &ColValue) -> anyhow::Result<f32> {
     match value {
         ColValue::Float(value) if value.is_finite() => Ok(*value),
         ColValue::Float(_) => Err(invalid_value(value, "real", "value must be finite")),
@@ -527,7 +488,7 @@ fn as_f32_checked(value: &ColValue) -> anyhow::Result<f32> {
     }
 }
 
-fn as_f64_checked(value: &ColValue) -> anyhow::Result<f64> {
+pub(super) fn as_f64_checked(value: &ColValue) -> anyhow::Result<f64> {
     match value {
         ColValue::Double(value) if value.is_finite() => Ok(*value),
         ColValue::Double(_) => Err(invalid_value(value, "float", "value must be finite")),
@@ -535,7 +496,7 @@ fn as_f64_checked(value: &ColValue) -> anyhow::Result<f64> {
     }
 }
 
-fn as_big_decimal(value: &ColValue) -> anyhow::Result<BigDecimal> {
+pub(super) fn as_big_decimal(value: &ColValue) -> anyhow::Result<BigDecimal> {
     match value {
         ColValue::Decimal(value) => parse_decimal(value),
         _ => Err(invalid_value(value, "decimal", "incompatible value type")),
@@ -599,29 +560,29 @@ fn decimal_literal_shape(value: &str) -> anyhow::Result<(usize, usize)> {
     Ok((precision, fraction.len()))
 }
 
-fn as_text(value: &ColValue) -> anyhow::Result<&str> {
+pub(super) fn as_text(value: &ColValue) -> anyhow::Result<&str> {
     match value {
         ColValue::String(value) => Ok(value),
         _ => Err(invalid_value(value, "text", "incompatible value type")),
     }
 }
 
-fn as_binary(value: &ColValue) -> anyhow::Result<&[u8]> {
+pub(super) fn as_binary(value: &ColValue) -> anyhow::Result<&[u8]> {
     match value {
         ColValue::Blob(value) => Ok(value),
         _ => Err(invalid_value(value, "binary", "incompatible value type")),
     }
 }
 
-fn parse_uuid(value: &ColValue) -> anyhow::Result<Uuid> {
+pub(super) fn parse_uuid(value: &ColValue) -> anyhow::Result<Uuid> {
     Ok(Uuid::parse_str(as_utf8_text(value, "uniqueidentifier")?)?)
 }
 
-fn parse_xml(value: &ColValue) -> anyhow::Result<XmlData> {
+pub(super) fn parse_xml(value: &ColValue) -> anyhow::Result<XmlData> {
     Ok(XmlData::new(as_utf8_text(value, "xml")?))
 }
 
-fn parse_date(value: &ColValue) -> anyhow::Result<NaiveDate> {
+pub(super) fn parse_date(value: &ColValue) -> anyhow::Result<NaiveDate> {
     let value = match value {
         ColValue::Date(value) => value,
         _ => return Err(invalid_value(value, "date", "incompatible value type")),
@@ -629,7 +590,7 @@ fn parse_date(value: &ColValue) -> anyhow::Result<NaiveDate> {
     Ok(NaiveDate::parse_from_str(value, "%Y-%m-%d")?)
 }
 
-fn parse_time(value: &ColValue) -> anyhow::Result<NaiveTime> {
+pub(super) fn parse_time(value: &ColValue) -> anyhow::Result<NaiveTime> {
     let value = match value {
         ColValue::Time(value) => value,
         _ => return Err(invalid_value(value, "time", "incompatible value type")),
@@ -637,7 +598,7 @@ fn parse_time(value: &ColValue) -> anyhow::Result<NaiveTime> {
     Ok(NaiveTime::parse_from_str(value, "%H:%M:%S%.f")?)
 }
 
-fn parse_datetime(value: &ColValue) -> anyhow::Result<NaiveDateTime> {
+pub(super) fn parse_datetime(value: &ColValue) -> anyhow::Result<NaiveDateTime> {
     let value = match value {
         ColValue::DateTime(value) => value,
         _ => {
@@ -650,7 +611,7 @@ fn parse_datetime(value: &ColValue) -> anyhow::Result<NaiveDateTime> {
     )?)
 }
 
-fn parse_datetime_offset(value: &ColValue) -> anyhow::Result<DateTime<FixedOffset>> {
+pub(super) fn parse_datetime_offset(value: &ColValue) -> anyhow::Result<DateTime<FixedOffset>> {
     let value = match value {
         ColValue::Timestamp(value) => value,
         _ => {
@@ -874,64 +835,5 @@ mod tests {
         assert!(MssqlColValueConvertor::from_str(&col_type("bit"), "2").is_err());
         assert!(MssqlColValueConvertor::from_str(&col_type("real"), "NaN").is_err());
         assert!(MssqlColValueConvertor::from_str(&col_type("float"), "inf").is_err());
-    }
-
-    #[test]
-    fn binds_typed_nulls_and_rejects_invalid_values_before_into_sql() {
-        let null = ColValue::None;
-        for type_name in [
-            "bit",
-            "tinyint",
-            "smallint",
-            "int",
-            "bigint",
-            "real",
-            "float",
-            "money",
-            "smallmoney",
-            "decimal",
-            "numeric",
-            "varchar",
-            "char",
-            "nvarchar",
-            "nchar",
-            "text",
-            "ntext",
-            "varbinary",
-            "binary",
-            "image",
-            "rowversion",
-            "timestamp",
-            "uniqueidentifier",
-            "xml",
-            "date",
-            "time",
-            "smalldatetime",
-            "datetime",
-            "datetime2",
-            "datetimeoffset",
-        ] {
-            let mut query = Query::new("SELECT @P1");
-            MssqlColValueConvertor::bind(&mut query, &null, &col_type(type_name)).unwrap();
-        }
-
-        let mut query = Query::new("SELECT @P1");
-        assert!(MssqlColValueConvertor::bind(
-            &mut query,
-            &ColValue::UnchangedToast,
-            &col_type("int")
-        )
-        .is_err());
-
-        let wrong_money_value = ColValue::Decimal("12.3400".to_string());
-        let mut query = Query::new("SELECT @P1");
-        assert!(
-            MssqlColValueConvertor::bind(&mut query, &wrong_money_value, &col_type("money"))
-                .is_err()
-        );
-
-        let money_value = ColValue::Double(12.34);
-        let mut query = Query::new("SELECT @P1");
-        MssqlColValueConvertor::bind(&mut query, &money_value, &col_type("money")).unwrap();
     }
 }

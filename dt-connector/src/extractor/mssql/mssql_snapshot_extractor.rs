@@ -10,7 +10,7 @@ use dt_common::{
     error::{DtError, DtErrorContextExt, ErrorObject, Stage},
     log_debug, log_info,
     meta::{
-        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
+        adaptor::{mssql_col_value_convertor::MssqlColValueConvertor, tiberius_ext::TiberiusExt},
         col_value::ColValue,
         dt_data::DtData,
         mssql::{
@@ -443,11 +443,11 @@ impl MssqlSnapshotExtractor {
         };
         match (&start_value, &end_value) {
             (ColValue::None, end) => {
-                MssqlColValueConvertor::bind(&mut query, end, &partition_col_type)?;
+                query.bind_col_value(end, &partition_col_type)?;
             }
             (start, end) => {
-                MssqlColValueConvertor::bind(&mut query, start, &partition_col_type)?;
-                MssqlColValueConvertor::bind(&mut query, end, &partition_col_type)?;
+                query.bind_col_value(start, &partition_col_type)?;
+                query.bind_col_value(end, &partition_col_type)?;
             }
         }
         let ignore_cols = shared
@@ -1110,11 +1110,7 @@ impl MssqlTableCtx {
                             MssqlSnapshotExtractor::quote(order_col)
                         )
                     })?;
-                    MssqlColValueConvertor::bind(
-                        &mut query,
-                        value,
-                        tb_meta.get_col_type(order_col)?,
-                    )?;
+                    query.bind_col_value(value, tb_meta.get_col_type(order_col)?)?;
                 }
                 query
             };

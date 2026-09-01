@@ -8,8 +8,8 @@ use crate::{
     config::config_enums::DbType,
     error::DtError,
     meta::{
-        adaptor::mssql_col_value_convertor::MssqlColValueConvertor, col_value::ColValue,
-        row_data::RowData, row_type::RowType,
+        adaptor::tiberius_ext::TiberiusExt, col_value::ColValue, row_data::RowData,
+        row_type::RowType,
     },
     utils::sql_util::SqlUtil,
 };
@@ -59,7 +59,7 @@ impl<'a> MssqlTableSqlBuilder<'a> {
             .collect::<anyhow::Result<Vec<_>>>()?;
         let mut query = Query::new(query_info.sql.as_str());
         for (index, value) in query_info.binds.iter().enumerate() {
-            MssqlColValueConvertor::bind(&mut query, value, col_types[index % col_types.len()])?;
+            query.bind_col_value(value, col_types[index % col_types.len()])?;
         }
         Ok(query)
     }

@@ -2,7 +2,7 @@
 mod test {
     use anyhow::{ensure, Context};
     use dt_common::meta::{
-        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
+        adaptor::{mssql_col_value_convertor::MssqlColValueConvertor, tiberius_ext::TiberiusExt},
         col_value::ColValue,
         mssql::{
             mssql_col_type::{parse_mssql_col_type, MssqlColType},
@@ -530,7 +530,8 @@ mod test {
             ));
             insert.bind(case_id);
             for (case, value) in cases.iter().zip(&parsed_values) {
-                MssqlColValueConvertor::bind(&mut insert, value, &col_type(case.type_name)?)
+                insert
+                    .bind_col_value(value, &col_type(case.type_name)?)
                     .with_context(|| {
                         format!("failed to bind {} for source row {case_id}", case.col)
                     })?;
