@@ -18,8 +18,6 @@ use tiberius::Client;
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
-use crate::test_config_util::TestConfigUtil;
-
 type MssqlTestTdsClient = Client<Compat<TcpStream>>;
 
 #[derive(Clone, Copy)]
@@ -43,14 +41,6 @@ struct MssqlEndpointConfig {
 }
 
 impl MssqlTestEndpoint {
-    pub fn from_config_file(
-        relative_config_file: &str,
-        endpoint: TaskConfigEndpoint,
-    ) -> anyhow::Result<Self> {
-        let config = TestConfigUtil::load_task_config(relative_config_file)?;
-        Self::from_task_config(&config, endpoint)
-    }
-
     pub fn from_task_config(
         config: &TaskConfig,
         endpoint: TaskConfigEndpoint,

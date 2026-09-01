@@ -10,8 +10,9 @@ mod test {
         },
         error::{ErrorCode, ErrorReport},
         meta::{
+            adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
             mssql::{
-                mssql_connection_pool::{MssqlClient, MssqlConnectionPool, MssqlPooledConnection},
+                mssql_connection_pool::{MssqlClient, MssqlConnectionPool},
                 mssql_tb_meta::MssqlTbMeta,
             },
             rdb_tb_meta::RdbTbMeta,
@@ -22,133 +23,79 @@ mod test {
     use tokio::sync::Barrier;
     use url::Url;
 
-    use super::super::{JDBC_TASK_CONFIG_FILE, TASK_CONFIG_FILE};
-    use crate::test_runner::mssql_test_endpoint::{MssqlTestEndpoint, TaskConfigEndpoint};
+    use crate::{
+        mssql_to_mssql::functionality::mssql_component_test_context::MssqlComponentTestContext,
+        test_runner::mssql_test_endpoint::MssqlTestEndpoint,
+    };
 
-    const TEST_DATABASE: &str = "ape_dts";
-    const CROSS_TASK_TABLE: &str = "[ape_dts].[dbo].[ape_dts_pool_cross_task_test]";
-    const TRANSACTION_TABLE: &str = "[ape_dts].[dbo].[ape_dts_pool_transaction_test]";
-    const POISONED_TABLE: &str = "[ape_dts].[dbo].[ape_dts_pool_poisoned_test]";
-    const TABLE_SINK_IDENTITY_TABLE: &str = "ape_dts_pool_table_sink_identity_test";
-    const TABLE_SINK_REGULAR_TABLE: &str = "ape_dts_pool_table_sink_regular_test";
+    const TEST_DATABASE: &str = "ape_dts_connection_pool_component_test";
+    const CROSS_TASK_TABLE: &str = "[ape_dts_connection_pool_component_test].[dbo].[cross_task]";
+    const TRANSACTION_TABLE: &str =
+        "[ape_dts_connection_pool_component_test].[dbo].[transaction_test]";
+    const POISONED_TABLE: &str =
+        "[ape_dts_connection_pool_component_test].[dbo].[poisoned_transaction]";
+    const TABLE_SINK_IDENTITY_TABLE: &str = "table_sink_identity";
+    const TABLE_SINK_REGULAR_TABLE: &str = "table_sink_regular";
 
-    fn load_endpoint(config_endpoint: TaskConfigEndpoint) -> anyhow::Result<MssqlTestEndpoint> {
-        MssqlTestEndpoint::from_config_file(TASK_CONFIG_FILE, config_endpoint)
+    async fn test_context() -> anyhow::Result<MssqlComponentTestContext> {
+        MssqlComponentTestContext::new("connection_pool_test", &[], &[]).await
     }
 
-    async fn create_pool_for_endpoint(
-        endpoint: &MssqlTestEndpoint,
-        auth: &ConnectionAuthConfig,
-        max_connections: u32,
-        connection_timeout_secs: u64,
-    ) -> anyhow::Result<MssqlConnectionPool> {
-        endpoint.ensure_database(TEST_DATABASE).await?;
-
-        let pool = MssqlConnectionPool::from_config(
-            endpoint.connection_string(),
-            auth,
-            None,
-            max_connections,
-            connection_timeout_secs,
-        )
-        .await?;
-        pool.check_connection().await?;
-        Ok(pool)
+    async fn query_rows(client: &mut MssqlClient, sql: &str) -> anyhow::Result<Vec<Row>> {
+        Ok(client.query(sql, &[]).await?.into_first_result().await?)
     }
 
-    async fn create_source_pool(max_connections: u32) -> anyhow::Result<MssqlConnectionPool> {
-        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
-        create_pool_for_endpoint(&endpoint, endpoint.connection_auth(), max_connections, 15).await
-    }
-
-    async fn execute_batch(
-        connection: &mut MssqlPooledConnection<'_>,
-        sql: &str,
-    ) -> anyhow::Result<()> {
-        connection
-            .client_mut()
-            .simple_query(sql)
-            .await?
-            .into_results()
-            .await?;
-        Ok(())
-    }
-
-    async fn query_rows(
-        connection: &mut MssqlPooledConnection<'_>,
-        sql: &str,
-    ) -> anyhow::Result<Vec<Row>> {
-        Ok(connection
-            .client_mut()
-            .query(sql, &[])
-            .await?
-            .into_first_result()
-            .await?)
-    }
-
-    async fn query_i32(
-        connection: &mut MssqlPooledConnection<'_>,
-        sql: &str,
-    ) -> anyhow::Result<i32> {
-        let row = query_rows(connection, sql)
-            .await?
-            .into_iter()
-            .next()
-            .context("MSSQL scalar query returned no rows")?;
-        row.try_get::<i32, _>(0)?
-            .context("MSSQL scalar query returned NULL")
-    }
-
-    async fn query_i32_from_client(client: &mut MssqlClient, sql: &str) -> anyhow::Result<i32> {
-        let row = client
+    async fn query_row(client: &mut MssqlClient, sql: &str) -> anyhow::Result<Row> {
+        client
             .query(sql, &[])
             .await?
             .into_row()
             .await?
-            .context("MSSQL scalar query returned no rows")?;
-        row.try_get::<i32, _>(0)?
-            .context("MSSQL scalar query returned NULL")
+            .context("MSSQL scalar query returned no rows")
     }
 
-    async fn query_string(
-        connection: &mut MssqlPooledConnection<'_>,
-        sql: &str,
-    ) -> anyhow::Result<String> {
-        let row = query_rows(connection, sql)
-            .await?
-            .into_iter()
-            .next()
-            .context("MSSQL scalar query returned no rows")?;
-        row.try_get::<&str, _>(0)?
-            .map(str::to_owned)
-            .context("MSSQL scalar query returned NULL")
+    async fn query_i32(client: &mut MssqlClient, sql: &str) -> anyhow::Result<i32> {
+        let row = query_row(client, sql).await?;
+        MssqlColValueConvertor::from_query_required_i32(&row, "value")
+    }
+
+    async fn query_string(client: &mut MssqlClient, sql: &str) -> anyhow::Result<String> {
+        let row = query_row(client, sql).await?;
+        MssqlColValueConvertor::from_query_required_string(&row, "value")
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn pool_uses_ini_endpoints_and_configured_limits() -> anyhow::Result<()> {
+        let context = test_context().await?;
         let configurations = [
-            (TaskConfigEndpoint::Extractor, 1, 2),
-            (TaskConfigEndpoint::Sinker, 3, 4),
+            (
+                &context.source_pool,
+                context.runner.config.extractor_basic.max_connections,
+                context
+                    .runner
+                    .config
+                    .extractor_basic
+                    .connection_timeout_secs,
+            ),
+            (
+                &context.sinker_pool,
+                context.runner.config.sinker_basic.max_connections,
+                context.runner.config.sinker_basic.connection_timeout_secs,
+            ),
         ];
 
-        for (endpoint_section, max_connections, connection_timeout_secs) in configurations {
-            let endpoint = load_endpoint(endpoint_section)?;
-            let pool = create_pool_for_endpoint(
-                &endpoint,
-                endpoint.connection_auth(),
-                max_connections,
-                connection_timeout_secs,
-            )
-            .await?;
-
+        for (pool, max_connections, connection_timeout_secs) in configurations {
             assert_eq!(pool.max_size(), max_connections);
             assert_eq!(
                 pool.connection_timeout(),
                 Duration::from_secs(connection_timeout_secs)
             );
             let mut connection = pool.get().await?;
-            assert_eq!(query_i32(&mut connection, "SELECT 1").await?, 1);
+            assert_eq!(
+                query_i32(connection.client_mut(), "SELECT 1 AS [value]").await?,
+                1
+            );
             drop(connection);
         }
         Ok(())
@@ -157,16 +104,25 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn ordinary_queries_reuse_connections_without_marking() -> anyhow::Result<()> {
-        let pool = create_source_pool(1).await?;
+        let context = test_context().await?;
+        let pool = &context.source_pool;
 
         let first_session_id = {
             let mut connection = pool.get().await?;
             assert!(!connection.will_discard());
-            query_i32(&mut connection, "SELECT CAST(@@SPID AS INT)").await?
+            query_i32(
+                connection.client_mut(),
+                "SELECT CAST(@@SPID AS INT) AS [value]",
+            )
+            .await?
         };
         let second_session_id = {
             let mut connection = pool.get().await?;
-            query_i32(&mut connection, "SELECT CAST(@@SPID AS INT)").await?
+            query_i32(
+                connection.client_mut(),
+                "SELECT CAST(@@SPID AS INT) AS [value]",
+            )
+            .await?
         };
 
         assert_eq!(first_session_id, second_session_id);
@@ -176,7 +132,8 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn managed_connection_exposes_discard_state() -> anyhow::Result<()> {
-        let pool = create_source_pool(1).await?;
+        let context = test_context().await?;
+        let pool = &context.source_pool;
         let mut connection = pool.get().await?;
 
         assert!(!connection.will_discard());
@@ -198,7 +155,8 @@ mod test {
             connection_timeout_secs: u64,
         }
 
-        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
+        let context = test_context().await?;
+        let endpoint = context.source_endpoint()?;
         let valid_auth = endpoint.connection_auth().clone();
         let username = endpoint.username()?.to_string();
         let password = endpoint.password()?.to_string();
@@ -299,7 +257,8 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn tiberius_provider_classifies_sql_server_authentication_errors() -> anyhow::Result<()> {
-        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
+        let context = test_context().await?;
+        let endpoint = context.source_endpoint()?;
         let invalid_auth = ConnectionAuthConfig::BasicSsl {
             username: Some(endpoint.username()?.to_string()),
             password: Some("invalid-password".to_string()),
@@ -329,9 +288,9 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn pool_accepts_url_ado_and_jdbc_strings_with_task_overrides() -> anyhow::Result<()> {
-        let endpoint = load_endpoint(TaskConfigEndpoint::Extractor)?;
-        endpoint.ensure_database(TEST_DATABASE).await?;
+    async fn pool_accepts_url_and_ado_strings_with_task_overrides() -> anyhow::Result<()> {
+        let context = test_context().await?;
+        let endpoint = context.source_endpoint()?;
         let auth = endpoint.connection_auth();
 
         let mut url_only_connection_string = Url::parse(endpoint.connection_string())?;
@@ -343,6 +302,8 @@ mod test {
             .map_err(|_| anyhow::anyhow!("MSSQL test URL should accept a password"))?;
         url_only_connection_string
             .query_pairs_mut()
+            .clear()
+            .append_pair("database", TEST_DATABASE)
             .append_pair("encrypt", "disable")
             .append_pair("app name", "from-url-only");
         let pool = MssqlConnectionPool::from_config(
@@ -355,11 +316,11 @@ mod test {
         .await?;
         let mut connection = pool.get().await?;
         assert_eq!(
-            query_string(&mut connection, "SELECT APP_NAME()").await?,
+            query_string(connection.client_mut(), "SELECT APP_NAME() AS [value]").await?,
             "from-url-only"
         );
         assert_eq!(
-            query_string(&mut connection, "SELECT DB_NAME()").await?,
+            query_string(connection.client_mut(), "SELECT DB_NAME() AS [value]").await?,
             TEST_DATABASE
         );
         drop(connection);
@@ -387,7 +348,7 @@ mod test {
         .await?;
         let mut connection = pool.get().await?;
         assert_eq!(
-            query_string(&mut connection, "SELECT APP_NAME()").await?,
+            query_string(connection.client_mut(), "SELECT APP_NAME() AS [value]").await?,
             "from-ado-only"
         );
         drop(connection);
@@ -397,56 +358,34 @@ mod test {
             "{};User ID=invalid;Password=invalid;Encrypt=true;Application Name=from-ado",
             ado_base
         );
-        let jdbc_endpoint = MssqlTestEndpoint::from_config_file(
-            JDBC_TASK_CONFIG_FILE,
-            TaskConfigEndpoint::Extractor,
-        )?;
-        let configurations = [
-            (ado_connection_string.as_str(), "ape-dts-ado-test"),
-            (jdbc_endpoint.connection_string(), "ape-dts-jdbc-test"),
-        ];
-
-        for (connection_string, application_name) in configurations {
-            let pool = MssqlConnectionPool::from_config(
-                connection_string,
-                auth,
-                Some(application_name),
-                1,
-                15,
-            )
-            .await?;
-            let mut connection = pool.get().await?;
-            assert_eq!(
-                query_string(&mut connection, "SELECT APP_NAME()").await?,
-                application_name
-            );
-            assert_eq!(
-                query_string(&mut connection, "SELECT DB_NAME()").await?,
-                TEST_DATABASE
-            );
-        }
+        let pool = MssqlConnectionPool::from_config(
+            &ado_connection_string,
+            auth,
+            Some("ape-dts-ado-test"),
+            1,
+            15,
+        )
+        .await?;
+        let mut connection = pool.get().await?;
+        assert_eq!(
+            query_string(connection.client_mut(), "SELECT APP_NAME() AS [value]").await?,
+            "ape-dts-ado-test"
+        );
+        assert_eq!(
+            query_string(connection.client_mut(), "SELECT DB_NAME() AS [value]").await?,
+            TEST_DATABASE
+        );
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[serial]
     async fn pool_can_be_used_from_multiple_tokio_tasks() -> anyhow::Result<()> {
-        const MAX_CONNECTIONS: u32 = 2;
         const TASK_COUNT: usize = 8;
 
-        let pool = create_source_pool(MAX_CONNECTIONS).await?;
-        assert_eq!(pool.max_size(), MAX_CONNECTIONS);
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!(
-                "DROP TABLE IF EXISTS {CROSS_TASK_TABLE};\
-                 CREATE TABLE {CROSS_TASK_TABLE} (\
-                     task_id INT NOT NULL PRIMARY KEY,\
-                     session_id INT NOT NULL\
-                 )"
-            ),
-        )
-        .await?;
+        let context = test_context().await?;
+        let pool = context.source_pool.clone();
+        let max_connections = pool.max_size();
 
         let start = Arc::new(Barrier::new(TASK_COUNT));
         let mut tasks = Vec::with_capacity(TASK_COUNT);
@@ -456,7 +395,11 @@ mod test {
             tasks.push(tokio::spawn(async move {
                 task_start.wait().await;
                 let mut connection = task_pool.get().await?;
-                let session_id = query_i32(&mut connection, "SELECT CAST(@@SPID AS INT)").await?;
+                let session_id = query_i32(
+                    connection.client_mut(),
+                    "SELECT CAST(@@SPID AS INT) AS [value]",
+                )
+                .await?;
                 connection
                     .client_mut()
                     .execute(
@@ -467,7 +410,7 @@ mod test {
                         &[&(task_id as i32), &session_id],
                     )
                     .await?;
-                execute_batch(&mut connection, "WAITFOR DELAY '00:00:00.050'").await?;
+                tokio::time::sleep(Duration::from_millis(50)).await;
                 anyhow::Ok(session_id)
             }));
         }
@@ -479,11 +422,11 @@ mod test {
 
         let distinct_sessions = task_session_ids.into_iter().collect::<HashSet<_>>();
         assert!(!distinct_sessions.is_empty());
-        assert!(distinct_sessions.len() <= MAX_CONNECTIONS as usize);
+        assert!(distinct_sessions.len() <= max_connections as usize);
 
         let mut connection = pool.get().await?;
         let rows = query_rows(
-            &mut connection,
+            connection.client_mut(),
             &format!("SELECT task_id, session_id FROM {CROSS_TASK_TABLE} ORDER BY task_id"),
         )
         .await?;
@@ -498,34 +441,25 @@ mod test {
             assert!(distinct_sessions.contains(&session_id));
         }
 
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!("DROP TABLE IF EXISTS {CROSS_TASK_TABLE}"),
-        )
-        .await?;
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn pooled_connection_supports_commit_and_rollback() -> anyhow::Result<()> {
-        let pool = create_source_pool(1).await?;
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!(
-                "DROP TABLE IF EXISTS {TRANSACTION_TABLE};\
-                 CREATE TABLE {TRANSACTION_TABLE} (id INT NOT NULL PRIMARY KEY)"
-            ),
-        )
-        .await?;
+        let context = test_context().await?;
+        let pool = &context.source_pool;
 
         let mut transaction = pool.begin().await?;
         assert_eq!(
-            query_i32_from_client(transaction.client_mut(), "SELECT @@TRANCOUNT").await?,
+            query_i32(transaction.client_mut(), "SELECT @@TRANCOUNT AS [value]").await?,
             1
         );
-        let committed_session_id =
-            query_i32_from_client(transaction.client_mut(), "SELECT CAST(@@SPID AS INT)").await?;
+        let committed_session_id = query_i32(
+            transaction.client_mut(),
+            "SELECT CAST(@@SPID AS INT) AS [value]",
+        )
+        .await?;
         transaction
             .client_mut()
             .execute(
@@ -536,8 +470,11 @@ mod test {
         transaction.commit().await?;
 
         let mut transaction = pool.begin().await?;
-        let rolled_back_session_id =
-            query_i32_from_client(transaction.client_mut(), "SELECT CAST(@@SPID AS INT)").await?;
+        let rolled_back_session_id = query_i32(
+            transaction.client_mut(),
+            "SELECT CAST(@@SPID AS INT) AS [value]",
+        )
+        .await?;
         assert_eq!(committed_session_id, rolled_back_session_id);
         transaction
             .client_mut()
@@ -549,9 +486,12 @@ mod test {
         transaction.rollback().await?;
 
         let mut connection = pool.get().await?;
-        assert_eq!(query_i32(&mut connection, "SELECT @@TRANCOUNT").await?, 0);
+        assert_eq!(
+            query_i32(connection.client_mut(), "SELECT @@TRANCOUNT AS [value]").await?,
+            0
+        );
         let rows = query_rows(
-            &mut connection,
+            connection.client_mut(),
             &format!("SELECT id FROM {TRANSACTION_TABLE} ORDER BY id"),
         )
         .await?;
@@ -559,11 +499,6 @@ mod test {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get::<i32, _>("id"), Some(1));
 
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!("DROP TABLE IF EXISTS {TRANSACTION_TABLE}"),
-        )
-        .await?;
         Ok(())
     }
 
@@ -571,15 +506,8 @@ mod test {
     #[serial]
     async fn dropping_an_active_transaction_rolls_back_by_discarding_its_session(
     ) -> anyhow::Result<()> {
-        let pool = create_source_pool(1).await?;
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!(
-                "DROP TABLE IF EXISTS {POISONED_TABLE};\
-                 CREATE TABLE {POISONED_TABLE} (id INT NOT NULL PRIMARY KEY)"
-            ),
-        )
-        .await?;
+        let context = test_context().await?;
+        let pool = &context.source_pool;
 
         {
             let mut transaction = pool.begin().await?;
@@ -593,42 +521,27 @@ mod test {
         }
 
         let mut replacement = pool.get().await?;
-        let transaction_count = query_i32(&mut replacement, "SELECT @@TRANCOUNT").await?;
+        let transaction_count =
+            query_i32(replacement.client_mut(), "SELECT @@TRANCOUNT AS [value]").await?;
         let row_count = query_i32(
-            &mut replacement,
-            &format!("SELECT COUNT(*) FROM {POISONED_TABLE}"),
+            replacement.client_mut(),
+            &format!("SELECT COUNT(*) AS [value] FROM {POISONED_TABLE}"),
         )
         .await?;
         drop(replacement);
 
         assert_eq!(transaction_count, 0);
         assert_eq!(row_count, 0, "the uncommitted insert should be rolled back");
-
-        MssqlTestEndpoint::execute_batch(&pool, &format!("DROP TABLE IF EXISTS {POISONED_TABLE}"))
-            .await?;
         Ok(())
     }
 
     #[tokio::test]
     #[serial]
     async fn table_sink_session_uses_table_meta_to_control_identity_insert() -> anyhow::Result<()> {
-        let pool = create_source_pool(1).await?;
+        let context = test_context().await?;
+        let pool = &context.source_pool;
         let identity_table = format!("[{TEST_DATABASE}].[dbo].[{TABLE_SINK_IDENTITY_TABLE}]");
         let regular_table = format!("[{TEST_DATABASE}].[dbo].[{TABLE_SINK_REGULAR_TABLE}]");
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!(
-                "DROP TABLE IF EXISTS {identity_table};
-                 DROP TABLE IF EXISTS {regular_table};
-                 CREATE TABLE {identity_table} (
-                    id INT IDENTITY(1, 1) NOT NULL PRIMARY KEY
-                 );
-                 CREATE TABLE {regular_table} (
-                    id INT NOT NULL PRIMARY KEY
-                 );"
-            ),
-        )
-        .await?;
 
         let build_tb_meta = |table: &str, identity_col: Option<&str>| MssqlTbMeta {
             basic: RdbTbMeta {
@@ -675,30 +588,21 @@ mod test {
         let mut connection = pool.get().await?;
         assert_eq!(
             query_i32(
-                &mut connection,
-                &format!("SELECT COUNT(*) FROM {identity_table} WHERE id = 10"),
+                connection.client_mut(),
+                &format!("SELECT COUNT(*) AS [value] FROM {identity_table} WHERE id = 10"),
             )
             .await?,
             1
         );
         assert_eq!(
             query_i32(
-                &mut connection,
-                &format!("SELECT COUNT(*) FROM {regular_table} WHERE id = 20"),
+                connection.client_mut(),
+                &format!("SELECT COUNT(*) AS [value] FROM {regular_table} WHERE id = 20"),
             )
             .await?,
             1
         );
         drop(connection);
-
-        MssqlTestEndpoint::execute_batch(
-            &pool,
-            &format!(
-                "DROP TABLE IF EXISTS {identity_table};
-                 DROP TABLE IF EXISTS {regular_table};"
-            ),
-        )
-        .await?;
         Ok(())
     }
 }

@@ -144,6 +144,13 @@ impl MssqlColValueConvertor {
         })
     }
 
+    pub fn from_query_required_i32(row: &Row, col: &str) -> anyhow::Result<i32> {
+        Self::from_query_required(row, col, "Long", |value| match value {
+            ColValue::Long(value) => Some(value),
+            _ => None,
+        })
+    }
+
     pub fn from_query_required_u8(row: &Row, col: &str) -> anyhow::Result<u8> {
         Self::from_query_required(row, col, "UnsignedTiny", |value| match value {
             ColValue::UnsignedTiny(value) => Some(value),

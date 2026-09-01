@@ -1,2 +1,2 @@
-pub mod funtionality;
+pub mod functionality;
 pub mod snapshot_tests;
