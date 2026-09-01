@@ -9,7 +9,8 @@ use dt_common::{
         dt_data::{DtData, DtItem},
         mssql::{
             mssql_connection_pool::MssqlConnectionPool, mssql_meta_manager::MssqlMetaManager,
-            mssql_tb_meta::MssqlTbMeta,
+            mssql_query_builder::MssqlTableSqlBuilder,
+            mssql_table_sink_session::MssqlTableSinkSession, mssql_tb_meta::MssqlTbMeta,
         },
         position::Position,
         row_data::RowData,
@@ -18,10 +19,7 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
-use crate::{
-    rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
-    Sinker,
-};
+use crate::{rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
 
 #[derive(Clone)]
 pub struct MssqlSinker {
@@ -57,48 +55,43 @@ impl MssqlSinker {
         data: &[RowData],
         start_index: usize,
         batch_size: usize,
+        tb_meta: &MssqlTbMeta,
+        session: &mut MssqlTableSinkSession<'_, '_>,
     ) -> anyhow::Result<()> {
         let rows = &data[start_index..start_index + batch_size];
         let task_id = self.base_sinker.source_task_id_for_rows(rows, &self.router);
         self.base_sinker.ensure_monitor_for(&task_id);
-        let tb_meta = self
-            .meta_manager
-            .get_tb_meta_by_row_data(&rows[0])
-            .await?
-            .clone();
-
-        let query_builder = RdbQueryBuilder::new_for_mssql(&tb_meta, None);
-        // Like the PostgreSQL sinker, always try the cheapest multi-row insert
-        // first. The serial fallback applies the configured insert semantics.
-        let (query_info, data_size) =
-            query_builder.get_batch_insert_query(data, start_index, batch_size, false)?;
-        let query = query_builder.create_mssql_query(&query_info)?;
+        let data_size = rows.iter().map(|row| row.data_size).sum::<usize>();
+        let use_bulk_insert = session.can_bulk_insert(rows);
 
         let start_time = Instant::now();
-        let mut session = self
-            .connection_pool
-            .get_table_sink_session(&tb_meta)
-            .await?;
         let mut rts = LimitedQueue::new(1);
-        match query.execute(session.client_mut()).await {
+        let batch_result = if use_bulk_insert {
+            session.bulk_insert(rows).await
+        } else {
+            let query_builder = MssqlTableSqlBuilder::new(tb_meta, None);
+            let (query_info, _) = query_builder.get_batch_insert_query(rows)?;
+            let query = query_builder.create_query(&query_info)?;
+            query
+                .execute(session.client_mut())
+                .await
+                .map(|_| ())
+                .map_err(anyhow::Error::from)
+        };
+        match batch_result {
             Ok(_) => {
-                session.post().await?;
                 rts.push((start_time.elapsed().as_millis() as u64, 1));
             }
             Err(batch_error) => {
-                let batch_error = anyhow::Error::from(batch_error);
-                let post_error = session.post().await.err();
-                drop(session);
-
-                let batch_error = Self::with_session_cleanup_errors(batch_error, None, post_error);
                 log_error!(
-                    "MSSQL batch insert failed, will sink one by one in one transaction, schema: {}, tb: {}, replace: {}, error: {:#}",
+                    "MSSQL batch insert failed, will sink one by one in one transaction, schema: {}, tb: {}, bulk_insert: {}, upsert: {}, error: {:#}",
                     tb_meta.basic.schema,
                     tb_meta.basic.tb,
+                    use_bulk_insert,
                     self.replace,
                     batch_error
                 );
-                self.serial_sink(rows, &tb_meta).await?;
+                self.serial_insert(rows, tb_meta, session).await?;
             }
         }
 
@@ -113,26 +106,28 @@ impl MssqlSinker {
         Ok(())
     }
 
-    async fn serial_sink(&mut self, rows: &[RowData], tb_meta: &MssqlTbMeta) -> anyhow::Result<()> {
+    async fn serial_insert(
+        &mut self,
+        rows: &[RowData],
+        tb_meta: &MssqlTbMeta,
+        session: &mut MssqlTableSinkSession<'_, '_>,
+    ) -> anyhow::Result<()> {
         let task_id = self.base_sinker.source_task_id_for_rows(rows, &self.router);
         self.base_sinker.ensure_monitor_for(&task_id);
-        let query_builder = RdbQueryBuilder::new_for_mssql(tb_meta, None);
-        let mut session = self.connection_pool.get_table_sink_session(tb_meta).await?;
+        let query_builder = MssqlTableSqlBuilder::new(tb_meta, None);
         if let Err(begin_error) = session.begin().await {
-            let rollback_error = session.rollback().await.err();
-            let post_error = session.post().await.err();
-            return Err(Self::with_session_cleanup_errors(
+            let transaction_cleanup_error = session.rollback().await.err();
+            return Err(Self::with_transaction_cleanup_error(
                 begin_error,
-                rollback_error,
-                post_error,
+                transaction_cleanup_error,
             ));
         }
 
         let mut rts = LimitedQueue::new(cmp::min(100, rows.len()));
         let sink_result: anyhow::Result<()> = async {
             for row in rows {
-                let query_info = query_builder.get_query_info(row, self.replace)?;
-                let query = query_builder.create_mssql_query(&query_info)?;
+                let query_info = query_builder.get_insert_query(row, self.replace)?;
+                let query = query_builder.create_query(&query_info)?;
                 let start_time = Instant::now();
                 query
                     .execute(session.client_mut())
@@ -150,25 +145,20 @@ impl MssqlSinker {
         }
         .await;
         if let Err(error) = sink_result {
-            let rollback_error = session.rollback().await.err();
-            let post_error = session.post().await.err();
-            return Err(Self::with_session_cleanup_errors(
+            let transaction_cleanup_error = session.rollback().await.err();
+            return Err(Self::with_transaction_cleanup_error(
                 error,
-                rollback_error,
-                post_error,
+                transaction_cleanup_error,
             ));
         }
 
         if let Err(commit_error) = session.commit().await {
-            let rollback_error = session.rollback().await.err();
-            let post_error = session.post().await.err();
-            return Err(Self::with_session_cleanup_errors(
+            let transaction_cleanup_error = session.rollback().await.err();
+            return Err(Self::with_transaction_cleanup_error(
                 commit_error,
-                rollback_error,
-                post_error,
+                transaction_cleanup_error,
             ));
         }
-        session.post().await?;
 
         let data_size = rows.iter().map(RowData::get_data_size).sum::<u64>();
         self.base_sinker
@@ -177,25 +167,15 @@ impl MssqlSinker {
         self.base_sinker.update_monitor_rt_for(&task_id, &rts).await
     }
 
-    fn with_session_cleanup_errors(
+    fn with_transaction_cleanup_error(
         error: anyhow::Error,
-        rollback_error: Option<anyhow::Error>,
-        post_error: Option<anyhow::Error>,
+        cleanup_error: Option<anyhow::Error>,
     ) -> anyhow::Error {
-        let mut cleanup_errors = Vec::with_capacity(2);
-        if let Some(rollback_error) = rollback_error {
-            cleanup_errors.push(format!("rollback also failed: {rollback_error:#}"));
-        }
-        if let Some(post_error) = post_error {
-            cleanup_errors.push(format!("post also failed: {post_error:#}"));
-        }
-        if cleanup_errors.is_empty() {
-            error
-        } else {
-            error.context(format!(
-                "MSSQL table sink session cleanup failed: {}",
-                cleanup_errors.join("; ")
-            ))
+        match cleanup_error {
+            Some(cleanup_error) => error.context(format!(
+                "MSSQL transaction cleanup also failed: {cleanup_error:#}"
+            )),
+            None => error,
         }
     }
 }
@@ -203,35 +183,59 @@ impl MssqlSinker {
 #[async_trait]
 impl Sinker for MssqlSinker {
     async fn sink_dml(&mut self, data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
-        if data.is_empty() {
+        let Some(first) = data.first() else {
             return Ok(());
-        }
+        };
         if self.batch_size == 0 {
             bail!("MSSQL sinker batch_size must be greater than 0");
         }
-        if data
-            .iter()
-            .any(|row| !matches!(row.row_type, RowType::Insert))
-        {
+        if !matches!(first.row_type, RowType::Insert) {
             bail!("MSSQL snapshot sinker only supports INSERT rows");
         }
 
-        let mut start = 0;
-        while start < data.len() {
-            let first = &data[start];
-            if first.require_after()?.is_empty() {
-                bail!("MSSQL snapshot insert row has no columns");
-            }
-            // TODO: Split MSSQL batches by both server limits:
-            // - 2,100 procedure parameters; Tiberius's sp_executesql RPC also consumes two.
-            //   https://learn.microsoft.com/en-us/sql/relational-databases/stored-procedures/specify-parameters
-            // - 1,000 rows in an INSERT ... VALUES table value constructor.
-            //   https://learn.microsoft.com/en-us/sql/t-sql/queries/table-value-constructor-transact-sql
-            let batch_size = cmp::min(self.batch_size, data.len() - start);
-            self.batch_insert(&data, start, batch_size).await?;
-            start += batch_size;
+        if first.require_after()?.is_empty() {
+            bail!("MSSQL snapshot insert row has no columns");
         }
-        Ok(())
+
+        let tb_meta = self
+            .meta_manager
+            .get_tb_meta_by_row_data(first)
+            .await?
+            .clone();
+        // The session borrows this local pool clone, allowing batch helpers to
+        // keep borrowing the sinker while all writes use one physical connection.
+        let connection_pool = self.connection_pool.clone();
+        let mut session = connection_pool.get_table_sink_session(&tb_meta).await?;
+        let sink_result: anyhow::Result<()> = async {
+            let mut start = 0;
+            while start < data.len() {
+                let first = &data[start];
+                if first.require_after()?.is_empty() {
+                    bail!("MSSQL snapshot insert row has no columns");
+                }
+                // TODO: When using parameter binding, split MSSQL batches by both server limits:
+                // - 2,100 procedure parameters; Tiberius's sp_executesql RPC also consumes two.
+                //   https://learn.microsoft.com/en-us/sql/relational-databases/stored-procedures/specify-parameters
+                // - 1,000 rows in an INSERT ... VALUES table value constructor.
+                //   https://learn.microsoft.com/en-us/sql/t-sql/queries/table-value-constructor-transact-sql
+                let batch_size = cmp::min(self.batch_size, data.len() - start);
+                self.batch_insert(&data, start, batch_size, &tb_meta, &mut session)
+                    .await?;
+                start += batch_size;
+            }
+            Ok(())
+        }
+        .await;
+
+        match sink_result {
+            Ok(()) => session.finalize().await,
+            Err(error) => match session.finalize().await {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(error.context(format!(
+                    "MSSQL table sink session cleanup also failed: {cleanup_error:#}"
+                ))),
+            },
+        }
     }
 
     async fn sink_ddl(&mut self, _data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {

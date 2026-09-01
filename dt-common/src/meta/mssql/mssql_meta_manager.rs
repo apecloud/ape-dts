@@ -76,6 +76,23 @@ WHERE s.name = @P1
 ORDER BY i.index_id, ic.key_ordinal
 "#;
 
+const SCHEMAS_SQL: &str = r#"
+SELECT DISTINCT s.name AS schema_name
+FROM {catalog}sys.schemas AS s
+JOIN {catalog}sys.tables AS t ON t.schema_id = s.schema_id
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name
+"#;
+
+const TABLES_SQL: &str = r#"
+SELECT t.name AS table_name
+FROM {catalog}sys.tables AS t
+JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE s.name = @P1
+  AND t.is_ms_shipped = 0
+ORDER BY t.name
+"#;
+
 const SCHEMA_TABLES_SQL: &str = r#"
 SELECT s.name AS schema_name, t.name AS table_name
 FROM {catalog}sys.tables AS t
@@ -184,6 +201,36 @@ impl MssqlMetaManager {
 
         rows.iter()
             .map(|row| MssqlColValueConvertor::from_query_required_string(row, "database_name"))
+            .collect()
+    }
+
+    pub async fn list_schemas(&self, db: &str) -> anyhow::Result<Vec<String>> {
+        let sql = Self::catalog_sql(SCHEMAS_SQL, db);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = connection
+            .client_mut()
+            .query(&sql, &[])
+            .await?
+            .into_first_result()
+            .await?;
+
+        rows.iter()
+            .map(|row| MssqlColValueConvertor::from_query_required_string(row, "schema_name"))
+            .collect()
+    }
+
+    pub async fn list_tables(&self, db: &str, schema: &str) -> anyhow::Result<Vec<String>> {
+        let mut query = Query::new(Self::catalog_sql(TABLES_SQL, db));
+        query.bind(schema);
+        let mut connection = self.connection_pool.get().await?;
+        let rows = query
+            .query(connection.client_mut())
+            .await?
+            .into_first_result()
+            .await?;
+
+        rows.iter()
+            .map(|row| MssqlColValueConvertor::from_query_required_string(row, "table_name"))
             .collect()
     }
 

@@ -5,7 +5,7 @@ use dt_common::{
     config::config_enums::DbType,
     log_debug, log_info,
     meta::{
-        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
+        adaptor::{mssql_col_value_convertor::MssqlColValueConvertor, tiberius_ext::TiberiusExt},
         col_value::ColValue,
         mssql::{mssql_connection_pool::MssqlConnectionPool, mssql_tb_meta::MssqlTbMeta},
         position::Position,
@@ -250,7 +250,7 @@ impl MssqlSnapshotSplitter {
                 return Ok(None);
             }
             Some(current_value) => {
-                MssqlColValueConvertor::bind(&mut query, current_value, partition_col_type)?;
+                query.bind_col_value(current_value, partition_col_type)?;
             }
             None => {}
         }

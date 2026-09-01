@@ -6,17 +6,17 @@ use dt_common::{
         config_enums::DbType, connection_auth_config::ConnectionAuthConfig, task_config::TaskConfig,
     },
     meta::{
-        mssql::{mssql_connection_pool::MssqlConnectionPool, mssql_meta_manager::MssqlMetaManager},
+        mssql::{
+            mssql_connection_pool::MssqlConnectionPool, mssql_meta_manager::MssqlMetaManager,
+            mssql_query_builder::MssqlTableSqlBuilder,
+        },
         row_data::RowData,
     },
     utils::sql_util::SqlUtil,
 };
-use dt_connector::rdb_query_builder::RdbQueryBuilder;
 use tiberius::Client;
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
-
-use crate::test_config_util::TestConfigUtil;
 
 type MssqlTestTdsClient = Client<Compat<TcpStream>>;
 
@@ -41,14 +41,6 @@ struct MssqlEndpointConfig {
 }
 
 impl MssqlTestEndpoint {
-    pub fn from_config_file(
-        relative_config_file: &str,
-        endpoint: TaskConfigEndpoint,
-    ) -> anyhow::Result<Self> {
-        let config = TestConfigUtil::load_task_config(relative_config_file)?;
-        Self::from_task_config(&config, endpoint)
-    }
-
     pub fn from_task_config(
         config: &TaskConfig,
         endpoint: TaskConfigEndpoint,
@@ -260,7 +252,7 @@ impl MssqlTestEndpoint {
         if let Some(ignore_cols) = ignore_cols {
             compare_ignore_cols.extend(ignore_cols.iter().cloned());
         }
-        let query_builder = RdbQueryBuilder::new_for_mssql(&tb_meta, Some(&compare_ignore_cols));
+        let query_builder = MssqlTableSqlBuilder::new(&tb_meta, Some(&compare_ignore_cols));
         let cols = query_builder.build_extract_cols_str()?;
         if cols.is_empty() {
             bail!("MSSQL compare has no comparable columns for {db}.{schema}.{tb}");
