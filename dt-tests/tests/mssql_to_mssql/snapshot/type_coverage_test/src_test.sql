@@ -29,6 +29,7 @@ INSERT INTO [ape_dts].type_coverage.all_supported_types (
     '2026-08-12T04:34:56.1234567+00:00', N'{}'
 );
 INSERT INTO [ape_dts].type_coverage.all_supported_types (id) VALUES (3);
+```
 INSERT INTO [ape_dts].type_coverage.all_supported_types VALUES (
     4, 1, 42, -123, 123456, -123456789012345,
     12.5, -98765.4321, 123.4567, -123456789.1234,
@@ -42,4 +43,5 @@ INSERT INTO [ape_dts].type_coverage.all_supported_types VALUES (
     '2024-02-29T12:05:06.1234567+08:00',
     N'{"id":4,"string":"中文","nested":{"ok":true},"array":[1,2,3]}'
 );
+```
 GO

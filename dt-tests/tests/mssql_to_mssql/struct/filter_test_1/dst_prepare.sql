@@ -1,0 +1,7 @@
+IF DB_ID(N'struct_filter_mssql2mssql_1') IS NOT NULL
+BEGIN
+    ALTER DATABASE [struct_filter_mssql2mssql_1] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [struct_filter_mssql2mssql_1];
+END;
+CREATE DATABASE [struct_filter_mssql2mssql_1];
+GO

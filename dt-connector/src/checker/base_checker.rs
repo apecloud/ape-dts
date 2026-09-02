@@ -1401,11 +1401,11 @@ mod tests {
 
         assert_eq!(
             invalidated.lock().unwrap().as_slice(),
-            &[((
+            &[(
                 String::new(),
                 "dst_schema".to_string(),
                 "dst_tb".to_string(),
-            ))]
+            )]
         );
     }
 
