@@ -35,3 +35,39 @@ CREATE TABLE [ape_dts].type_coverage.all_supported_types (
     json_value nvarchar(max) NULL CHECK (json_value IS NULL OR ISJSON(json_value) = 1)
 );
 GO
+DROP TABLE IF EXISTS [ape_dts].type_coverage.driver_unsupported_types;
+CREATE TABLE [ape_dts].type_coverage.driver_unsupported_types (
+    id int NOT NULL PRIMARY KEY,
+    geometry_value geometry NULL,
+    geography_value geography NULL,
+    hierarchyid_value hierarchyid NULL
+);
+GO
+DROP TABLE IF EXISTS [ape_dts].type_coverage.sql_variant_types;
+GO
+DROP TABLE IF EXISTS [ape_dts].type_coverage.alias_udt_types;
+GO
+IF TYPE_ID(N'type_coverage.alias_text') IS NOT NULL
+    DROP TYPE [type_coverage].[alias_text];
+GO
+CREATE TYPE [type_coverage].[alias_text] FROM nvarchar(64) NULL;
+GO
+CREATE TABLE [ape_dts].type_coverage.alias_udt_types (
+    id int NOT NULL PRIMARY KEY,
+    alias_value [type_coverage].[alias_text] NULL
+);
+GO
+DROP TABLE IF EXISTS [ape_dts].type_coverage.custom_clr_udt_types;
+GO
+IF TYPE_ID(N'dbo.BigVariant') IS NULL
+    THROW 50000, 'dbo.BigVariant is not installed', 1;
+GO
+CREATE TABLE [ape_dts].type_coverage.custom_clr_udt_types (
+    id int NOT NULL PRIMARY KEY,
+    string_value [dbo].[BigVariant] NULL,
+    variant_value [dbo].[BigVariant] NULL,
+    datetime_value [dbo].[BigVariant] NULL,
+    binary_value [dbo].[BigVariant] NULL,
+    xml_value [dbo].[BigVariant] NULL
+);
+GO

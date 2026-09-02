@@ -6,8 +6,11 @@ use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtOptionExt},
     meta::{
-        adaptor::pg_col_value_convertor::PgColValueConvertor, mssql::mssql_tb_meta::MssqlTbMeta,
-        mysql::mysql_tb_meta::MysqlTbMeta, pg::pg_tb_meta::PgTbMeta, rdb_tb_meta::RdbTbMeta,
+        adaptor::pg_col_value_convertor::PgColValueConvertor,
+        mssql::{mssql_query_builder::MssqlTableSqlBuilder, mssql_tb_meta::MssqlTbMeta},
+        mysql::mysql_tb_meta::MysqlTbMeta,
+        pg::pg_tb_meta::PgTbMeta,
+        rdb_tb_meta::RdbTbMeta,
     },
     utils::sql_util::SqlUtil,
 };
@@ -197,14 +200,15 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
     }
 
     fn build_extract_cols_str(&self) -> anyhow::Result<String> {
+        if let Some(tb_meta) = self.mssql_tb_meta {
+            return MssqlTableSqlBuilder::new(tb_meta, self.ignore_cols).build_extract_cols_str();
+        }
         let mut extract_cols = Vec::new();
         for col in self.rdb_tb_meta.cols.iter() {
             if self.ignore_cols.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
-            if self.mssql_tb_meta.is_some() {
-                extract_cols.push(self.escape(col));
-            } else if let Some(tb_meta) = self.pg_tb_meta {
+            if let Some(tb_meta) = self.pg_tb_meta {
                 let col_type = tb_meta.get_col_type(col)?;
                 let extract_type = PgColValueConvertor::get_extract_type(col_type);
                 let extract_col = if extract_type.is_empty() {
@@ -221,7 +225,7 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
                     ))?
                     .get_col_type(col)?;
                 let extract_col = if col_type.is_spatial() {
-                    SqlUtil::mysql_spatial_as_wkb_expr(&self.escape(col), &self.escape(col))
+                    SqlUtil::mysql_spatial_as_text_expr(&self.escape(col), &self.escape(col))
                 } else {
                     self.escape(col)
                 };
@@ -522,6 +526,24 @@ mod tests {
         }
     }
 
+    fn create_mysql_spatial_tb_meta() -> MysqlTbMeta {
+        let basic = RdbTbMeta {
+            schema: "test_schema".to_string(),
+            tb: "spatial_table".to_string(),
+            cols: vec!["id".to_string(), "shape".to_string()],
+            order_cols: vec!["id".to_string()],
+            ..Default::default()
+        };
+        let col_type_map = HashMap::from([
+            ("id".to_string(), MysqlColType::Int { unsigned: false }),
+            ("shape".to_string(), MysqlColType::Point),
+        ]);
+        MysqlTbMeta {
+            basic,
+            col_type_map,
+        }
+    }
+
     fn create_pg_tb_meta() -> PgTbMeta {
         let cols = vec![
             "id".to_string(),
@@ -727,6 +749,17 @@ mod tests {
         assert_eq!(
             sql,
             r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC LIMIT 100"#
+        );
+    }
+
+    #[test]
+    fn test_mysql_spatial_extract_preserves_srid() {
+        let mysql_meta = create_mysql_spatial_tb_meta();
+        let stmt = RdbSnapshotExtractStatement::from(&mysql_meta);
+
+        assert_eq!(
+            stmt.build().unwrap(),
+            "SELECT `id`,CONCAT(ST_SRID(`shape`), '|', ST_AsText(`shape`)) AS `shape` FROM `test_schema`.`spatial_table`"
         );
     }
 
@@ -1426,6 +1459,25 @@ mod tests {
              (([id] < @P3) OR ([id] = @P3 AND [tenant_id] <= @P4)) AND \
              [tenant_id] IS NOT NULL ORDER BY [test_schema].[test_table].[id] ASC, \
              [test_schema].[test_table].[tenant_id] ASC"
+        );
+    }
+
+    #[test]
+    fn test_mssql_binary_transfer_col_uses_supported_projection() {
+        let mut mssql_meta = create_mssql_tb_meta();
+        mssql_meta.basic.cols.push("shape".to_string());
+        mssql_meta
+            .col_type_map
+            .insert("shape".to_string(), MssqlColType::AssemblyUdt);
+
+        let sql = RdbSnapshotExtractStatement::from(&mssql_meta)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "SELECT [tenant_id],[id],[name],CONVERT(varbinary(max), [shape]) AS [shape] \
+             FROM [test_schema].[test_table]"
         );
     }
 }

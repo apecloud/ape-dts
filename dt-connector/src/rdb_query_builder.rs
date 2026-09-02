@@ -724,7 +724,7 @@ impl RdbQueryBuilder<'_> {
                     .context("mysql table meta missing when building mysql extract cols")?
                     .get_col_type(col)?;
                 let extract_col = if col_type.is_spatial() {
-                    SqlUtil::mysql_spatial_as_wkb_expr(&self.escape(col), &self.escape(col))
+                    SqlUtil::mysql_spatial_as_text_expr(&self.escape(col), &self.escape(col))
                 } else {
                     self.escape(col)
                 };
@@ -864,6 +864,9 @@ impl RdbQueryBuilder<'_> {
             .as_ref()
             .context("mysql table meta missing while formatting mysql sql value")?;
         let col_type = mysql_meta.get_col_type(col)?;
+        if let ColValue::Spatial { srid, wkt } = col_value {
+            return Ok(SqlUtil::mysql_spatial_from_text_expr(wkt, *srid));
+        }
         let (value, is_hex_str) = match col_value {
             // varchar, char, tinytext, mediumtext, longtext, text
             ColValue::RawString(v) => SqlUtil::binary_to_str(v),
@@ -881,14 +884,10 @@ impl RdbQueryBuilder<'_> {
         };
 
         if is_hex_str {
-            if col_type.is_spatial() {
-                return Ok(SqlUtil::mysql_spatial_from_wkb_hex_expr(&value));
-            }
             return Ok(format!("x'{}'", value));
         }
 
         let is_str = match col_type {
-            col_type if col_type.is_spatial() => false,
             MysqlColType::DateTime { .. }
             | MysqlColType::Time { .. }
             | MysqlColType::Date { .. }
@@ -925,7 +924,7 @@ impl RdbQueryBuilder<'_> {
 
         if let Some(tb_meta) = self.mysql_tb_meta {
             if tb_meta.get_col_type(col)?.is_spatial() {
-                return Ok(SqlUtil::mysql_spatial_from_wkb_placeholder_expr());
+                return Ok(SqlUtil::mysql_spatial_from_text_placeholder_expr());
             }
         }
 
@@ -1043,6 +1042,15 @@ mod tests {
             },
             col_type_map,
         }
+    }
+
+    fn build_mysql_spatial_tb_meta() -> MysqlTbMeta {
+        let mut tb_meta = build_mysql_tb_meta();
+        tb_meta.basic.cols.push("shape".to_string());
+        tb_meta
+            .col_type_map
+            .insert("shape".to_string(), MysqlColType::Point);
+        tb_meta
     }
 
     fn build_pg_tb_meta() -> PgTbMeta {
@@ -1187,6 +1195,18 @@ mod tests {
                 Some(after),
             )
         }
+    }
+
+    fn build_spatial_insert_row_data() -> RowData {
+        let mut row_data = build_insert_row_data(false);
+        row_data.require_after_mut().unwrap().insert(
+            "shape".to_string(),
+            ColValue::Spatial {
+                srid: 4326,
+                wkt: "POINT(1 2)".to_string(),
+            },
+        );
+        row_data
     }
 
     fn build_bit_insert_row_data() -> RowData {
@@ -1388,6 +1408,45 @@ mod tests {
         assert_eq!(select_query_info.cols, tb_meta.basic.id_cols);
         assert_eq!(select_query_info.binds.len(), 2);
         let _ = builder.create_mysql_query(&select_query_info).unwrap();
+    }
+
+    #[test]
+    fn test_mysql_spatial_queries_preserve_srid() {
+        let tb_meta = build_mysql_spatial_tb_meta();
+        let builder = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
+        let row_data = build_spatial_insert_row_data();
+
+        assert_eq!(
+            builder.build_extract_cols_str().unwrap(),
+            "`id`,`code`,`name`,CONCAT(ST_SRID(`shape`), '|', ST_AsText(`shape`)) AS `shape`"
+        );
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+        assert_eq!(
+            query_info.sql,
+            "INSERT INTO `public`.`t1`(`id`,`code`,`name`,`shape`) VALUES(?,?,?,ST_GeomFromText(?, ?))"
+        );
+        assert_eq!(query_info.binds.len(), 4);
+        let _ = builder.create_mysql_query(&query_info).unwrap();
+
+        assert_eq!(
+            builder.get_query_sql(&row_data, false).unwrap(),
+            "INSERT INTO `public`.`t1`(`id`,`code`,`name`,`shape`) VALUES(1,'xx','n1',ST_GeomFromText('POINT(1 2)', 4326));"
+        );
+
+        let data = vec![
+            build_spatial_insert_row_data(),
+            build_spatial_insert_row_data(),
+        ];
+        let (query_info, _) = builder
+            .get_batch_insert_query(&data, 0, data.len(), false)
+            .unwrap();
+        assert_eq!(
+            query_info.sql,
+            "INSERT INTO `public`.`t1`(`id`,`code`,`name`,`shape`) VALUES(?,?,?,ST_GeomFromText(?, ?)),(?,?,?,ST_GeomFromText(?, ?))"
+        );
+        assert_eq!(query_info.binds.len(), 8);
+        let _ = builder.create_mysql_query(&query_info).unwrap();
     }
 
     #[test]

@@ -123,6 +123,10 @@ INSERT INTO test_db_1.spatial_table VALUES (
     NULL
 );
 
+INSERT INTO test_db_1.spatial_srid_table VALUES
+    (1, ST_GeomFromText('POINT(1 2)', 4326), NULL),
+    (2, ST_GeomFromText('POINT(-45 90)', 4326), ST_GeomFromText('POINT(10 20)', 4326));
+
 -- ignore cols
 INSERT INTO test_db_1.ignore_cols_1 VALUES(1, 1, 1, 1),(2, 2, 2, 2);
 INSERT INTO test_db_1.ignore_cols_2 VALUES(1, 1, 1, 1),(2, 2, 2, 2);

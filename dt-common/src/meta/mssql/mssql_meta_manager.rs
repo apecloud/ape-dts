@@ -37,11 +37,14 @@ SELECT
     c.is_nullable,
     c.is_identity,
     c.is_computed,
-    c.generated_always_type
+    c.generated_always_type,
+    user_type.is_assembly_type,
+    user_type_schema.name AS user_type_schema_name
 FROM {catalog}sys.tables AS t
 JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
 JOIN {catalog}sys.columns AS c ON c.object_id = t.object_id
 JOIN {catalog}sys.types AS user_type ON user_type.user_type_id = c.user_type_id
+JOIN {catalog}sys.schemas AS user_type_schema ON user_type_schema.schema_id = user_type.schema_id
 LEFT JOIN {catalog}sys.types AS system_type
   ON system_type.system_type_id = c.system_type_id
  AND system_type.user_type_id = system_type.system_type_id
@@ -150,8 +153,22 @@ impl MssqlMetaManager {
             }
 
             let key_map = self.parse_keys(db, schema, tb).await?;
+            // Special values are projected to a driver-compatible wire type. Its ordering is
+            // not necessarily the SQL Server ordering of the source type, so it cannot safely
+            // drive snapshot pagination or resume predicates.
+            let snapshot_key_map = key_map
+                .iter()
+                .filter(|(_, cols)| {
+                    !cols.iter().any(|col| {
+                        col_type_map
+                            .get(col)
+                            .is_some_and(MssqlColType::requires_special_transfer)
+                    })
+                })
+                .map(|(key, cols)| (key.clone(), cols.clone()))
+                .collect::<HashMap<_, _>>();
             let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+                RdbMetaManager::parse_rdb_cols(&snapshot_key_map, &cols, &nullable_cols)?;
             self.cache.insert(
                 cache_key.clone(),
                 MssqlTbMeta {
@@ -312,6 +329,8 @@ impl MssqlMetaManager {
                 MssqlColValueConvertor::from_query_required_string(&row, "user_type_name")?;
             let system_type_name =
                 MssqlColValueConvertor::from_query_required_string(&row, "system_type_name")?;
+            let user_type_schema_name =
+                MssqlColValueConvertor::from_query_required_string(&row, "user_type_schema_name")?;
             let max_length = MssqlColValueConvertor::from_query_required_i16(&row, "max_length")?;
             let is_nullable =
                 MssqlColValueConvertor::from_query_required_bool(&row, "is_nullable")?;
@@ -321,15 +340,31 @@ impl MssqlMetaManager {
                 MssqlColValueConvertor::from_query_required_bool(&row, "is_computed")?;
             let generated_always_type =
                 MssqlColValueConvertor::from_query_required_u8(&row, "generated_always_type")?;
-            let col_type = parse_mssql_col_type_with_length(&system_type_name, max_length)
-                .map_err(|error| {
-                    DtError::DatabaseUnsupportedTableStructure(
+            let is_assembly_type =
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_assembly_type")?;
+            // Tiberius 0.12.3 does not decode TDS Udt values. Built-in CLR types use stable
+            // text representations; custom CLR types retain their serialized bytes and
+            // therefore require compatible assemblies on both servers.
+            // https://github.com/prisma/tiberius/blob/v0.12.3/src/tds/codec/token/token_col_metadata.rs#L170
+            let col_type = if is_assembly_type {
+                match (
+                    user_type_schema_name.to_ascii_lowercase().as_str(),
+                    user_type_name.to_ascii_lowercase().as_str(),
+                ) {
+                    ("sys", "geometry") => MssqlColType::Geometry,
+                    ("sys", "geography") => MssqlColType::Geography,
+                    ("sys", "hierarchyid") => MssqlColType::HierarchyId,
+                    _ => MssqlColType::AssemblyUdt,
+                }
+            } else {
+                parse_mssql_col_type_with_length(&system_type_name, max_length)
+                    .dt_error(DtError::DatabaseUnsupportedTableStructure(
                         DbType::Mssql,
                         format!(
                             "column {schema}.{tb}.{col} uses unsupported type {user_type_name} \
-                             (system type {system_type_name}): {error}"
+                             (system type {system_type_name})"
                         ),
-                    )
+                    ))
                     .message("An MSSQL source column type is not supported")
                     .hint("Exclude or convert the reported source column before retrying the task.")
                     .object(ErrorObject {
@@ -337,8 +372,8 @@ impl MssqlMetaManager {
                         table: Some(tb.to_string()),
                         column: Some(col.clone()),
                         ..Default::default()
-                    })
-                })?;
+                    })?
+            };
 
             cols.push(col.clone());
             col_origin_type_map.insert(col.clone(), user_type_name);

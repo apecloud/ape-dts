@@ -55,7 +55,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    #[ignore = "SQL Server cannot update an identity column when MERGE matches another unique key"]
     async fn snapshot_on_duplicate_replace_test() {
         TestBase::run_snapshot_test("mssql_to_mssql/snapshot/on_duplicate_replace_test").await;
     }

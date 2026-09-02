@@ -354,6 +354,8 @@ impl AvroConverter {
             | ColValue::Enum2(v)
             | ColValue::Json2(v) => Value::String(v.clone()),
 
+            ColValue::Spatial { srid, wkt } => Value::String(format!("{srid}|{wkt}")),
+
             ColValue::Json3(v) => Value::String(v.to_string()),
 
             ColValue::MongoDoc(v) => Value::String(v.to_string()),
