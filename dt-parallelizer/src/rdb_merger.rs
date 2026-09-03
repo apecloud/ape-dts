@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use dt_common::log_debug;
-use dt_common::meta::{
-    rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData, row_type::RowType,
+use dt_common::{
+    log_debug,
+    meta::{
+        rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta, row_data::RowData,
+        row_type::RowType,
+    },
 };
+use dt_connector::checker::errorcode::is_missing_target;
 
 use crate::{merge_parallelizer::TbMergedData, Merger};
 
@@ -64,13 +68,7 @@ impl RdbMerger {
             .await
         {
             Ok(tb_meta) => tb_meta,
-            Err(error)
-                if self.allow_missing_meta
-                    && matches!(
-                        ErrorReport::from_anyhow(&error).code,
-                        ErrorCode::ObjectNotFound | ErrorCode::DatabaseNotFound
-                    ) =>
-            {
+            Err(error) if self.allow_missing_meta && is_missing_target(&error) => {
                 merged.unmerged_rows.push(row_data);
                 return Ok(());
             }
@@ -124,7 +122,7 @@ impl RdbMerger {
         hash_code: u128,
     ) -> anyhow::Result<()> {
         // if pk/uk change found in any row_data, for safety, all following row_data won't be merged
-        if Self::check_key_changed(tb_meta, &row_data)? {
+        if Self::check_key_changed(tb_meta, &row_data) {
             merged.unmerged_rows.push(row_data);
             return Ok(());
         }

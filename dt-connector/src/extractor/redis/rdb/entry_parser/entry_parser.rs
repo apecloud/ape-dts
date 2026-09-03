@@ -1,8 +1,5 @@
 use anyhow::bail;
-use dt_common::{
-    error::DtError,
-    meta::redis::redis_object::{RedisObject, RedisString},
-};
+use dt_common::meta::redis::redis_object::{RedisObject, RedisString};
 
 use crate::extractor::redis::rdb::reader::rdb_reader::RdbReader;
 
@@ -69,10 +66,7 @@ impl EntryParser {
                 // The length of an entry can only be determined by parsing it, so an unknown
                 // type byte leaves the reader desynchronized. Continuing would silently yield
                 // corrupted data for every following entry, so abort the task instead.
-                bail! {DtError::redis_rdb(format!(
-                    "unsupported RDB type byte: {}, key: {}",
-                    type_byte, key
-                ))}
+                bail! {"unsupported RDB type byte: {}, key: {}",type_byte, key}
             }
         };
 

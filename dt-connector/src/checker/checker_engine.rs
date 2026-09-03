@@ -12,11 +12,13 @@ use super::{
     CheckInconsistency, Checker, CheckerStoreKey, CheckerTbMeta, DataChecker, RecheckKey,
 };
 use crate::{
-    checker::check_log::{to_json_line, CheckLog, DiffColValue},
+    checker::{
+        check_log::{to_json_line, CheckLog, DiffColValue},
+        errorcode::is_missing_target,
+    },
     sinker::mongo::mongo_cmd,
 };
 use dt_common::{
-    error::{ErrorCode, ErrorReport},
     log_diff, log_miss, log_sql, log_warn,
     meta::{
         col_value::ColValue, mongo::mongo_constant::MongoConstants, pg::pg_value_type::PgValueType,
@@ -31,13 +33,6 @@ use dt_common::{
 
 impl<C: Checker> DataChecker<C> {
     const MAX_DIFF_COLS: usize = 8;
-
-    fn is_missing_target(error: &anyhow::Error) -> bool {
-        matches!(
-            ErrorReport::from_anyhow(error).code,
-            ErrorCode::ObjectNotFound | ErrorCode::DatabaseNotFound
-        )
-    }
 
     async fn load_source_table_meta(&mut self, source_row: &RowData) -> anyhow::Result<RdbTbMeta> {
         let meta_manager = self
@@ -619,7 +614,7 @@ impl<C: Checker> DataChecker<C> {
         let store_key = CheckerStoreKey::new(&row_data.schema, &row_data.tb, row_key);
         if let Some(entry) = self.store.shift_remove(&store_key) {
             self.dirty_upserts.shift_remove(&store_key);
-            let identity_key = build_identity_key(&entry)?;
+            let identity_key = build_identity_key(&entry);
             if self
                 .persisted_identity_keys
                 .as_ref()
@@ -1022,7 +1017,7 @@ impl<C: Checker> DataChecker<C> {
             }
             let tb_meta = match self.checker.load_table_meta(first_row).await {
                 Ok(tb_meta) => tb_meta,
-                Err(error) if !self.ctx.is_cdc && Self::is_missing_target(&error) => {
+                Err(error) if !self.ctx.is_cdc && is_missing_target(&error) => {
                     total_checked += self.record_missing_target_rows(rows).await?;
                     continue;
                 }
@@ -1095,26 +1090,6 @@ mod tests {
     };
 
     struct NoopChecker;
-
-    #[test]
-    fn missing_target_error_codes_are_recognized() {
-        let database_error = anyhow::Error::new(dt_common::error::DtError::DatabaseNotFound(
-            dt_common::config::config_enums::DbType::Mysql,
-            "test_db".to_string(),
-        ));
-        let table_error = anyhow::Error::new(dt_common::error::DtError::DatabaseObjectNotFound(
-            dt_common::config::config_enums::DbType::Mysql,
-            "test_db.test_tb".to_string(),
-        ));
-
-        assert!(DataChecker::<NoopChecker>::is_missing_target(
-            &database_error
-        ));
-        assert!(DataChecker::<NoopChecker>::is_missing_target(&table_error));
-        assert!(!DataChecker::<NoopChecker>::is_missing_target(
-            &anyhow::anyhow!("network failure")
-        ));
-    }
 
     #[test]
     fn missing_target_row_builds_data_miss_from_source_metadata() {

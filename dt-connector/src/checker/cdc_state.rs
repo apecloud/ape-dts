@@ -423,7 +423,7 @@ impl<C: Checker> DataChecker<C> {
                                 .await?;
                                 self.store_entry(lookup_row, row_key, entry).await;
                             } else {
-                                self.remove_store_entry(lookup_row, row_key);
+                                self.remove_store_entry(lookup_row, row_key)?;
                             }
                         }
                         (Some(source_row), None) => {
@@ -442,7 +442,7 @@ impl<C: Checker> DataChecker<C> {
                             self.store_entry(lookup_row, row_key, entry).await;
                         }
                         (None, None) => {
-                            self.remove_store_entry(lookup_row, row_key);
+                            self.remove_store_entry(lookup_row, row_key)?;
                         }
                     }
                 }
