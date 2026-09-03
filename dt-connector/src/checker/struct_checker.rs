@@ -607,4 +607,48 @@ mod tests {
         assert_eq!(summary.tables[0].tb, "users");
         assert_eq!(summary.tables[0].diff_count, 2);
     }
+
+    #[test]
+    fn summary_counts_only_source_side_misses_and_differences() {
+        let missing_role = StructKey::new(StructKeyType::RbacRole, ["missing_role"]);
+        let changed_role = StructKey::new(StructKeyType::RbacRole, ["changed_role"]);
+        let src_sql_map = BTreeMap::from([
+            (
+                missing_role.clone(),
+                StructCheckItem::unrouted(missing_role, "CREATE ROLE missing_role"),
+            ),
+            (
+                changed_role.clone(),
+                StructCheckItem::unrouted(changed_role.clone(), "CREATE ROLE changed_role"),
+            ),
+        ]);
+        let dst_sql_map = BTreeMap::from([
+            (
+                changed_role,
+                "CREATE ROLE changed_role WITH LOGIN".to_string(),
+            ),
+            (
+                StructKey::new(StructKeyType::RbacRole, ["target_only_1"]),
+                "CREATE ROLE target_only_1".to_string(),
+            ),
+            (
+                StructKey::new(StructKeyType::RbacRole, ["target_only_2"]),
+                "CREATE ROLE target_only_2".to_string(),
+            ),
+        ]);
+
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &src_sql_map,
+            dst_sql_map,
+            None,
+            "start",
+            false,
+            false,
+        );
+
+        assert!(!summary.is_consistent);
+        assert_eq!(summary.checked_count, 2);
+        assert_eq!(summary.miss_count, 1);
+        assert_eq!(summary.diff_count, 1);
+    }
 }
