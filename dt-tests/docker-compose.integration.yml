@@ -587,6 +587,258 @@ services:
       start_period: 20s
       interval: 5s
 
+  mongo-tls-sharding-src-config:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-src-config-it
+    hostname: mongo-tls-sharding-src-config
+    ports:
+      - "37219:37019"
+    volumes:
+      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-component-tls.sh
+    command:
+      - mongod
+      - --configsvr
+      - --replSet
+      - tls-source-config-rs
+      - --port
+      - "37019"
+      - --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-tls-sharding-src-shard:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-src-shard-it
+    hostname: mongo-tls-sharding-src-shard
+    ports:
+      - "37218:37018"
+    volumes:
+      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-component-tls.sh
+    command:
+      - mongod
+      - --shardsvr
+      - --replSet
+      - tls-source-shard-rs
+      - --port
+      - "37018"
+      - --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-tls-sharding-src-init:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-src-init-it
+    depends_on:
+      mongo-tls-sharding-src-config:
+        condition: service_healthy
+      mongo-tls-sharding-src-shard:
+        condition: service_healthy
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        mongosh "mongodb://mongo-tls-sharding-src-config:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-source-config-rs', configsvr: true, members: [{ _id: 0, host: 'mongo-tls-sharding-src-config:37019' }] })" >/dev/null || true
+        mongosh "mongodb://mongo-tls-sharding-src-shard:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-source-shard-rs', members: [{ _id: 0, host: 'mongo-tls-sharding-src-shard:37018' }] })" >/dev/null || true
+        for target in "mongo-tls-sharding-src-config:37019" "mongo-tls-sharding-src-shard:37018"; do
+          for _ in $$(seq 1 60); do
+            if mongosh "mongodb://$${target}/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+        done
+
+  mongo-tls-sharding-src-mongos:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-src-mongos-it
+    hostname: mongo-tls-sharding-src-mongos
+    depends_on:
+      mongo-tls-sharding-src-init:
+        condition: service_completed_successfully
+    ports:
+      - "37217:37017"
+    volumes:
+      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-component-tls.sh
+    command:
+      - mongos
+      - --configdb
+      - tls-source-config-rs/mongo-tls-sharding-src-config:37019
+      - --port
+      - "37017"
+      - --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-tls-sharding-src-add-shard-init:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-src-add-shard-init-it
+    depends_on:
+      mongo-tls-sharding-src-mongos:
+        condition: service_healthy
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        mongosh "mongodb://mongo-tls-sharding-src-mongos:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "sh.addShard('tls-source-shard-rs/mongo-tls-sharding-src-shard:37018')" >/dev/null || true
+
+  mongo-tls-sharding-dst-config:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-dst-config-it
+    hostname: mongo-tls-sharding-dst-config
+    ports:
+      - "37319:37019"
+    volumes:
+      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-component-tls.sh
+    command:
+      - mongod
+      - --configsvr
+      - --replSet
+      - tls-target-config-rs
+      - --port
+      - "37019"
+      - --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-tls-sharding-dst-shard:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-dst-shard-it
+    hostname: mongo-tls-sharding-dst-shard
+    ports:
+      - "37318:37018"
+    volumes:
+      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-component-tls.sh
+    command:
+      - mongod
+      - --shardsvr
+      - --replSet
+      - tls-target-shard-rs
+      - --port
+      - "37018"
+      - --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-tls-sharding-dst-init:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-dst-init-it
+    depends_on:
+      mongo-tls-sharding-dst-config:
+        condition: service_healthy
+      mongo-tls-sharding-dst-shard:
+        condition: service_healthy
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        mongosh "mongodb://mongo-tls-sharding-dst-config:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-target-config-rs', configsvr: true, members: [{ _id: 0, host: 'mongo-tls-sharding-dst-config:37019' }] })" >/dev/null || true
+        mongosh "mongodb://mongo-tls-sharding-dst-shard:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-target-shard-rs', members: [{ _id: 0, host: 'mongo-tls-sharding-dst-shard:37018' }] })" >/dev/null || true
+        for target in "mongo-tls-sharding-dst-config:37019" "mongo-tls-sharding-dst-shard:37018"; do
+          for _ in $$(seq 1 60); do
+            if mongosh "mongodb://$${target}/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+        done
+
+  mongo-tls-sharding-dst-mongos:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-dst-mongos-it
+    hostname: mongo-tls-sharding-dst-mongos
+    depends_on:
+      mongo-tls-sharding-dst-init:
+        condition: service_completed_successfully
+    ports:
+      - "37317:37017"
+    volumes:
+      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-component-tls.sh
+    command:
+      - mongos
+      - --configdb
+      - tls-target-config-rs/mongo-tls-sharding-dst-config:37019
+      - --port
+      - "37017"
+      - --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-tls-sharding-dst-add-shard-init:
+    image: mongo:7.0
+    container_name: mongo-tls-sharding-dst-add-shard-init-it
+    depends_on:
+      mongo-tls-sharding-dst-mongos:
+        condition: service_healthy
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        mongosh "mongodb://mongo-tls-sharding-dst-mongos:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "sh.addShard('tls-target-shard-rs/mongo-tls-sharding-dst-shard:37018')" >/dev/null || true
+
   mongo-sharding-src-config:
     image: mongo:7.0
     container_name: mongo-sharding-src-config-it
