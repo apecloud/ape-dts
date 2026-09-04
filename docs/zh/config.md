@@ -13,8 +13,8 @@
 | url                  | 数据库 URL；账号密码可写入 URL，也可单独配置                                | `mysql://127.0.0.1:3307`                                                                             | 空                                                                                     |
 | username             | 数据库连接账号                                                              | root                                                                                                 | 空                                                                                     |
 | password             | 数据库连接密码                                                              | password                                                                                             | 空                                                                                     |
-| ssl_mode             | MySQL/PostgreSQL TLS 模式：`disable`、`require`、`verify_ca`、`verify_full` | verify_full                                                                                          | 不设置                                                                                 |
-| ssl_ca_path          | TLS 校验使用的 CA 证书路径                                                  | /etc/ssl/certs/ca.pem                                                                                | 空                                                                                     |
+| ssl_mode             | MySQL/PostgreSQL/Redis TLS 模式                                               | verify_ca                                                                                            | 不设置                                                                                 |
+| ssl_ca_path          | MySQL/PostgreSQL/Redis TLS 校验使用的 CA 证书路径                            | /etc/ssl/certs/ca.pem                                                                                | 空                                                                                     |
 | max_connections      | 源端连接池最大连接数                                                        | 10                                                                                                   | 10                                                                                     |
 | batch_size           | 批量拉取行数；使用 chunk 切分时，也作为源端目标 chunk 大小                  | 10000                                                                                                | `[pipeline].buffer_size / 有效 snapshot 并发数。为0的话直接使用[pipeline].buffer_size` |
 | max_rps              | 源端每秒最大记录数，`0` 表示不限制                                          | 1000                                                                                                 | 0                                                                                      |
@@ -38,6 +38,14 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 通过 `username`、`password` 单独配置的账号密码会由 DTS 做百分号编码后合并进 URL。设置
 `ssl_mode` 后，`ssl_ca_path` 仍是可选项；是否必须提供 CA 取决于校验模式和服务端 TLS 配置。
+
+## Redis TLS
+
+- Redis URL 支持 `redis://` 和 `rediss://`。未设置 `ssl_mode` 时，`redis://` 使用明文，`rediss://` 使用 TLS 但不校验服务端证书。
+- Redis 支持 `disable`、`require` 和 `verify_ca`。`verify_ca` 校验 CA 信任链但不校验主机名，并且必须配置 `ssl_ca_path`。
+- 显式 `ssl_mode` 的优先级高于 URL scheme 和 fragment。`verify_ca` 会把 DNS URL host 作为 SNI 发送，但不会用它校验证书 SAN。
+- 上述规则同时应用于普通 Redis 命令连接和 PSYNC 复制流连接，也会保留到自动发现的 Redis Cluster 节点 URL。
+- Redis Cluster 使用 `verify_ca` 时，每个节点都必须提供由配置 CA 签发的证书。
 
 ## extractor.parallel_type
 
@@ -72,8 +80,8 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | url                            | 数据库 URL；账号密码可写入 URL，也可单独配置                                                                      | `mysql://127.0.0.1:3307` | 空                                                          |
 | username                       | 数据库连接账号                                                                                                    | root                     | 空                                                          |
 | password                       | 数据库连接密码                                                                                                    | password                 | 空                                                          |
-| ssl_mode                       | MySQL/PostgreSQL TLS 模式：`disable`、`require`、`verify_ca`、`verify_full`                                       | verify_full              | 不设置                                                      |
-| ssl_ca_path                    | TLS 校验使用的 CA 证书路径                                                                                        | /etc/ssl/certs/ca.pem    | 空                                                          |
+| ssl_mode                       | MySQL/PostgreSQL/Redis TLS 模式                                                                                      | verify_ca                | 不设置                                                      |
+| ssl_ca_path                    | MySQL/PostgreSQL/Redis TLS 校验使用的 CA 证书路径                                                                    | /etc/ssl/certs/ca.pem    | 空                                                          |
 | batch_size                     | 批量写入行数，必须大于 `0`                                                                                        | 200                      | 200                                                         |
 | max_connections                | 目标端连接池最大连接数                                                                                            | 10                       | 10                                                          |
 | max_rps                        | 目标端每秒最大记录数，`0` 表示不限制                                                                              | 1000                     | 0                                                           |
@@ -379,8 +387,8 @@ rebalance_cost=rows
 | db_type              | `from_db` 使用的数据库类型                              | mysql                                  | `from_db` 时必填    |
 | username             | `from_db` 使用的数据库账号                              | root                                   | 空                  |
 | password             | `from_db` 使用的数据库密码                              | password                               | 空                  |
-| ssl_mode             | `from_db` 使用的 MySQL/PostgreSQL TLS 模式              | verify_full                            | 不设置              |
-| ssl_ca_path          | `from_db` 使用的 CA 证书路径                            | /etc/ssl/certs/ca.pem                  | 空                  |
+| ssl_mode             | `from_db` 使用的 MySQL/PostgreSQL/Redis TLS 模式        | verify_ca                              | 不设置              |
+| ssl_ca_path          | `from_db` 使用的 MySQL/PostgreSQL/Redis CA 证书路径     | /etc/ssl/certs/ca.pem                  | 空                  |
 | is_direct_connection | `from_db` 使用的 MongoDB driver `directConnection` 选项 | true                                   | 不设置              |
 | table_full_name      | `from_db` 或 `from_target` 保存断点状态的目标表         | apecloud_metadata.apedts_task_position | 空                  |
 | max_connections      | resumer 连接池最大连接数                                | 5                                      | 5                   |

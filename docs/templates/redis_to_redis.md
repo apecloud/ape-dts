@@ -8,6 +8,38 @@ ape-dts uses PSYNC to synchronize Redis data.
 - Snapshot + CDC: migrates the snapshot and synchronizes incremental data, including the RDB and AOF.
 - CDC: receive but discard RDB (if PSYNC returns RDB), only synchronizes the AOF.
 
+## TLS
+
+Redis source and target URLs support `redis://` and `rediss://`. An explicit `ssl_mode` overrides
+the URL scheme:
+
+- `ssl_mode=disable`: plaintext.
+- `ssl_mode=require`: TLS encryption without server certificate verification.
+- `ssl_mode=verify_ca`: TLS with CA chain verification, without hostname verification.
+
+`ssl_ca_path` is required for `verify_ca`. Without an explicit `ssl_mode`, `rediss://` selects
+`require`. An explicit mode overrides the URL scheme and `#insecure` fragment. The same settings
+protect the source PSYNC replication stream and ordinary command connections. In Cluster mode,
+every node must present a certificate signed by the configured CA.
+
+Example:
+
+```ini
+[extractor]
+db_type=redis
+extract_type=snapshot_and_cdc
+url=redis://:123456@redis-source.example.com:6380
+ssl_mode=verify_ca
+ssl_ca_path=/etc/ssl/certs/redis-ca.pem
+
+[sinker]
+db_type=redis
+sink_type=write
+url=rediss://:123456@redis-target.example.com:6390
+ssl_mode=verify_ca
+ssl_ca_path=/etc/ssl/certs/redis-ca.pem
+```
+
 # Snapshot
 ```
 [extractor]

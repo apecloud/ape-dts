@@ -24,3 +24,4 @@ pub mod snapshot_graph_tests;
 pub mod snapshot_rebloom_tests;
 pub mod snapshot_redisearch_tests;
 pub mod snapshot_rejson_tests;
+pub mod tls_tests;

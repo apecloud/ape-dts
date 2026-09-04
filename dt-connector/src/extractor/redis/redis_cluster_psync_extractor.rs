@@ -3,7 +3,6 @@ use std::sync::{atomic::Ordering, Arc};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio::{sync::Mutex, task::JoinSet};
-use url::Url;
 
 use crate::{
     extractor::{
@@ -239,17 +238,13 @@ impl RedisClusterPsyncExtractor {
     }
 
     fn node_url(base_url: &str, node: &ClusterNode) -> anyhow::Result<String> {
-        let mut url = Url::parse(base_url)?;
-        url.set_host(Some(&node.host)).map_err(|_| {
-            Error::ConfigError(format!("invalid redis cluster node host: {}", node.host))
-        })?;
-        url.set_port(Some(node.port.parse().with_context(|| {
-            format!("invalid redis cluster node port: {}", node.port)
-        })?))
-        .map_err(|_| {
-            Error::ConfigError(format!("invalid redis cluster node port: {}", node.port))
-        })?;
-        Ok(url.to_string())
+        RedisUtil::replace_url_address(
+            base_url,
+            &node.host,
+            node.port
+                .parse()
+                .with_context(|| format!("invalid redis cluster node port: {}", node.port))?,
+        )
     }
 }
 

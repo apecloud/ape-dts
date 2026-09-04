@@ -26,7 +26,7 @@ Current reference: [Config details](/docs/en/config.md).
 | Section | New configuration | Default | Purpose |
 | ------- | ----------------- | ------- | ------- |
 | Database connection sections | `username`, `password` | Empty | Credentials outside URL. Applies to extractor, sinker, standalone checker, `resumer=from_db`, metacenter. |
-| Same sections | `ssl_mode`, `ssl_ca_path` | Not set, empty | MySQL/PostgreSQL TLS. Modes: `disable`, `require`, `verify_ca`, `verify_full`. |
+| Same sections | `ssl_mode`, `ssl_ca_path` | Not set, empty | MySQL/PostgreSQL/Redis TLS. Redis supports `disable`, `require`, and `verify_ca`; `verify_ca` requires `ssl_ca_path`. |
 | `[extractor]` | `max_rps`, `max_mbps` | `0`, `0` | Source rate limits; `0` disables. |
 | `[sinker]` | `max_rps`, `max_mbps` | `0`, `0` | Target rate limits; `0` disables. |
 | `[extractor]` | `parallel_type`, `partition_cols` | `table`, empty | MySQL/PostgreSQL snapshot parallel strategy and split column. |
