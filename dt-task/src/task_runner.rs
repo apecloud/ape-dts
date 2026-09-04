@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use dt_common::{
     config::{
-        checker_config::{CheckerConfig, DEFAULT_CHECK_LOG_FILE_SIZE},
+        checker_config::{CheckerConfig, DEFAULT_CHECK_LOG_FILE_SIZE, DEFAULT_CHECK_LOG_MAX_ROWS},
         config_enums::{DbType, ExtractType, SinkType, TaskKind, TaskType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
         extractor_config::ExtractorConfig,
@@ -35,7 +35,7 @@ use dt_common::{
     error::Error,
     limiter::buffer_limiter::BufferLimiter,
     log_error,
-    log_filter::{parse_size_limit, SizeLimitFilterDeserializer},
+    log_filter::{parse_size_limit, RowLimitFilterDeserializer, SizeLimitFilterDeserializer},
     log_finished, log_info, log_runtime_trace, log_warn,
     meta::{dt_queue::DtQueue, position::Position, row_type::RowType, syncer::Syncer},
     monitor::{
@@ -97,6 +97,7 @@ const STATISTIC_LOG_DIR_PLACEHOLDER: &str = "STATISTIC_LOG_DIR_PLACEHOLDER";
 const LOG_LEVEL_PLACEHOLDER: &str = "LOG_LEVEL_PLACEHOLDER";
 const LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER";
 const CHECK_LOG_FILE_SIZE_PLACEHOLDER: &str = "CHECK_LOG_FILE_SIZE_PLACEHOLDER";
+const CHECK_LOG_MAX_ROWS_PLACEHOLDER: &str = "CHECK_LOG_MAX_ROWS_PLACEHOLDER";
 const RUNTIME_STDOUT_APPENDER_PLACEHOLDER: &str = "RUNTIME_STDOUT_APPENDER_PLACEHOLDER";
 const CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER: &str = "CHECK_RESULT_STDOUT_APPENDER_PLACEHOLDER";
 const DEFAULT_CHECK_LOG_DIR_PLACEHOLDER: &str = "LOG_DIR_PLACEHOLDER/check";
@@ -1275,6 +1276,10 @@ impl TaskRunner {
                     }
                     config_str =
                         config_str.replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, check_log_file_size);
+                    config_str = config_str.replace(
+                        CHECK_LOG_MAX_ROWS_PLACEHOLDER,
+                        &cfg.log_max_rows().to_string(),
+                    );
                 }
             }
         }
@@ -1286,6 +1291,10 @@ impl TaskRunner {
                 DEFAULT_STATISTIC_LOG_DIR_PLACEHOLDER,
             )
             .replace(CHECK_LOG_FILE_SIZE_PLACEHOLDER, DEFAULT_CHECK_LOG_FILE_SIZE)
+            .replace(
+                CHECK_LOG_MAX_ROWS_PLACEHOLDER,
+                &DEFAULT_CHECK_LOG_MAX_ROWS.to_string(),
+            )
             .replace(LOG_DIR_PLACEHOLDER, &self.config.runtime.log_dir)
             .replace(LOG_LEVEL_PLACEHOLDER, &self.config.runtime.log_level);
 
@@ -1311,6 +1320,7 @@ impl TaskRunner {
         let raw: RawConfig = serde_yaml::from_str(&config_str)?;
         let mut deserializers = Deserializers::default();
         deserializers.insert("size_limit", SizeLimitFilterDeserializer);
+        deserializers.insert("row_limit", RowLimitFilterDeserializer);
         let (appenders, errors) = raw.appenders_lossy(&deserializers);
         if !errors.is_empty() {
             bail!("errors deserializing appenders: {:?}", errors);
