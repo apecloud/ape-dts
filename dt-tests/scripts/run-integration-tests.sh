@@ -102,6 +102,7 @@ declare -a ALL_SUITES=(
   "redis_to_redis_6_2"
   "redis_to_redis_7_0"
   "redis_to_redis_8_0"
+  "redis_to_redis_tls"
   "redis_to_redis_cross_version"
   "redis_to_redis_graph"
   "redis_to_redis_rebloom"
@@ -364,6 +365,7 @@ suite_services() {
     redis_to_redis_6_2) echo "redis-src-6-2 redis-dst-6-2" ;;
     redis_to_redis_7_0) echo "redis-src redis-dst redis-cycle-node3 redis-source-cluster-node1 redis-source-cluster-node2 redis-source-cluster-node3 redis-source-cluster-init redis-target-cluster-node1 redis-target-cluster-node2 redis-target-cluster-node3 redis-target-cluster-init" ;;
     redis_to_redis_8_0) echo "redis-src-8-0 redis-dst-8-0" ;;
+    redis_to_redis_tls) echo "redis-tls-source-cluster-node1 redis-tls-source-cluster-node2 redis-tls-source-cluster-node3 redis-tls-source-cluster-init redis-tls-target-cluster-node1 redis-tls-target-cluster-node2 redis-tls-target-cluster-node3 redis-tls-target-cluster-init redis-tls-source-cluster-7-0-node1 redis-tls-source-cluster-7-0-node2 redis-tls-source-cluster-7-0-node3 redis-tls-source-cluster-7-0-init redis-tls-source-7-0 redis-tls-target-7-0 redis-tls-source-8-0 redis-tls-target-8-0" ;;
     redis_to_redis_cross_version) echo "redis-src-4-0 redis-src-5-0 redis-src-6-0 redis-src-6-2 redis-dst" ;;
     redis_to_redis_graph) echo "falkordb-src falkordb-dst" ;;
     redis_to_redis_rebloom) echo "redis-rebloom" ;;
@@ -392,6 +394,7 @@ suite_wait_timeout_secs() {
   local suite="$1"
   case "${suite}" in
     mongo_to_mongo | mongo_to_mongo_precheck) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
+    redis_to_redis_tls) echo "${REDIS_TLS_CLUSTER_WAIT_TIMEOUT_SECS:-90}" ;;
     *) echo "${WAIT_TIMEOUT_SECS}" ;;
   esac
 }
@@ -449,6 +452,7 @@ suite_nextest_filter() {
     redis_to_redis_6_2) echo "test(/^redis_to_redis::cdc_6_2_tests::/) | test(/^redis_to_redis::snapshot_6_2_tests::/)" ;;
     redis_to_redis_7_0) echo "test(/^redis_to_redis::cdc_7_0_tests::/) | test(/^redis_to_redis::snapshot_7_0_tests::/) | test(/^redis_to_redis::snapshot_and_cdc_7_0_tests::/)" ;;
     redis_to_redis_8_0) echo "test(/^redis_to_redis::cdc_8_0_tests::/) | test(/^redis_to_redis::snapshot_8_0_tests::/)" ;;
+    redis_to_redis_tls) echo "test(/^redis_to_redis::tls_tests::/)" ;;
     redis_to_redis_cross_version) echo "test(/^redis_to_redis::cdc_cross_version_tests::/) | test(/^redis_to_redis::snapshot_cross_version_tests::/)" ;;
     redis_to_redis_graph) echo "test(/^redis_to_redis::cdc_graph_tests::/) | test(/^redis_to_redis::snapshot_graph_tests::/)" ;;
     redis_to_redis_rebloom) echo "test(/^redis_to_redis::cdc_rebloom_tests::/) | test(/^redis_to_redis::snapshot_rebloom_tests::/)" ;;
@@ -784,7 +788,6 @@ run_nextest_suite() {
   fi
 
   cargo nextest run \
-    --release \
     --package dt-tests \
     --test integration_test \
     "${fail_fast_args[@]}" \

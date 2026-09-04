@@ -26,7 +26,7 @@
 | Section | 新增配置 | 默认值 | 用途 |
 | ------- | -------- | ------ | ---- |
 | 数据库连接 section | `username`、`password` | 空 | URL 外配置认证信息；适用于 extractor、sinker、standalone checker、`resumer=from_db`、metacenter。 |
-| 同上 | `ssl_mode`、`ssl_ca_path` | 不设置、空 | MySQL/PostgreSQL TLS；模式：`disable`、`require`、`verify_ca`、`verify_full`。 |
+| 同上 | `ssl_mode`、`ssl_ca_path` | 不设置、空 | MySQL/PostgreSQL/Redis TLS；Redis 支持 `disable`、`require` 和 `verify_ca`，`verify_ca` 必须配置 `ssl_ca_path`。 |
 | `[extractor]` | `max_rps`、`max_mbps` | `0`、`0` | 源端限流；`0` 表示关闭。 |
 | `[sinker]` | `max_rps`、`max_mbps` | `0`、`0` | 目标端限流；`0` 表示关闭。 |
 | `[extractor]` | `parallel_type`、`partition_cols` | `table`、空 | MySQL/PostgreSQL snapshot 并发策略和切分列。 |

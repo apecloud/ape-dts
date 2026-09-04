@@ -8,7 +8,6 @@ use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
 };
-use url::Url;
 
 use crate::extractor::resumer::{
     RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
@@ -167,15 +166,13 @@ impl ResumerUtil {
     }
 
     fn redis_node_url(base_url: &str, node: &ClusterNode) -> Result<String> {
-        let mut url = Url::parse(base_url)
-            .with_context(|| format!("failed to parse Redis URL: {}", base_url))?;
-        url.set_host(Some(&node.host))
-            .map_err(|_| anyhow::anyhow!("invalid Redis cluster node host: {}", node.host))?;
-        url.set_port(Some(node.port.parse().with_context(|| {
-            format!("invalid Redis cluster node port: {}", node.port)
-        })?))
-        .map_err(|_| anyhow::anyhow!("invalid Redis cluster node port: {}", node.port))?;
-        Ok(url.to_string())
+        RedisUtil::replace_url_address(
+            base_url,
+            &node.host,
+            node.port
+                .parse()
+                .with_context(|| format!("invalid Redis cluster node port: {}", node.port))?,
+        )
     }
 
     pub fn get_redis_resumer_key(

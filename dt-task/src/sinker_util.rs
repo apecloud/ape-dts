@@ -353,17 +353,14 @@ impl SinkerUtil {
                 }
 
                 if is_cluster {
-                    let url_info = Url::parse(&url)?;
-                    let username = url_info.username();
-                    let password = url_info.password().unwrap_or("").to_string();
-
                     let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
                     for node in nodes.iter() {
                         if !node.is_master {
                             continue;
                         }
 
-                        let new_url = format!("redis://{}:{}@{}", username, password, node.address);
+                        let new_url =
+                            RedisUtil::replace_url_address(&url, &node.host, node.port.parse()?)?;
                         let conn = RedisUtil::create_redis_conn(&new_url, &connection_auth).await?;
                         let sinker = RedisSinker {
                             cluster_node: Some(node.clone()),

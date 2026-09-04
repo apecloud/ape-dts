@@ -738,6 +738,690 @@ services:
       start_period: 10s
       interval: 3s
 
+  redis-tls-source-cluster-node1:
+    image: redis:6.2
+    container_name: redis-tls-source-cluster-node1-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26461:6379"
+      - "16461:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26461 \
+          --cluster-announce-bus-port 16461
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-source-cluster-node2:
+    image: redis:6.2
+    container_name: redis-tls-source-cluster-node2-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26462:6379"
+      - "16462:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26462 \
+          --cluster-announce-bus-port 16462
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-source-cluster-node3:
+    image: redis:6.2
+    container_name: redis-tls-source-cluster-node3-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26463:6379"
+      - "16463:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26463 \
+          --cluster-announce-bus-port 16463
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-source-cluster-init:
+    image: redis:6.2
+    container_name: redis-tls-source-cluster-init-it
+    profiles: ["redis-tls"]
+    depends_on:
+      - redis-tls-source-cluster-node1
+      - redis-tls-source-cluster-node2
+      - redis-tls-source-cluster-node3
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        export REDISCLI_AUTH=123456
+
+        redis_cli() {
+          port="$$1"
+          shift
+          redis-cli --tls --insecure -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$$port" "$$@"
+        }
+
+        until redis_cli 26461 ping \
+          && redis_cli 26462 ping \
+          && redis_cli 26463 ping; do
+          sleep 1
+        done
+
+        cluster_ok() {
+          redis_cli 26461 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
+            && redis_cli 26461 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
+        }
+
+        if ! cluster_ok; then
+          redis_cli 26461 cluster addslots $$(seq 0 5460)
+          redis_cli 26462 cluster addslots $$(seq 5461 10922)
+          redis_cli 26463 cluster addslots $$(seq 10923 16383)
+          redis_cli 26461 cluster set-config-epoch 1
+          redis_cli 26462 cluster set-config-epoch 2
+          redis_cli 26463 cluster set-config-epoch 3
+          redis_cli 26461 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26462 16462
+          redis_cli 26461 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26463 16463
+        fi
+
+        for _ in $(seq 1 10); do
+          if cluster_ok; then
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "Redis source TLS cluster failed to become ready" >&2
+        redis_cli 26461 cluster nodes || true
+        redis_cli 26461 cluster info || true
+        exit 1
+
+  redis-tls-target-cluster-node1:
+    image: redis:6.2
+    container_name: redis-tls-target-cluster-node1-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26471:6379"
+      - "16471:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26471 \
+          --cluster-announce-bus-port 16471
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-target-cluster-node2:
+    image: redis:6.2
+    container_name: redis-tls-target-cluster-node2-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26472:6379"
+      - "16472:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26472 \
+          --cluster-announce-bus-port 16472
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-target-cluster-node3:
+    image: redis:6.2
+    container_name: redis-tls-target-cluster-node3-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26473:6379"
+      - "16473:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26473 \
+          --cluster-announce-bus-port 16473
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-target-cluster-init:
+    image: redis:6.2
+    container_name: redis-tls-target-cluster-init-it
+    profiles: ["redis-tls"]
+    depends_on:
+      - redis-tls-target-cluster-node1
+      - redis-tls-target-cluster-node2
+      - redis-tls-target-cluster-node3
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        export REDISCLI_AUTH=123456
+
+        redis_cli() {
+          port="$$1"
+          shift
+          redis-cli --tls --insecure -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$$port" "$$@"
+        }
+
+        until redis_cli 26471 ping \
+          && redis_cli 26472 ping \
+          && redis_cli 26473 ping; do
+          sleep 1
+        done
+
+        cluster_ok() {
+          redis_cli 26471 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
+            && redis_cli 26471 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
+        }
+
+        if ! cluster_ok; then
+          redis_cli 26471 cluster addslots $$(seq 0 5460)
+          redis_cli 26472 cluster addslots $$(seq 5461 10922)
+          redis_cli 26473 cluster addslots $$(seq 10923 16383)
+          redis_cli 26471 cluster set-config-epoch 1
+          redis_cli 26472 cluster set-config-epoch 2
+          redis_cli 26473 cluster set-config-epoch 3
+          redis_cli 26471 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26472 16472
+          redis_cli 26471 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26473 16473
+        fi
+
+        for _ in $(seq 1 10); do
+          if cluster_ok; then
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "Redis target TLS cluster failed to become ready" >&2
+        redis_cli 26471 cluster nodes || true
+        redis_cli 26471 cluster info || true
+        exit 1
+
+  redis-tls-source-cluster-7-0-node1:
+    image: redis:7.0
+    container_name: redis-tls-source-cluster-7-0-node1-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26561:6379"
+      - "16561:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26561 \
+          --cluster-announce-bus-port 16561
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-source-cluster-7-0-node2:
+    image: redis:7.0
+    container_name: redis-tls-source-cluster-7-0-node2-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26562:6379"
+      - "16562:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26562 \
+          --cluster-announce-bus-port 16562
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-source-cluster-7-0-node3:
+    image: redis:7.0
+    container_name: redis-tls-source-cluster-7-0-node3-it
+    profiles: ["redis-tls"]
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    ports:
+      - "26563:6379"
+      - "16563:16379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        exec redis-server \
+          --port 0 \
+          --tls-port 6379 \
+          --tls-cert-file /tls/server/server.crt \
+          --tls-key-file /tls/server/server.key \
+          --tls-ca-cert-file /tls/server/server-ca.crt \
+          --tls-auth-clients no \
+          --tls-cluster yes \
+          --requirepass 123456 \
+          --masterauth 123456 \
+          --cluster-enabled yes \
+          --cluster-config-file nodes.conf \
+          --cluster-node-timeout 5000 \
+          --appendonly yes \
+          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
+          --cluster-announce-port 0 \
+          --cluster-announce-tls-port 26563 \
+          --cluster-announce-bus-port 16563
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-source-cluster-7-0-init:
+    image: redis:7.0
+    container_name: redis-tls-source-cluster-7-0-init-it
+    profiles: ["redis-tls"]
+    depends_on:
+      - redis-tls-source-cluster-7-0-node1
+      - redis-tls-source-cluster-7-0-node2
+      - redis-tls-source-cluster-7-0-node3
+    environment:
+      DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        export REDISCLI_AUTH=123456
+
+        redis_cli() {
+          port="$$1"
+          shift
+          redis-cli --tls --insecure -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$$port" "$$@"
+        }
+
+        until redis_cli 26561 ping \
+          && redis_cli 26562 ping \
+          && redis_cli 26563 ping; do
+          sleep 1
+        done
+
+        cluster_ok() {
+          redis_cli 26561 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
+            && redis_cli 26561 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
+        }
+
+        if ! cluster_ok; then
+          redis_cli 26561 cluster addslots $$(seq 0 5460)
+          redis_cli 26562 cluster addslots $$(seq 5461 10922)
+          redis_cli 26563 cluster addslots $$(seq 10923 16383)
+          redis_cli 26561 cluster set-config-epoch 1
+          redis_cli 26562 cluster set-config-epoch 2
+          redis_cli 26563 cluster set-config-epoch 3
+          redis_cli 26561 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26562 16562
+          redis_cli 26561 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26563 16563
+        fi
+
+        for _ in $(seq 1 10); do
+          if cluster_ok; then
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "Redis 7.0 source TLS cluster failed to become ready" >&2
+        redis_cli 26561 cluster nodes || true
+        redis_cli 26561 cluster info || true
+        exit 1
+
+  redis-tls-source-7-0:
+    image: redis:7.0
+    container_name: redis-tls-source-7-0-it
+    profiles: ["redis-tls"]
+    ports:
+      - "26480:6379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /tls/server/server.crt
+      - --tls-key-file
+      - /tls/server/server.key
+      - --tls-ca-cert-file
+      - /tls/server/server-ca.crt
+      - --tls-auth-clients
+      - "no"
+      - --requirepass
+      - "123456"
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-target-7-0:
+    image: redis:7.0
+    container_name: redis-tls-target-7-0-it
+    profiles: ["redis-tls"]
+    ports:
+      - "26490:6379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /tls/server/server.crt
+      - --tls-key-file
+      - /tls/server/server.key
+      - --tls-ca-cert-file
+      - /tls/server/server-ca.crt
+      - --tls-auth-clients
+      - "no"
+      - --requirepass
+      - "123456"
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-source-8-0:
+    image: redis:8.0
+    container_name: redis-tls-source-8-0-it
+    profiles: ["redis-tls"]
+    ports:
+      - "26580:6379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /tls/server/server.crt
+      - --tls-key-file
+      - /tls/server/server.key
+      - --tls-ca-cert-file
+      - /tls/server/server-ca.crt
+      - --tls-auth-clients
+      - "no"
+      - --requirepass
+      - "123456"
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
+  redis-tls-target-8-0:
+    image: redis:8.0
+    container_name: redis-tls-target-8-0-it
+    profiles: ["redis-tls"]
+    ports:
+      - "26590:6379"
+    volumes:
+      - ./docker/tls:/tls:ro
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /tls/server/server.crt
+      - --tls-key-file
+      - /tls/server/server.key
+      - --tls-ca-cert-file
+      - /tls/server/server-ca.crt
+      - --tls-auth-clients
+      - "no"
+      - --requirepass
+      - "123456"
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      interval: 3s
+
   redis-cycle-node3:
     image: redis:7.0
     container_name: redis-cycle-node3-it
