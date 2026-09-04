@@ -27,21 +27,31 @@ artifact，普通运行日志不会输出到 stdout，miss、diff、summary、SQ
 `diff_logger`、`sql_logger` 属于 stdout 结果流；JSON payload 与文件日志中的对象一致，SQL
 payload 与 `sql.log` 中的纯 SQL 语句一致。
 
-`miss.log` 和 `diff.log` 均采用相同的 JSON 结构（`StructCheckLog`）。`src_sql` 与
-`dst_sql` 是可选字段，仅在对应侧存在结构定义时输出：
+`miss.log` 和 `diff.log` 均采用相同的 JSON 结构（`StructCheckLog`）。`schema`、`tb` 用于
+定位源端对象；`src_sql` 与 `dst_sql` 是可选字段，仅在对应侧存在结构定义时输出：
 
 ```json
 {
-  "key": "index.db_name.tb_name.idx_name",
+  "key": "index.src_db.src_tb.idx_name",
+  "schema": "src_db",
+  "tb": "src_tb",
+  "target_schema": "dst_db",
+  "target_tb": "dst_tb",
   "src_sql": "source definition SQL",
   "dst_sql": "target definition SQL"
 }
 ```
 
-`key` 用于定位结构对象，并且始终存在。结构日志没有 `schema`、`tb`、`id_col_values`、
-`target_schema`、`target_tb` 字段。源端定义存在时输出 `src_sql`，目标端定义存在时输出
-`dst_sql`。源端独有的缺失对象通常只有 `src_sql`；定义不一致的对象同时包含 `src_sql`
-和 `dst_sql`；目标端独有的额外对象只有 `dst_sql`。
+`key`、`schema` 和 `tb` 用于定位源端结构对象。结构日志采用 `schema`/`table` 两层位置模型，
+不输出独立的 `db` 或 `target_db` 字段。未发生路由改名时，不输出 `target_schema`、`target_tb`；
+只要 schema 或 table 任一名称发生变化，这两个字段会同时输出。结构日志不包含
+`id_col_values`。源端定义存在时输出 `src_sql`，目标端定义存在时输出 `dst_sql`。源端独有的
+缺失对象通常只有 `src_sql`；定义不一致的对象同时包含 `src_sql` 和 `dst_sql`。源端 table
+下仅目标端存在的子对象（如 index）只有 `dst_sql`；仅目标端存在的独立对象会被忽略。
+
+校验器内部将 `key` 解析为结构化对象位置，并同时保留源端和路由后的目标端位置；对外仍输出
+字符串 `key`，以兼容已有消费者。`schema`、`tb` 以及可选的 target 字段均由该结构化位置生成，
+不需要消费者再次拆分 `key`。
 
 结构 key 格式：
 
@@ -59,15 +69,15 @@ key，例如 `udt.schema.type_name`、`udf.schema.function_name(arguments)` 和
 
 - `miss.log`（源端存在但目标端缺失）
 ```json
-{"key":"table.struct_check_test_1.not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
-{"key":"index.struct_check_test_1.not_match_index.i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
+{"key":"table.struct_check_test_1.not_match_miss","schema":"struct_check_test_1","tb":"not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.not_match_index.i6_miss","schema":"struct_check_test_1","tb":"not_match_index","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
-- `diff.log`（对象定义不一致，或对象仅存在于目标端）
+- `diff.log`（对象定义不一致，包括源端 table 下仅目标端存在的子对象）
 ```json
-{"key":"index.struct_check_test_1.not_match_index.i1","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
-{"key":"table.struct_check_test_1.not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
-{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
+{"key":"index.struct_check_test_1.not_match_index.i1","schema":"struct_check_test_1","tb":"not_match_index","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
+{"key":"table.struct_check_test_1.not_match_column","schema":"struct_check_test_1","tb":"not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","schema":"struct_check_test_1","tb":"full_index_type","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
 ```
 
 - `summary.log`（校验结果概览）
@@ -83,5 +93,5 @@ CREATE TABLE IF NOT EXISTS `struct_check_test_1`.`not_match_miss` (`id` int NOT 
 # 适用范围
 
 - 结构校验会对经过路由与过滤后选中的源端结构，与目标端对应结构进行对比。
-- 仅存在于目标端的额外对象会记录到 `diff.log`。
+- 源端 table 下仅目标端存在的子对象属于 diff；仅目标端存在的独立对象会被忽略。
 - 过滤范围之外的库 / schema / 表对象不会被校验。

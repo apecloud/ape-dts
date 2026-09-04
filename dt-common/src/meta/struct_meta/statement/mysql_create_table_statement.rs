@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::column::ColumnDefault;
 use crate::{config::config_enums::DbType, rdb_filter::RdbFilter};
 
@@ -33,13 +34,13 @@ impl MysqlCreateTableStatement {
         }
     }
 
-    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
 
         if !filter.filter_structure(&StructureType::Table) {
-            let key = format!(
-                "table.{}.{}",
-                self.table.database_name, self.table.table_name
+            let key = StructKey::new(
+                StructKeyType::Table,
+                [&self.table.database_name, &self.table.table_name],
             );
             sqls.push((key, Self::table_to_sql(&mut self.table)));
         }
@@ -67,18 +68,18 @@ impl MysqlCreateTableStatement {
                         idx_appends.push(Self::index_to_sql_appends(i));
                     }
                     _ => {
-                        let standalone_key = format!(
-                            "index.{}.{}.{}",
-                            i.database_name, i.table_name, i.index_name
+                        let standalone_key = StructKey::new(
+                            StructKeyType::Index,
+                            [&i.database_name, &i.table_name, &i.index_name],
                         );
                         sqls.push((standalone_key, Self::index_to_sql(i)))
                     }
                 }
             }
             if !idx_appends.is_empty() {
-                let key = format!(
-                    "index.{}.{}",
-                    self.indexes[0].database_name, self.indexes[0].table_name
+                let key = StructKey::new(
+                    StructKeyType::Index,
+                    [&self.indexes[0].database_name, &self.indexes[0].table_name],
                 );
                 sqls.push((
                     key,
@@ -94,9 +95,9 @@ impl MysqlCreateTableStatement {
 
         if !filter.filter_structure(&StructureType::Constraint) {
             for i in self.constraints.iter() {
-                let key = format!(
-                    "constraint.{}.{}.{}",
-                    i.database_name, i.table_name, i.constraint_name
+                let key = StructKey::new(
+                    StructKeyType::Constraint,
+                    [&i.database_name, &i.table_name, &i.constraint_name],
                 );
                 sqls.push((key, Self::constraint_to_sql(i)));
             }

@@ -8,6 +8,7 @@ use dt_common::meta::struct_meta::{
         pg_create_table_statement::PgCreateTableStatement,
         pg_create_udf_statement::PgCreateUdfStatement,
         pg_create_udt_statement::PgCreateUdtStatement,
+        struct_statement::{StructKey, StructKeyType},
     },
     structure::{
         column::{Column, ColumnDefault},
@@ -951,7 +952,7 @@ impl PgStructFetcher {
             }
 
             results.push(PgPrivilege {
-                key: format!("rbac.privilege.schema.{}.{}", schema_name, grantee),
+                key: StructKey::new(StructKeyType::RbacPrivilegeSchema, [schema_name, grantee]),
                 origin: grant_command,
             });
         }
@@ -995,9 +996,9 @@ impl PgStructFetcher {
             }
 
             results.push(PgPrivilege {
-                key: format!(
-                    "rbac.privilege.table.{}.{}.{}.{}",
-                    schema_name, table_name, grantee, is_grantable
+                key: StructKey::new(
+                    StructKeyType::RbacPrivilegeTable,
+                    [schema_name, table_name, grantee, is_grantable],
                 ),
                 origin: grant_command,
             });
@@ -1087,9 +1088,15 @@ impl PgStructFetcher {
                 );
 
                 results.push(PgPrivilege {
-                    key: format!(
-                        "rbac.privilege.column.{}.{}.{}.{}.{}",
-                        schema, table, privilege_type, grantee, is_grantable
+                    key: StructKey::new(
+                        StructKeyType::RbacPrivilegeColumn,
+                        [
+                            schema.as_str(),
+                            table.as_str(),
+                            privilege_type.as_str(),
+                            grantee.as_str(),
+                            is_grantable.as_str(),
+                        ],
                     ),
                     origin: grant_command,
                 });
@@ -1172,9 +1179,9 @@ impl PgStructFetcher {
             );
 
             results.push(PgPrivilege {
-                key: format!(
-                    "rbac.privilege.sequence.{}.{}.{}.{}",
-                    schema, sequence, grantee, is_grantable
+                key: StructKey::new(
+                    StructKeyType::RbacPrivilegeSequence,
+                    [schema, sequence, grantee, is_grantable],
                 ),
                 origin: grant_command,
             });

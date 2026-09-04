@@ -1787,4 +1787,32 @@ mod tests {
         );
         fs::remove_dir_all(dir).unwrap();
     }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn init_log4rs_registers_builtin_row_limit_filter() {
+        let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let config_file = project_root.join(
+            "dt-tests/tests/mock_test/mysql_to_mysql/5_7_to_5_7/snapshot/parallel_test/task_config.ini",
+        );
+        let mut runner = TaskRunner::new(config_file.to_str().unwrap()).unwrap();
+
+        let log_dir = std::env::temp_dir().join(format!(
+            "ape-dts-log4rs-{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(log_dir.join("check")).unwrap();
+        fs::create_dir_all(log_dir.join("statistic")).unwrap();
+        runner.config.runtime.log4rs_file = project_root.join("log4rs.yaml").display().to_string();
+        runner.config.runtime.log_dir = log_dir.display().to_string();
+
+        runner.init_log4rs().await.unwrap();
+
+        fs::remove_dir_all(log_dir).unwrap();
+    }
 }

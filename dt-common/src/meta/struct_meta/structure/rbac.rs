@@ -1,3 +1,5 @@
+use crate::meta::struct_meta::statement::struct_statement::StructKey;
+
 #[derive(Debug, Clone)]
 pub struct PgRole {
     pub name: String,
@@ -26,6 +28,6 @@ pub struct PgRoleMember {
 
 #[derive(Debug, Clone)]
 pub struct PgPrivilege {
-    pub key: String,
+    pub key: StructKey,
     pub origin: String,
 }
