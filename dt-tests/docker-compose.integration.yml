@@ -526,6 +526,67 @@ services:
       start_period: 20s
       interval: 5s
 
+  mongo-tls-src:
+    image: mongo:6.0.27
+    container_name: mongo-tls-src-it
+    hostname: mongo-tls-src
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123456
+      MONGO_RS_HOST: mongo-tls-src
+      MONGO_RS_NAME: tls-rs0
+    ports:
+      - "27117:27017"
+    volumes:
+      - ./docker/mongo-init/mongo-keyfile:/run/secrets/mongo-keyfile:ro
+      - ./docker/mongo-init/start-mongo-rs-tls.sh:/usr/local/bin/start-mongo-rs-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongo-rs-tls.sh
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; else mongo "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; fi'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-tls-dst:
+    image: mongo:6.0.27
+    container_name: mongo-tls-dst-it
+    hostname: mongo-tls-dst
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123456
+    ports:
+      - "27118:27017"
+    volumes:
+      - ./docker/mongo-init/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        cat /tls/server/server.key /tls/server/server.crt > /tmp/mongo-server.pem
+        chown mongodb:mongodb /tmp/mongo-server.pem
+        chmod 600 /tmp/mongo-server.pem
+        exec docker-entrypoint.sh mongod \
+          --bind_ip_all \
+          --tlsMode requireTLS \
+          --tlsCertificateKeyFile /tmp/mongo-server.pem \
+          --tlsCAFile /tls/server/server-ca.crt \
+          --tlsAllowConnectionsWithoutCertificates
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; else mongo "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; fi'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
   mongo-sharding-src-config:
     image: mongo:7.0
     container_name: mongo-sharding-src-config-it

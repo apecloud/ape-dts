@@ -103,6 +103,9 @@ impl ResumerUtil {
                 let mut client_options = ClientOptions::parse(&final_url)
                     .await
                     .context("failed to parse MongoDB connection URL")?;
+                if let Some(ssl) = connection_auth.ssl_config() {
+                    client_options = ssl.apply_mongo(client_options)?;
+                }
                 client_options.app_name = Some("ape-dts-resumer".to_string());
                 client_options.max_pool_size = Some(max_connections);
                 if let Some(is_direct_connection_option) = is_direct_connection {
