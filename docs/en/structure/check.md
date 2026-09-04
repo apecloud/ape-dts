@@ -45,14 +45,15 @@ corresponding side has a definition:
 }
 ```
 
-`key` identifies the source structure object and is always present. `db` is emitted only for a
-database type with a separate database dimension. `target_db`, `target_schema`, and `target_tb`
-are omitted when routing does not rename the destination object. When either the schema or table
-name changes, `target_schema` and `target_tb` are emitted together. Structure logs do not contain
-`id_col_values`. `src_sql` is included when the source-side definition exists; `dst_sql` is
-included when the target-side definition exists. Source-only missing objects usually have only
-`src_sql`; objects with different definitions have both `src_sql` and `dst_sql`; target-only extra
-objects have only `dst_sql`.
+`key`, `schema`, and `tb` identify the source structure object. Structure logs use the two-level
+`schema`/`table` location model and do not emit separate `db` or `target_db` fields.
+`target_schema` and `target_tb` are omitted when routing does not rename the destination object;
+when either name changes, both fields are emitted. Structure logs do not contain `id_col_values`.
+`src_sql` is included when the source-side definition exists; `dst_sql` is included when the
+target-side definition exists. Source-only missing objects usually have only
+`src_sql`; objects with different definitions have both `src_sql` and `dst_sql`. A target-only
+child of a source table, such as an index, has only `dst_sql`; target-only independent objects are
+ignored.
 
 Internally, the checker parses `key` into a structured object location and keeps both the source
 and routed target locations. The external `key` remains a string for backward compatibility;
@@ -79,7 +80,7 @@ object-specific keys such as `udt.schema.type_name`, `udf.schema.function_name(a
 {"key":"index.struct_check_test_1.not_match_index.i6_miss","schema":"struct_check_test_1","tb":"not_match_index","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
-- `diff.log` (object definition differs, or the object exists only in the target)
+- `diff.log` (object definition differs, including target-only children of a source table)
 ```json
 {"key":"index.struct_check_test_1.not_match_index.i1","schema":"struct_check_test_1","tb":"not_match_index","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
 {"key":"table.struct_check_test_1.not_match_column","schema":"struct_check_test_1","tb":"not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
@@ -99,5 +100,5 @@ CREATE TABLE IF NOT EXISTS `struct_check_test_1`.`not_match_miss` (`id` int NOT 
 # Scope
 
 - Structure check compares the source structures selected by the configured routing and filters with the corresponding target structures.
-- Extra objects that exist only in the target are reported in `diff.log`.
+- Target-only children of a source table are differences; target-only independent objects are ignored.
 - Objects outside the selected databases/schemas and filters are not checked.

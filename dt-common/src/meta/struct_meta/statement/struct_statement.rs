@@ -114,6 +114,24 @@ impl StructKey {
     pub fn is_sequence(&self) -> bool {
         self.key_type == StructKeyType::Sequence
     }
+
+    pub fn parent_table_key(&self) -> Option<Self> {
+        if !matches!(
+            self.key_type,
+            StructKeyType::Index
+                | StructKeyType::Constraint
+                | StructKeyType::SequenceOwner
+                | StructKeyType::ColumnComment
+                | StructKeyType::TableComment
+        ) {
+            return None;
+        }
+
+        Some(Self::new(
+            StructKeyType::Table,
+            [self.schema(), self.table()],
+        ))
+    }
 }
 
 impl Display for StructKey {
@@ -247,5 +265,12 @@ mod tests {
         let sequence = StructKey::new(StructKeyType::Sequence, ["public", "seq"]);
         let table = StructKey::new(StructKeyType::Table, ["public", "tb"]);
         assert!(sequence < table);
+
+        let index = StructKey::new(StructKeyType::Index, ["a.b", "t.1", "idx"]);
+        assert_eq!(
+            index.parent_table_key(),
+            Some(StructKey::new(StructKeyType::Table, ["a.b", "t.1"]))
+        );
+        assert!(table.parent_table_key().is_none());
     }
 }

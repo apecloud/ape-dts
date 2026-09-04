@@ -95,6 +95,14 @@ fn struct_table_summary(
     })
 }
 
+fn source_contains_parent_table(
+    src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
+    key: &StructKey,
+) -> bool {
+    key.parent_table_key()
+        .is_some_and(|parent_key| src_sql_map.contains_key(&parent_key))
+}
+
 impl StructCheckerHandle {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -333,6 +341,10 @@ impl StructCheckerHandle {
         }
 
         for (key, dst_sql) in dst_map {
+            if !source_contains_parent_table(src_sql_map, &key) {
+                continue;
+            }
+
             summary.diff_count += 1;
             let target_key = StructCheckKey::new(key);
             let source_key = Self::source_key_from_target(&target_key, router);
@@ -499,5 +511,100 @@ mod tests {
         assert!(summary.is_consistent);
         assert_eq!(summary.checked_count, 2);
         assert_eq!(summary.tables.len(), 2);
+    }
+
+    #[test]
+    fn target_only_independent_structures_are_ignored() {
+        let source_role = StructKey::new(StructKeyType::RbacRole, ["app_user"]);
+        let source_privilege = StructKey::new(
+            StructKeyType::RbacPrivilegeSchema,
+            ["app", "app_user", "NO"],
+        );
+        let src_sql_map = BTreeMap::from([
+            (
+                source_role.clone(),
+                StructCheckItem::unrouted(source_role.clone(), "CREATE ROLE app_user"),
+            ),
+            (
+                source_privilege.clone(),
+                StructCheckItem::unrouted(
+                    source_privilege.clone(),
+                    "GRANT USAGE ON SCHEMA app TO app_user",
+                ),
+            ),
+        ]);
+        let dst_sql_map = BTreeMap::from([
+            (source_role, "CREATE ROLE app_user".to_string()),
+            (
+                source_privilege,
+                "GRANT USAGE ON SCHEMA app TO app_user".to_string(),
+            ),
+            (
+                StructKey::new(StructKeyType::RbacRole, ["target_only"]),
+                "CREATE ROLE target_only".to_string(),
+            ),
+            (
+                StructKey::new(
+                    StructKeyType::RbacPrivilegeSchema,
+                    ["app", "target_only", "NO"],
+                ),
+                "GRANT USAGE ON SCHEMA app TO target_only".to_string(),
+            ),
+        ]);
+
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &src_sql_map,
+            dst_sql_map,
+            None,
+            "start",
+            false,
+            false,
+        );
+
+        assert!(summary.is_consistent);
+        assert_eq!(summary.checked_count, 2);
+        assert_eq!(summary.miss_count, 0);
+        assert_eq!(summary.diff_count, 0);
+    }
+
+    #[test]
+    fn target_only_children_of_source_table_are_differences() {
+        let source_table = StructKey::new(StructKeyType::Table, ["app", "users"]);
+        let src_sql_map = BTreeMap::from([(
+            source_table.clone(),
+            StructCheckItem::unrouted(source_table.clone(), "CREATE TABLE app.users (id bigint)"),
+        )]);
+        let dst_sql_map = BTreeMap::from([
+            (
+                source_table,
+                "CREATE TABLE app.users (id bigint, col1 text)".to_string(),
+            ),
+            (
+                StructKey::new(StructKeyType::Index, ["app", "users", "target_only_idx"]),
+                "CREATE INDEX target_only_idx ON app.users (id)".to_string(),
+            ),
+            (
+                StructKey::new(StructKeyType::Table, ["app", "target_only_table"]),
+                "CREATE TABLE app.target_only_table (id bigint)".to_string(),
+            ),
+        ]);
+
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &src_sql_map,
+            dst_sql_map,
+            None,
+            "start",
+            false,
+            false,
+        );
+
+        assert!(!summary.is_consistent);
+        assert_eq!(summary.checked_count, 1);
+        assert_eq!(summary.miss_count, 0);
+        assert_eq!(summary.diff_count, 2);
+        assert_eq!(summary.tables.len(), 1);
+        assert_eq!(summary.tables[0].schema, "app");
+        assert_eq!(summary.tables[0].tb, "users");
+        assert_eq!(summary.tables[0].diff_count, 2);
     }
 }

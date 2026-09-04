@@ -1,5 +1,7 @@
 drop schema if exists struct_check_test_1 CASCADE;
 
+DROP ROLE IF EXISTS struct_check_target_only_role;
+
 create schema struct_check_test_1;
 
 -- full column types:
@@ -56,3 +58,7 @@ CREATE TABLE struct_check_test_1.not_match_comment (id SERIAL PRIMARY KEY);
 COMMENT ON TABLE struct_check_test_1.not_match_comment IS 'This is an example table2.';
 
 -- COMMENT ON COLUMN struct_check_test_1.not_match_comment.id IS 'This is the primary key column.';
+
+-- target-only independent RBAC objects should be ignored by structure check
+CREATE ROLE struct_check_target_only_role NOLOGIN;
+GRANT USAGE ON SCHEMA struct_check_test_1 TO struct_check_target_only_role;
