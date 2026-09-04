@@ -29,22 +29,35 @@ is silenced, and miss, diff, summary, and SQL records are emitted to stdout as o
 part of this stdout result stream. The JSON payloads are the same objects as the file logs; SQL
 payloads are the same plain statements as `sql.log`.
 
-`miss.log` and `diff.log` use the same JSON structure (`StructCheckLog`). `src_sql` and
-`dst_sql` are optional and appear only when the corresponding side has a definition:
+`miss.log` and `diff.log` use the same JSON structure (`StructCheckLog`). `schema` and `tb`
+identify the source object. `src_sql` and `dst_sql` are optional and appear only when the
+corresponding side has a definition:
 
 ```json
 {
-  "key": "index.db_name.tb_name.idx_name",
+  "key": "index.src_db.src_tb.idx_name",
+  "schema": "src_db",
+  "tb": "src_tb",
+  "target_schema": "dst_db",
+  "target_tb": "dst_tb",
   "src_sql": "source definition SQL",
   "dst_sql": "target definition SQL"
 }
 ```
 
-`key` identifies the structure object and is always present. Structure logs do not contain
-`schema`, `tb`, `id_col_values`, `target_schema`, or `target_tb`. `src_sql` is included when the
-source-side definition exists; `dst_sql` is included when the target-side definition exists.
-Source-only missing objects usually have only `src_sql`; objects with different definitions have
-both `src_sql` and `dst_sql`; target-only extra objects have only `dst_sql`.
+`key` identifies the source structure object and is always present. `db` is emitted only for a
+database type with a separate database dimension. `target_db`, `target_schema`, and `target_tb`
+are omitted when routing does not rename the destination object. When either the schema or table
+name changes, `target_schema` and `target_tb` are emitted together. Structure logs do not contain
+`id_col_values`. `src_sql` is included when the source-side definition exists; `dst_sql` is
+included when the target-side definition exists. Source-only missing objects usually have only
+`src_sql`; objects with different definitions have both `src_sql` and `dst_sql`; target-only extra
+objects have only `dst_sql`.
+
+Internally, the checker parses `key` into a structured object location and keeps both the source
+and routed target locations. The external `key` remains a string for backward compatibility;
+`schema`, `tb`, and the optional target fields are generated from that structured location, so
+consumers do not need to parse `key` again.
 
 The structure key has this format:
 
@@ -62,15 +75,15 @@ object-specific keys such as `udt.schema.type_name`, `udf.schema.function_name(a
 
 - `miss.log` (present in source but missing in target)
 ```json
-{"key":"table.struct_check_test_1.not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
-{"key":"index.struct_check_test_1.not_match_index.i6_miss","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
+{"key":"table.struct_check_test_1.not_match_miss","schema":"struct_check_test_1","tb":"not_match_miss","src_sql":"CREATE TABLE `not_match_miss` (`id` int NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.not_match_index.i6_miss","schema":"struct_check_test_1","tb":"not_match_index","src_sql":"CREATE INDEX `i6_miss` ON `not_match_index` (`c6`)"}
 ```
 
 - `diff.log` (object definition differs, or the object exists only in the target)
 ```json
-{"key":"index.struct_check_test_1.not_match_index.i1","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
-{"key":"table.struct_check_test_1.not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
-{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
+{"key":"index.struct_check_test_1.not_match_index.i1","schema":"struct_check_test_1","tb":"not_match_index","src_sql":"CREATE INDEX `i1` ON `not_match_index` (`c1`)","dst_sql":"CREATE INDEX `i1` ON `not_match_index` (`c2`)"}
+{"key":"table.struct_check_test_1.not_match_column","schema":"struct_check_test_1","tb":"not_match_column","src_sql":"CREATE TABLE `not_match_column` (`id` int NOT NULL, PRIMARY KEY (`id`))","dst_sql":"CREATE TABLE `not_match_column` (`id` bigint NOT NULL, PRIMARY KEY (`id`))"}
+{"key":"index.struct_check_test_1.full_index_type.index_not_match_name_dst","schema":"struct_check_test_1","tb":"full_index_type","dst_sql":"CREATE INDEX `index_not_match_name_dst` ON `full_index_type` (`c1`)"}
 ```
 
 - `summary.log` (overview of the check results)
