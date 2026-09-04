@@ -95,6 +95,7 @@ declare -a ALL_SUITES=(
   # "pg_to_starrocks"       # disabled: temporarily excluded from default local matrix
   "mongo_to_mongo"
   "mongo_to_mongo_tls"
+  "mongo_to_mongo_tls_sharding"
   "mongo_to_mongo_precheck"
   "redis_to_redis_2_8"
   "redis_to_redis_4_0"
@@ -359,6 +360,7 @@ suite_services() {
     pg_to_starrocks) echo "postgres-src starrocks-3-2-11" ;;
     mongo_to_mongo) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
     mongo_to_mongo_tls) echo "mongo-tls-src mongo-tls-dst" ;;
+    mongo_to_mongo_tls_sharding) echo "mongo-tls-sharding-src-config mongo-tls-sharding-src-shard mongo-tls-sharding-src-init mongo-tls-sharding-src-mongos mongo-tls-sharding-src-add-shard-init mongo-tls-sharding-dst-config mongo-tls-sharding-dst-shard mongo-tls-sharding-dst-init mongo-tls-sharding-dst-mongos mongo-tls-sharding-dst-add-shard-init" ;;
     mongo_to_mongo_precheck) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
     redis_to_redis_2_8) echo "redis-src-2-8 redis-dst-2-8" ;;
     redis_to_redis_4_0) echo "redis-src-4-0 redis-dst-4-0" ;;
@@ -397,7 +399,7 @@ suite_wait_timeout_secs() {
   case "${suite}" in
     mongo_to_mongo | mongo_to_mongo_precheck) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
     redis_to_redis_tls) echo "${REDIS_TLS_CLUSTER_WAIT_TIMEOUT_SECS:-90}" ;;
-    mongo_to_mongo_tls) echo "${MONGO_TLS_WAIT_TIMEOUT_SECS:-90}" ;;
+    mongo_to_mongo_tls | mongo_to_mongo_tls_sharding) echo "${MONGO_TLS_WAIT_TIMEOUT_SECS:-120}" ;;
     *) echo "${WAIT_TIMEOUT_SECS}" ;;
   esac
 }
@@ -448,6 +450,7 @@ suite_nextest_filter() {
     pg_to_starrocks) echo "test(/^pg_to_starrocks::/)" ;;
     mongo_to_mongo) echo "test(/^mongo_to_mongo::cdc_tests::/) | test(/^mongo_to_mongo::check_tests::/) | test(/^mongo_to_mongo::review_tests::/) | test(/^mongo_to_mongo::revise_tests::/) | test(/^mongo_to_mongo::snapshot_tests::/) | test(/^mongo_to_mongo::struct_tests::/)" ;;
     mongo_to_mongo_tls) echo "test(/^mongo_to_mongo::tls_tests::/)" ;;
+    mongo_to_mongo_tls_sharding) echo "test(/^mongo_to_mongo::tls_sharding_tests::/)" ;;
     mongo_to_mongo_precheck) echo "test(/^mongo_to_mongo::precheck_tests::/)" ;;
     redis_to_redis_2_8) echo "test(/^redis_to_redis::cdc_2_8_tests::/) | test(/^redis_to_redis::snapshot_2_8_tests::/)" ;;
     redis_to_redis_4_0) echo "test(/^redis_to_redis::cdc_4_0_tests::/) | test(/^redis_to_redis::snapshot_4_0_tests::/)" ;;
