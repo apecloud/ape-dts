@@ -45,6 +45,7 @@ log = { workspace = true }
 log4rs = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
+rustls = { workspace = true }
 anyhow = { workspace = true }
 url = { workspace = true }
 concurrent-queue = { workspace = true }

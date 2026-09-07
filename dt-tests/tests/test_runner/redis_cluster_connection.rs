@@ -6,7 +6,6 @@ use dt_common::{
     meta::redis::command::key_parser::KeyParser,
 };
 use redis::Connection;
-use url::Url;
 
 pub struct RedisClusterConnection {
     slot_node_map: HashMap<u16, &'static str>,
@@ -30,14 +29,10 @@ impl RedisClusterConnection {
             let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
             slot_node_map = RedisUtil::get_slot_address_map(&nodes);
 
-            let url_info = Url::parse(url)?;
-            let username = url_info.username();
-            let password = url_info.password().unwrap_or("").to_string();
-
             let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)?;
             for node in nodes {
                 println!("redis cluster node: {}", node.address);
-                let new_url = format!("redis://{}:{}@{}", username, password, node.address);
+                let new_url = RedisUtil::replace_url_address(url, &node.host, node.port.parse()?)?;
                 let conn = RedisUtil::create_redis_conn(&new_url, connection_auth).await?;
                 node_conn_map.insert(node.address.clone(), conn);
             }

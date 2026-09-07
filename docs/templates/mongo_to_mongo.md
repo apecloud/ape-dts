@@ -2,6 +2,25 @@
 
 Refer to [config details](/docs/en/config.md) for explanations of common fields.
 
+# TLS
+
+Add the following to `[extractor]`, `[sinker]`, or `[resumer]` with `resume_type=from_db`:
+
+```ini
+ssl_mode=require
+```
+
+`require` encrypts traffic without certificate verification and needs no CA file. To verify the
+server certificate chain and hostname using the MongoDB driver's rustls backend:
+
+```ini
+ssl_mode=verify_ca
+ssl_ca_path=/etc/ssl/certs/mongo-ca.pem
+```
+
+The URI hostname must match the server certificate SAN. `verify_full` is not supported.
+An explicit `ssl_mode` overrides URI TLS options; omit it to use the driver's URI settings.
+
 # Struct
 
 ```
