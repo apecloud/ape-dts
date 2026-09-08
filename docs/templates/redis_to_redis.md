@@ -16,11 +16,13 @@ the URL scheme:
 - `ssl_mode=disable`: plaintext.
 - `ssl_mode=require`: TLS encryption without server certificate verification.
 - `ssl_mode=verify_ca`: TLS with CA chain verification, without hostname verification.
+- `ssl_mode=verify_full`: TLS with CA chain and hostname/IP verification.
 
-`ssl_ca_path` is required for `verify_ca`. Without an explicit `ssl_mode`, `rediss://` selects
+`ssl_ca_path` is required for `verify_ca` and `verify_full`. Without an explicit `ssl_mode`, `rediss://` selects
 `require`. An explicit mode overrides the URL scheme and `#insecure` fragment. The same settings
 protect the source PSYNC replication stream and ordinary command connections. In Cluster mode,
-every node must present a certificate signed by the configured CA.
+every node must present a certificate signed by the configured CA; `verify_full` also
+requires each discovered hostname/IP to match its certificate SAN.
 
 Example:
 

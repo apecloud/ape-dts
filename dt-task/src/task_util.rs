@@ -375,6 +375,9 @@ impl TaskUtil {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
 
         let mut client_options = ClientOptions::parse(&final_url).await?;
+        if let Some(ssl) = connection_auth.ssl_config() {
+            client_options = ssl.apply_mongo(client_options)?;
+        }
         // app_name only for debug usage
         if let Some(app) = app_name {
             client_options.app_name = Some(app.to_string());

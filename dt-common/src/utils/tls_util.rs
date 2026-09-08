@@ -8,10 +8,8 @@ use rustls::{
     },
     crypto::WebPkiSupportedAlgorithms,
     pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
-    ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
+    DigitallySignedStruct, RootCertStore, SignatureScheme,
 };
-
-use crate::config::ssl_config::{SslConfig, SslMode};
 
 pub struct NoCertificateVerification {
     supported: WebPkiSupportedAlgorithms,
@@ -129,33 +127,7 @@ impl ServerCertVerifier for NoHostnameVerification {
     }
 }
 
-pub fn build_tls_client_config(ssl_config: &SslConfig) -> anyhow::Result<ClientConfig> {
-    match &ssl_config.ssl_mode {
-        SslMode::Disable => bail!("can not build a TLS client when ssl_mode=disable"),
-        SslMode::Require => {
-            let mut config = ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::default()))
-                .with_no_client_auth();
-            config.enable_sni = false;
-            Ok(config)
-        }
-        SslMode::VerifyCa => {
-            let verifier =
-                NoHostnameVerification::new(load_root_cert_store(&ssl_config.ssl_ca_path)?)?;
-            Ok(ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(verifier))
-                .with_no_client_auth())
-        }
-        unsupported => bail!(
-            "ssl_mode={} is not supported by this TLS client",
-            unsupported
-        ),
-    }
-}
-
-fn load_root_cert_store(path: &str) -> anyhow::Result<RootCertStore> {
+pub(crate) fn load_root_cert_store(path: &str) -> anyhow::Result<RootCertStore> {
     if path.is_empty() {
         bail!("TLS CA certificate path is empty")
     }

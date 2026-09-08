@@ -13,8 +13,8 @@ For configuration changes between releases, see [Config changelog](/docs/en/conf
 | url                  | database URL; credentials may be included in the URL or configured separately                                          | `mysql://127.0.0.1:3307`                                                                             | empty                                                                                                            |
 | username             | database connection username                                                                                           | root                                                                                                 | empty                                                                                                            |
 | password             | database connection password                                                                                           | password                                                                                             | empty                                                                                                            |
-| ssl_mode             | MySQL/PostgreSQL/Redis TLS mode                                                                                          | verify_ca                                                                                            | not set                                                                                                          |
-| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/Redis TLS verification                                                     | /etc/ssl/certs/ca.pem                                                                                | empty                                                                                                            |
+| ssl_mode             | MySQL/PostgreSQL/Redis/MongoDB TLS mode (`disable`, `require`, `verify_ca`, `verify_full`)                                                                                          | verify_ca                                                                                            | not set                                                                                                          |
+| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/Redis/MongoDB TLS verification                                                     | /etc/ssl/certs/ca.pem                                                                                | empty                                                                                                            |
 | max_connections      | maximum source connection pool size                                                                                    | 10                                                                                                   | 10                                                                                                               |
 | batch_size           | number of rows extracted per batch; if using chunk splitting, this is also the target chunk size for the source        | 10000                                                                                                | `[pipeline].buffer_size / effective snapshot parallel_size`. If set to 0, uses `[pipeline].buffer_size` directly |
 | max_rps              | optional source-side rate limit in records per second; `0` disables the limit                                          | 1000                                                                                                 | 0                                                                                                                |
@@ -43,10 +43,17 @@ server setup require a CA certificate.
 ## Redis TLS
 
 - Redis URLs support `redis://` and `rediss://`. Without `ssl_mode`, `redis://` is plaintext and `rediss://` uses TLS without server certificate verification.
-- Redis supports `disable`, `require`, and `verify_ca`. `verify_ca` validates the CA chain but not the hostname and requires `ssl_ca_path`.
-- An explicit `ssl_mode` overrides the URL scheme and fragment. A DNS URL host is sent as SNI for `verify_ca`, but it is not matched against the certificate SAN.
+- Redis supports `disable`, `require`, `verify_ca`, and `verify_full`. Both verification modes require `ssl_ca_path`: `verify_ca` validates the CA chain, while `verify_full` also checks the URL hostname/IP against the certificate SAN.
+- An explicit `ssl_mode` overrides the URL scheme and fragment. A DNS URL host is sent as SNI for both verification modes.
 - These rules apply to ordinary Redis command connections and PSYNC replication streams, and are preserved for discovered Redis Cluster node URLs.
-- With Redis Cluster and `verify_ca`, every node must present a certificate signed by the configured CA.
+- With Redis Cluster and either verification mode, every node must present a certificate signed by the configured CA. `verify_full` also requires each discovered hostname/IP to match its certificate SAN.
+
+## MongoDB TLS
+
+- MongoDB uses the driver's rustls backend. Without `ssl_mode`, TLS settings come from the URI.
+- `disable` uses plaintext; `require` encrypts without verifying the server certificate or hostname.
+- Both `verify_ca` and `verify_full` require `ssl_ca_path` and verify the server certificate chain and hostname/IP. They currently share the same implementation because the rustls backend has no independent hostname opt-out.
+- Explicit SSL settings replace URI TLS settings and apply to task and resumer clients. Client-side `verify_full` does not require the server to authenticate clients with certificates.
 
 ## extractor.parallel_type
 
@@ -82,8 +89,8 @@ server setup require a CA certificate.
 | url                            | database URL; credentials may be included in the URL or configured separately                                                  | `mysql://127.0.0.1:3307` | empty                                                                   |
 | username                       | database connection username                                                                                                   | root                     | empty                                                                   |
 | password                       | database connection password                                                                                                   | password                 | empty                                                                   |
-| ssl_mode                       | MySQL/PostgreSQL/Redis TLS mode                                                                                                 | verify_ca                | not set                                                                 |
-| ssl_ca_path                    | CA certificate path used by MySQL/PostgreSQL/Redis TLS verification                                                            | /etc/ssl/certs/ca.pem    | empty                                                                   |
+| ssl_mode                       | MySQL/PostgreSQL/Redis/MongoDB TLS mode (`disable`, `require`, `verify_ca`, `verify_full`)                                                                                                 | verify_ca                | not set                                                                 |
+| ssl_ca_path                    | CA certificate path used by MySQL/PostgreSQL/Redis/MongoDB TLS verification                                                            | /etc/ssl/certs/ca.pem    | empty                                                                   |
 | max_connections                | maximum target connection pool size                                                                                            | 10                       | 10                                                                      |
 | batch_size                     | records written per batch; must be greater than `0`                                                                            | 200                      | 200                                                                     |
 | max_rps                        | optional target-side rate limit in records per second; `0` disables the limit                                                  | 1000                     | 0                                                                       |
@@ -397,8 +404,8 @@ In some scenarios, task_id is used to distinguish task uniqueness, such as when 
 | db_type              | database type used by `from_db`                                        | mysql                                  | required for `from_db` |
 | username             | database username used by `from_db`                                    | root                                   | empty                  |
 | password             | database password used by `from_db`                                    | password                               | empty                  |
-| ssl_mode             | MySQL/PostgreSQL/Redis TLS mode used by `from_db`                 | verify_ca                              | not set                |
-| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/Redis `from_db` TLS verification | /etc/ssl/certs/ca.pem                  | empty                  |
+| ssl_mode             | MySQL/PostgreSQL/Redis/MongoDB TLS mode (`disable`, `require`, `verify_ca`, `verify_full`) used by `from_db`                 | verify_ca                              | not set                |
+| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/Redis/MongoDB `from_db` TLS verification | /etc/ssl/certs/ca.pem                  | empty                  |
 | is_direct_connection | MongoDB driver `directConnection` option used by `from_db`             | true                                   | not set                |
 | table_full_name      | target table used to store resume state for `from_db` or `from_target` | apecloud_metadata.apedts_task_position | empty                  |
 | max_connections      | maximum resumer connection pool size                                   | 5                                      | 5                      |
@@ -427,7 +434,7 @@ This optional section is used by the MySQL `dbengine` metadata-center mode.
 | url                 | metadata database URL; required for MySQL `dbengine` mode | `mysql://127.0.0.1:3306` | required  |
 | username            | metadata database username                                | root                     | empty     |
 | password            | metadata database password                                | password                 | empty     |
-| ssl_mode            | MySQL TLS mode                                            | verify_full              | not set   |
+| ssl_mode            | MySQL TLS mode (`disable`, `require`, `verify_ca`, `verify_full`)                                            | verify_full              | not set   |
 | ssl_ca_path         | CA certificate path                                       | /etc/ssl/certs/ca.pem    | empty     |
 | ddl_conflict_policy | DDL conflict policy: `interrupt` or `ignore`              | interrupt                | interrupt |
 
