@@ -1,0 +1,23 @@
+[req]
+distinguished_name = ca_name
+prompt = no
+
+[ca_name]
+CN = Ape DTS Test Server CA
+
+[v3_ca]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+
+[server_cert]
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @server_names
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+
+[server_names]
+DNS.1 = localhost

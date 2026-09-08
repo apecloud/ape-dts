@@ -13,8 +13,10 @@
 | url                  | 数据库 URL；账号密码可写入 URL，也可单独配置                                | `mysql://127.0.0.1:3307`                                                                             | 空                                                                                     |
 | username             | 数据库连接账号                                                              | root                                                                                                 | 空                                                                                     |
 | password             | 数据库连接密码                                                              | password                                                                                             | 空                                                                                     |
-| ssl_mode             | MySQL/PostgreSQL TLS 模式：`disable`、`require`、`verify_ca`、`verify_full` | verify_full                                                                                          | 不设置                                                                                 |
-| ssl_ca_path          | TLS 校验使用的 CA 证书路径                                                  | /etc/ssl/certs/ca.pem                                                                                | 空                                                                                     |
+| ssl_mode             | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS 模式，可选 `disable`、`require`、`verify_ca`、`verify_full`。 | verify_ca                                                                                            | 不设置                                                                                 |
+| ssl_ca_path          | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS 校验使用的 CA 证书路径                            | /etc/ssl/certs/ca.pem                                                                                | 空                                                                                     |
+| ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
+| ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
 | max_connections      | 源端连接池最大连接数                                                        | 10                                                                                                   | 10                                                                                     |
 | batch_size           | 批量拉取行数；使用 chunk 切分时，也作为源端目标 chunk 大小                  | 10000                                                                                                | `[pipeline].buffer_size / 有效 snapshot 并发数。为0的话直接使用[pipeline].buffer_size` |
 | max_rps              | 源端每秒最大记录数，`0` 表示不限制                                          | 1000                                                                                                 | 0                                                                                      |
@@ -38,6 +40,75 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 通过 `username`、`password` 单独配置的账号密码会由 DTS 做百分号编码后合并进 URL。设置
 `ssl_mode` 后，`ssl_ca_path` 仍是可选项；是否必须提供 CA 取决于校验模式和服务端 TLS 配置。
+
+## TLS 配置
+
+`ssl_mode` 控制客户端对 TLS 连接及服务端证书的要求：
+
+- `disable`：明文，不使用 TLS。
+- `require`：只加密，不验证服务端证书和主机名。
+- `verify_ca`：加密，并通过受信任 CA 校验服务端证书链。
+- `verify_full`：在 `verify_ca` 基础上，再校验 URL 主机名/IP 是否匹配证书 SAN。
+
+客户端证书认证由服务端独立配置。任意加密模式都可以提供客户端证书；
+`verify_full` 本身不要求客户端证书。
+
+MySQL、PostgreSQL、Redis 通过 `ssl_client_cert_path` 和 `ssl_client_key_path` 配置 PEM 客户端身份，
+适用于元数据、checkpoint 等连接。MySQL CDC 例外：当前 binlog 驱动仅支持 `disable`/`require`，
+不支持客户端证书；遇到不支持的配置直接报错，不降级。私钥路径为空时，从证书路径指定的合并 PEM 中读取。
+MongoDB 必须在 `ssl_client_cert_path` 指定证书和私钥合并的 PEM，`ssl_client_key_path` 留空。
+MSSQL 不支持客户端证书，配置这些输入会报错。
+
+`verify_ca` 的驱动限制：
+
+- Redis、PostgreSQL CDC 跳过主机名校验，但仍验证证书链。
+- 当前 SQLx rustls 驱动映射了 `verify_ca`，但未处理新版 rustls 的
+  `NotValidForNameContext` 错误，因此 MySQL/PostgreSQL 普通查询连接在此模式下仍会拒绝主机名不匹配。
+- MongoDB rustls 后端和 MSSQL Tiberius 驱动没有独立的主机名开关，
+  所以它们的 `verify_ca` 目前与 `verify_full` 执行相同的服务端校验。
+
+MSSQL 支持四种模式，两种验证模式都必须配置 `ssl_ca_path`；显式 SSL 配置优先于
+URL、ADO.NET、JDBC 中的加密和证书信任选项。
+
+### 任务支持情况
+
+下表描述当前分支中本次涉及的五个引擎；`verify_ca` 的驱动限制见上文。
+
+| 引擎 | ssl_mode | struct | snapshot | CDC | checker |
+| --- | --- | --- | --- | --- | --- |
+| MySQL | `disable`、`require` | 支持 | 支持 | 支持 | 支持 |
+| MySQL | `verify_ca`、`verify_full` | 支持 | 支持 | 不支持（binlog 驱动限制） | 支持 |
+| PostgreSQL | `disable`、`require`、`verify_ca`、`verify_full` | 支持 | 支持 | 支持 | 支持 |
+| MSSQL | `disable`、`require`、`verify_ca`、`verify_full` | 不支持 | 支持 | 不支持 | 不支持 |
+| Redis | `disable`、`require`、`verify_ca`、`verify_full` | 不支持 | 支持 | 支持（含 snapshot-and-CDC） | 不支持 |
+| MongoDB | `disable`、`require`、`verify_ca`、`verify_full` | 支持 | 支持 | 支持 | 支持 |
+
+TLS 测试和 fixture 统一放在 `dt-tests/tests/tls/`，引擎、架构和版本目录同级排列
+（如 `mongo_shard`、`redis_cluster_6_2`），目录内按任务类型组织 fixture；公共测试 harness
+切换 SSL 参数，各级别复用同一套 prepare 数据。集成测试脚本分别使用
+`tls`（MySQL/PostgreSQL/MSSQL）、`mongo_to_mongo_tls`、`redis_to_redis_tls` 三个 suite。
+`tls` suite 覆盖上表 MySQL/PostgreSQL/MSSQL 的所有可用组合。Redis TLS 测试覆盖
+snapshot-and-CDC，包括集群只加密场景；MongoDB TLS 测试覆盖 `require` 的 snapshot/struct/CDC
+及分片场景，同时包含 `verify_full` snapshot。MongoDB checker、验证级别的集群工作流
+复用相同的客户端配置映射，但本次没有专门的 TLS E2E 用例。
+
+支持客户端证书的 TLS 任务账号和服务端均强制验证可信客户端证书。MySQL CDC
+使用独立的源端/目标端容器，只要求加密，不要求客户端证书；MSSQL 不支持 TLS 客户端证书。
+
+## Redis TLS
+
+- Redis URL 支持 `redis://` 和 `rediss://`。未设置 `ssl_mode` 时，`redis://` 使用明文，`rediss://` 使用 TLS 但不校验服务端证书。
+- Redis 支持 `disable`、`require`、`verify_ca` 和 `verify_full`。两种校验模式都必须配置 `ssl_ca_path`：`verify_ca` 校验 CA 信任链，`verify_full` 还校验 URL 主机名/IP 是否匹配证书 SAN。
+- 显式 `ssl_mode` 的优先级高于 URL scheme 和 fragment。两种校验模式都会把 DNS URL host 作为 SNI 发送。
+- 上述规则同时应用于普通 Redis 命令连接和 PSYNC 复制流连接，也会保留到自动发现的 Redis Cluster 节点 URL。
+- Redis Cluster 使用任一校验模式时，每个节点都必须提供由配置 CA 签发的证书；使用 `verify_full` 时，自动发现的每个节点主机名/IP 还必须匹配该节点证书的 SAN。
+
+## MongoDB TLS
+
+- MongoDB 使用驱动的 rustls 后端。未设置 `ssl_mode` 时，TLS 配置由 MongoDB URI 决定，包括驱动对 `mongodb+srv://` 的默认行为。
+- `disable` 关闭 TLS；`require` 只加密，不校验服务端证书和主机名，无需 CA 文件。
+- `verify_ca` 和 `verify_full` 都必须配置 `ssl_ca_path`，rustls 会同时校验证书信任链和主机名。两者在 MongoDB 中行为相同：URI 中的主机名或 IP 必须匹配服务端证书 SAN。
+- 显式 `ssl_mode` 会替换 URI 中的 TLS 配置。这些设置适用于 extractor、sinker 和数据库 checkpoint 连接，支持副本集和分片集群。
 
 ## extractor.parallel_type
 
@@ -72,8 +143,10 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 | url                            | 数据库 URL；账号密码可写入 URL，也可单独配置                                                                      | `mysql://127.0.0.1:3307` | 空                                                          |
 | username                       | 数据库连接账号                                                                                                    | root                     | 空                                                          |
 | password                       | 数据库连接密码                                                                                                    | password                 | 空                                                          |
-| ssl_mode                       | MySQL/PostgreSQL TLS 模式：`disable`、`require`、`verify_ca`、`verify_full`                                       | verify_full              | 不设置                                                      |
-| ssl_ca_path                    | TLS 校验使用的 CA 证书路径                                                                                        | /etc/ssl/certs/ca.pem    | 空                                                          |
+| ssl_mode                       | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS 模式，可选 `disable`、`require`、`verify_ca`、`verify_full`。 | verify_ca                | 不设置                                                      |
+| ssl_ca_path                    | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS 校验使用的 CA 证书路径                                                                    | /etc/ssl/certs/ca.pem    | 空                                                          |
+| ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
+| ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
 | batch_size                     | 批量写入行数，必须大于 `0`                                                                                        | 200                      | 200                                                         |
 | max_connections                | 目标端连接池最大连接数                                                                                            | 10                       | 10                                                          |
 | max_rps                        | 目标端每秒最大记录数，`0` 表示不限制                                                                              | 1000                     | 0                                                           |
@@ -379,8 +452,10 @@ rebalance_cost=rows
 | db_type              | `from_db` 使用的数据库类型                              | mysql                                  | `from_db` 时必填    |
 | username             | `from_db` 使用的数据库账号                              | root                                   | 空                  |
 | password             | `from_db` 使用的数据库密码                              | password                               | 空                  |
-| ssl_mode             | `from_db` 使用的 MySQL/PostgreSQL TLS 模式              | verify_full                            | 不设置              |
-| ssl_ca_path          | `from_db` 使用的 CA 证书路径                            | /etc/ssl/certs/ca.pem                  | 空                  |
+| ssl_mode             | `from_db` 使用的 MySQL/PostgreSQL/Redis/MongoDB TLS 模式，可选 `disable`、`require`、`verify_ca`、`verify_full`。 | verify_ca                              | 不设置              |
+| ssl_ca_path          | `from_db` 使用的 MySQL/PostgreSQL/Redis/MongoDB CA 证书路径     | /etc/ssl/certs/ca.pem                  | 空                  |
+| ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
+| ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
 | is_direct_connection | `from_db` 使用的 MongoDB driver `directConnection` 选项 | true                                   | 不设置              |
 | table_full_name      | `from_db` 或 `from_target` 保存断点状态的目标表         | apecloud_metadata.apedts_task_position | 空                  |
 | max_connections      | resumer 连接池最大连接数                                | 5                                      | 5                   |
@@ -415,8 +490,10 @@ Prometheus counter 仍保持累计语义。
 | url                 | 元数据库 URL，MySQL `dbengine` 模式下必填 | `mysql://127.0.0.1:3306` | 必填      |
 | username            | 元数据库账号                              | root                     | 空        |
 | password            | 元数据库密码                              | password                 | 空        |
-| ssl_mode            | MySQL TLS 模式                            | verify_full              | 不设置    |
+| ssl_mode            | MySQL TLS 模式，可选 `disable`、`require`、`verify_ca`、`verify_full`。 | verify_full              | 不设置    |
 | ssl_ca_path         | CA 证书路径                               | /etc/ssl/certs/ca.pem    | 空        |
+| ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
+| ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
 | ddl_conflict_policy | DDL 冲突策略：`interrupt` 或 `ignore`     | interrupt                | interrupt |
 
 元数据中心 URL 必须与 extractor URL 及实际目标端 URL 不同。

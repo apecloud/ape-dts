@@ -22,7 +22,7 @@ use super::{
     base_test_runner::{BaseTestRunner, SqlLoadStrategy},
     redis_cluster_connection::RedisClusterConnection,
 };
-use crate::test_runner::redis_test_util::RedisTestUtil;
+use crate::{test_config_util::TestConfigUtil, test_runner::redis_test_util::RedisTestUtil};
 
 pub struct RedisTestRunner {
     pub base: BaseTestRunner,
@@ -35,9 +35,17 @@ pub struct RedisTestRunner {
 
 impl RedisTestRunner {
     pub async fn new_default(relative_test_dir: &str) -> anyhow::Result<Self> {
-        Self::new(
+        Self::new_with_config_overrides(relative_test_dir, &[]).await
+    }
+
+    pub async fn new_with_config_overrides(
+        relative_test_dir: &str,
+        overrides: &[(String, String, String)],
+    ) -> anyhow::Result<Self> {
+        Self::new_with_options(
             relative_test_dir,
             vec![CharEscapePair::new('"', '"', InnerEscapeMode::None)],
+            overrides,
         )
         .await
     }
@@ -46,10 +54,24 @@ impl RedisTestRunner {
         relative_test_dir: &str,
         escape_pairs: Vec<CharEscapePair>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_options(relative_test_dir, escape_pairs, &[]).await
+    }
+
+    async fn new_with_options(
+        relative_test_dir: &str,
+        escape_pairs: Vec<CharEscapePair>,
+        overrides: &[(String, String, String)],
+    ) -> anyhow::Result<Self> {
         let base =
             BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::Line)
-                .await
-                .unwrap();
+                .await?;
+        if !overrides.is_empty() {
+            TestConfigUtil::update_task_config(
+                &base.task_config_file,
+                &base.task_config_file,
+                overrides,
+            );
+        }
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
         let src_conn = match config.extractor {

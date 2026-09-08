@@ -24,7 +24,7 @@ use dt_common::{
     utils::time_util::TimeUtil,
 };
 use mysql_binlog_connector_rust::{
-    binlog_client::{BinlogClient, StartPosition},
+    binlog_client::StartPosition,
     command::gtid_set::GtidSet,
     event::{
         event_data::EventData, event_header::EventHeader, query_event::QueryEvent,
@@ -81,6 +81,7 @@ impl Extractor for MysqlCdcExtractor {
             self.binlog_filename = BinlogUtil::find_last_binlog_before_timestamp(
                 self.extract_state.time_filter.start_timestamp,
                 &self.url,
+                &self.connection_auth,
                 self.server_id,
                 &self.conn_pool,
             )
@@ -146,21 +147,20 @@ impl MysqlCdcExtractor {
             StartPosition::Latest {}
         };
 
-        let url = ConnectionAuthConfig::merge_url_with_auth(&self.url, &self.connection_auth)
-            .context(DtError::DatabaseInvalidConfig(
-                DbType::Mysql,
-                "failed to merge the MySQL URL with connection authentication".to_string(),
-            ))?;
-
-        let mut stream = BinlogClient::new(&url, self.server_id, start_position)
-            .with_master_heartbeat(Duration::from_secs(self.binlog_heartbeat_interval_secs))
-            .with_read_timeout(Duration::from_secs(self.binlog_timeout_secs))
-            .with_keepalive(
-                Duration::from_secs(self.keepalive_idle_secs),
-                Duration::from_secs(self.keepalive_interval_secs),
-            )
-            .connect()
-            .await?;
+        let mut stream = BinlogUtil::build_client(
+            &self.url,
+            &self.connection_auth,
+            self.server_id,
+            start_position,
+        )?
+        .with_master_heartbeat(Duration::from_secs(self.binlog_heartbeat_interval_secs))
+        .with_read_timeout(Duration::from_secs(self.binlog_timeout_secs))
+        .with_keepalive(
+            Duration::from_secs(self.keepalive_idle_secs),
+            Duration::from_secs(self.keepalive_interval_secs),
+        )
+        .connect()
+        .await?;
 
         let mut ctx = Context {
             binlog_filename: self.binlog_filename.clone(),

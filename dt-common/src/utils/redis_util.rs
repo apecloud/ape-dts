@@ -3,8 +3,13 @@ use std::{collections::HashMap, str::FromStr};
 use anyhow::{bail, Context};
 use redis::{Connection, ConnectionLike, Value};
 use regex::Regex;
+use url::Url;
 
-use crate::config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig};
+use crate::config::{
+    config_enums::DbType,
+    connection_auth_config::ConnectionAuthConfig,
+    ssl_config::{SslConfig, SslMode},
+};
 use crate::error::{DtError, DtOptionExt};
 use crate::log_info;
 use crate::meta::redis::{
@@ -15,6 +20,12 @@ use crate::meta::redis::{
 
 pub struct RedisUtil {}
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedRedisConfig {
+    pub url: String,
+    pub ssl_config: SslConfig,
+}
+
 const SLOTS_COUNT: usize = 16384;
 
 impl RedisUtil {
@@ -22,12 +33,67 @@ impl RedisUtil {
         url: &str,
         connection_auth: &ConnectionAuthConfig,
     ) -> anyhow::Result<redis::Connection> {
-        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
-        let conn = redis::Client::open(final_url)
-            .context("invalid Redis connection URL")?
+        let resolved = Self::resolve_connection_config(url, connection_auth)?;
+        let client = resolved
+            .ssl_config
+            .apply_redis(&resolved.url)
+            .context("invalid Redis TLS configuration")?;
+        let conn = client
             .get_connection()
             .context("failed to connect to Redis")?;
         Ok(conn)
+    }
+
+    pub fn resolve_connection_config(
+        url: &str,
+        connection_auth: &ConnectionAuthConfig,
+    ) -> anyhow::Result<ResolvedRedisConfig> {
+        let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
+        let parsed = Url::parse(&final_url).context(DtError::DatabaseInvalidConfig(
+            DbType::Redis,
+            "invalid Redis connection URL".to_string(),
+        ))?;
+
+        let url_ssl_config = match parsed.scheme() {
+            "redis" => SslConfig {
+                ssl_mode: SslMode::Disable,
+                ssl_ca_path: String::new(),
+                ..SslConfig::default()
+            },
+            "rediss" => SslConfig {
+                ssl_mode: SslMode::Require,
+                ..SslConfig::default()
+            },
+            scheme => bail!(DtError::DatabaseInvalidConfig(
+                DbType::Redis,
+                format!("unsupported Redis URL scheme: {}", scheme)
+            )),
+        };
+
+        let ssl_config = connection_auth
+            .ssl_config()
+            .cloned()
+            .unwrap_or(url_ssl_config);
+        let parsed = ssl_config.apply_redis_url(parsed)?;
+
+        Ok(ResolvedRedisConfig {
+            url: parsed.to_string(),
+            ssl_config,
+        })
+    }
+
+    pub fn replace_url_address(base_url: &str, host: &str, port: u16) -> anyhow::Result<String> {
+        let mut url = Url::parse(base_url).context(DtError::DatabaseInvalidConfig(
+            DbType::Redis,
+            "invalid Redis connection URL".to_string(),
+        ))?;
+        url.set_host(Some(host)).map_err(|_| {
+            DtError::DatabaseInvalidConfig(DbType::Redis, format!("invalid Redis host: {}", host))
+        })?;
+        url.set_port(Some(port)).map_err(|_| {
+            DtError::DatabaseInvalidConfig(DbType::Redis, format!("invalid Redis port: {}", port))
+        })?;
+        Ok(url.to_string())
     }
 
     pub fn is_redis_cluster(conn: &mut Connection, is_cluster_option: Option<bool>) -> bool {
@@ -333,6 +399,226 @@ impl RedisUtil {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ssl_config::SslConfig;
+
+    fn ssl_auth(ssl_mode: SslMode) -> ConnectionAuthConfig {
+        ssl_auth_with_ca(ssl_mode, "")
+    }
+
+    fn ssl_auth_with_ca(ssl_mode: SslMode, ssl_ca_path: &str) -> ConnectionAuthConfig {
+        ConnectionAuthConfig::BasicSsl {
+            username: None,
+            password: None,
+            ssl_config: SslConfig {
+                ssl_mode,
+                ssl_ca_path: ssl_ca_path.to_string(),
+                ..SslConfig::default()
+            },
+        }
+    }
+
+    enum ResolveExpectation {
+        Resolved {
+            scheme: &'static str,
+            fragment: Option<&'static str>,
+            query: Option<&'static str>,
+            ssl_mode: SslMode,
+            ssl_ca_path: &'static str,
+        },
+        Error(&'static str),
+    }
+
+    struct ResolveCase {
+        name: &'static str,
+        url: &'static str,
+        auth: ConnectionAuthConfig,
+        expected: ResolveExpectation,
+    }
+
+    #[test]
+    fn resolve_connection_config_table() {
+        let cases = [
+            ResolveCase {
+                name: "plain URL uses plaintext",
+                url: "redis://:secret@localhost:6379/2",
+                auth: ConnectionAuthConfig::NoAuth,
+                expected: ResolveExpectation::Resolved {
+                    scheme: "redis",
+                    fragment: None,
+                    query: None,
+                    ssl_mode: SslMode::Disable,
+                    ssl_ca_path: "",
+                },
+            },
+            ResolveCase {
+                name: "rediss URL enables insecure TLS",
+                url: "rediss://:secret@localhost:6380/2",
+                auth: ConnectionAuthConfig::NoAuth,
+                expected: ResolveExpectation::Resolved {
+                    scheme: "rediss",
+                    fragment: Some("insecure"),
+                    query: None,
+                    ssl_mode: SslMode::Require,
+                    ssl_ca_path: "",
+                },
+            },
+            ResolveCase {
+                name: "existing insecure fragment is preserved",
+                url: "rediss://:secret@localhost:6380/2#insecure",
+                auth: ConnectionAuthConfig::NoAuth,
+                expected: ResolveExpectation::Resolved {
+                    scheme: "rediss",
+                    fragment: Some("insecure"),
+                    query: None,
+                    ssl_mode: SslMode::Require,
+                    ssl_ca_path: "",
+                },
+            },
+            ResolveCase {
+                name: "require overrides redis URL",
+                url: "redis://localhost:6379/0?protocol=resp2",
+                auth: ssl_auth(SslMode::Require),
+                expected: ResolveExpectation::Resolved {
+                    scheme: "rediss",
+                    fragment: Some("insecure"),
+                    query: Some("protocol=resp2"),
+                    ssl_mode: SslMode::Require,
+                    ssl_ca_path: "",
+                },
+            },
+            ResolveCase {
+                name: "disable overrides rediss URL",
+                url: "rediss://localhost:6379/0#insecure",
+                auth: ssl_auth(SslMode::Disable),
+                expected: ResolveExpectation::Resolved {
+                    scheme: "redis",
+                    fragment: None,
+                    query: None,
+                    ssl_mode: SslMode::Disable,
+                    ssl_ca_path: "",
+                },
+            },
+            ResolveCase {
+                name: "verify_ca enables secure TLS and keeps CA path",
+                url: "redis://127.0.0.1:6379/0?protocol=resp2",
+                auth: ssl_auth_with_ca(SslMode::VerifyCa, "/tmp/redis-ca.pem"),
+                expected: ResolveExpectation::Resolved {
+                    scheme: "rediss",
+                    fragment: None,
+                    query: Some("protocol=resp2"),
+                    ssl_mode: SslMode::VerifyCa,
+                    ssl_ca_path: "/tmp/redis-ca.pem",
+                },
+            },
+            ResolveCase {
+                name: "verify_ca requires a CA path",
+                url: "redis://localhost:6379",
+                auth: ssl_auth(SslMode::VerifyCa),
+                expected: ResolveExpectation::Error("ssl_ca_path is required"),
+            },
+            ResolveCase {
+                name: "verify_ca overrides insecure URL",
+                url: "rediss://localhost:6379/0#insecure",
+                auth: ssl_auth_with_ca(SslMode::VerifyCa, "/tmp/redis-ca.pem"),
+                expected: ResolveExpectation::Resolved {
+                    scheme: "rediss",
+                    fragment: None,
+                    query: None,
+                    ssl_mode: SslMode::VerifyCa,
+                    ssl_ca_path: "/tmp/redis-ca.pem",
+                },
+            },
+            ResolveCase {
+                name: "verify_full overrides insecure URL",
+                url: "rediss://localhost:6379/0#insecure",
+                auth: ssl_auth_with_ca(SslMode::VerifyFull, "/tmp/redis-ca.pem"),
+                expected: ResolveExpectation::Resolved {
+                    scheme: "rediss",
+                    fragment: None,
+                    query: None,
+                    ssl_mode: SslMode::VerifyFull,
+                    ssl_ca_path: "/tmp/redis-ca.pem",
+                },
+            },
+            ResolveCase {
+                name: "verify_full requires a CA path",
+                url: "redis://localhost:6379",
+                auth: ssl_auth(SslMode::VerifyFull),
+                expected: ResolveExpectation::Error("ssl_ca_path is required"),
+            },
+            ResolveCase {
+                name: "unknown scheme is rejected",
+                url: "https://localhost:6379",
+                auth: ConnectionAuthConfig::NoAuth,
+                expected: ResolveExpectation::Error("unsupported Redis URL scheme"),
+            },
+            ResolveCase {
+                name: "unknown fragment is rejected",
+                url: "rediss://localhost:6379#unknown",
+                auth: ConnectionAuthConfig::NoAuth,
+                expected: ResolveExpectation::Error("unsupported Redis URL fragment"),
+            },
+        ];
+
+        for case in cases {
+            let result = RedisUtil::resolve_connection_config(case.url, &case.auth);
+            match case.expected {
+                ResolveExpectation::Resolved {
+                    scheme,
+                    fragment,
+                    query,
+                    ssl_mode,
+                    ssl_ca_path,
+                } => {
+                    let resolved = result.unwrap_or_else(|error| {
+                        panic!(
+                            "case [{}] returned an unexpected error: {}",
+                            case.name, error
+                        )
+                    });
+                    let resolved_url = Url::parse(&resolved.url).unwrap_or_else(|error| {
+                        panic!(
+                            "case [{}] returned an invalid URL [{}]: {}",
+                            case.name, resolved.url, error
+                        )
+                    });
+                    assert_eq!(resolved_url.scheme(), scheme, "case [{}]", case.name);
+                    assert_eq!(resolved_url.fragment(), fragment, "case [{}]", case.name);
+                    assert_eq!(resolved_url.query(), query, "case [{}]", case.name);
+                    assert_eq!(
+                        resolved.ssl_config.ssl_mode, ssl_mode,
+                        "case [{}]",
+                        case.name
+                    );
+                    assert_eq!(
+                        resolved.ssl_config.ssl_ca_path, ssl_ca_path,
+                        "case [{}]",
+                        case.name
+                    );
+                }
+                ResolveExpectation::Error(expected) => {
+                    let error = result.unwrap_err();
+                    assert!(
+                        error.to_string().contains(expected),
+                        "case [{}], error: {}",
+                        case.name,
+                        error
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn replace_url_address_preserves_tls_and_auth() {
+        let url = RedisUtil::replace_url_address(
+            "rediss://user:secret@seed:6379/3#insecure",
+            "redis-node",
+            6380,
+        )
+        .unwrap();
+        assert_eq!(url, "rediss://user:secret@redis-node:6380/3#insecure");
+    }
 
     #[test]
     fn test_parse_cluster_nodes() {

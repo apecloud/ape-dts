@@ -8,6 +8,44 @@ ape-dts uses PSYNC to synchronize Redis data.
 - Snapshot + CDC: migrates the snapshot and synchronizes incremental data, including the RDB and AOF.
 - CDC: receive but discard RDB (if PSYNC returns RDB), only synchronizes the AOF.
 
+## TLS
+
+Redis source and target URLs support `redis://` and `rediss://`. An explicit `ssl_mode` overrides
+the URL scheme:
+
+- `ssl_mode=disable`: plaintext.
+- `ssl_mode=require`: TLS encryption without server certificate verification.
+- `ssl_mode=verify_ca`: TLS with CA chain verification, without hostname/IP verification.
+- `ssl_mode=verify_full`: TLS with CA chain and hostname/IP verification against the certificate SAN.
+
+For client-certificate authentication, set `ssl_client_cert_path` and `ssl_client_key_path`.
+This is independent of `ssl_mode`: any encrypted mode can present a client certificate,
+and `verify_full` does not require one unless the server does.
+
+`ssl_ca_path` is required for `verify_ca` and `verify_full`. Without an explicit `ssl_mode`, `rediss://` selects
+`require`. An explicit mode overrides the URL scheme and `#insecure` fragment. The same settings
+protect the source PSYNC replication stream and ordinary command connections. In Cluster mode,
+both verification modes require each node's certificate to be signed by the configured CA;
+`verify_full` also requires each discovered node hostname or IP to match its certificate SAN.
+
+Example:
+
+```ini
+[extractor]
+db_type=redis
+extract_type=snapshot_and_cdc
+url=redis://:123456@redis-source.example.com:6380
+ssl_mode=verify_ca
+ssl_ca_path=/etc/ssl/certs/redis-ca.pem
+
+[sinker]
+db_type=redis
+sink_type=write
+url=rediss://:123456@redis-target.example.com:6390
+ssl_mode=verify_ca
+ssl_ca_path=/etc/ssl/certs/redis-ca.pem
+```
+
 # Snapshot
 ```
 [extractor]

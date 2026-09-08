@@ -19,7 +19,6 @@ use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
 };
-use url::Url;
 
 use crate::extractor::resumer::{
     RedisResumerConn, ResumerDbPool, ResumerType, DEFAULT_POSITION_KEY, DEFAULT_RESUMER_SCHEMA,
@@ -105,7 +104,7 @@ impl ResumerUtil {
                     .context("failed to parse MySQL connection URL")?;
 
                 if let Some(ssl) = connection_auth.ssl_config() {
-                    conn_options = ssl.apply_mysql(conn_options);
+                    conn_options = ssl.apply_mysql(conn_options)?;
                 }
 
                 let pool = MySqlPoolOptions::new()
@@ -123,7 +122,7 @@ impl ResumerUtil {
                     .context("failed to parse PostgreSQL connection URL")?;
 
                 if let Some(ssl) = connection_auth.ssl_config() {
-                    conn_options = ssl.apply_pg(conn_options);
+                    conn_options = ssl.apply_pg(conn_options)?;
                 }
 
                 let pool = PgPoolOptions::new()
@@ -138,6 +137,9 @@ impl ResumerUtil {
                 let mut client_options = ClientOptions::parse(&final_url)
                     .await
                     .context("failed to parse MongoDB connection URL")?;
+                if let Some(ssl) = connection_auth.ssl_config() {
+                    client_options = ssl.apply_mongo(client_options)?;
+                }
                 client_options.app_name = Some("ape-dts-resumer".to_string());
                 client_options.max_pool_size = Some(max_connections);
                 if let Some(is_direct_connection_option) = is_direct_connection {
@@ -200,19 +202,14 @@ impl ResumerUtil {
     }
 
     fn redis_node_url(base_url: &str, node: &ClusterNode) -> Result<String> {
-        let mut url = Url::parse(base_url)
-            .context(DtError::invalid_config("checkpoint Redis URL is invalid"))?;
-        url.set_host(Some(&node.host)).map_err(|_| {
-            DtError::invalid_config(format!("invalid Redis cluster node host: {}", node.host))
-        })?;
-        let port = node.port.parse().context(DtError::invalid_config(format!(
-            "invalid Redis cluster node port: {}",
-            node.port
-        )))?;
-        url.set_port(Some(port)).map_err(|_| {
-            DtError::invalid_config(format!("invalid Redis cluster node port: {}", node.port))
-        })?;
-        Ok(url.to_string())
+        RedisUtil::replace_url_address(
+            base_url,
+            &node.host,
+            node.port.parse().context(DtError::DatabaseInvalidConfig(
+                DbType::Redis,
+                format!("invalid Redis cluster node port: {}", node.port),
+            ))?,
+        )
     }
 
     pub fn get_redis_resumer_key(

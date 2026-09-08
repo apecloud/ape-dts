@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
 use anyhow::Context;
 use bb8::ManageConnection;
@@ -122,11 +122,16 @@ impl MssqlConnectionPool {
 
         // URL parsing is selected by scheme. A malformed sqlserver:// or
         // mssql:// URL must not silently fall back to an unrelated parser.
-        let mut config = match MssqlConnectionUrl::try_parse_to_config(connection_string)? {
+        let connection_string = if auth.ssl_config().is_some() {
+            Self::without_tls_options(connection_string)?
+        } else {
+            connection_string.to_owned()
+        };
+        let mut config = match MssqlConnectionUrl::try_parse_to_config(&connection_string)? {
             Some(config) => config,
-            None => match Config::from_ado_string(connection_string) {
+            None => match Config::from_ado_string(&connection_string) {
                 Ok(config) => config,
-                Err(_) => Config::from_jdbc_string(connection_string).dt_error(
+                Err(_) => Config::from_jdbc_string(&connection_string).dt_error(
                     DtError::invalid_config(
                         "MSSQL connection string must be a valid sqlserver/mssql URL, ADO.NET string, or JDBC string",
                     ),
@@ -167,6 +172,44 @@ impl MssqlConnectionPool {
         Ok(config)
     }
 
+    // Tiberius panics if trust_cert() and trust_cert_ca() are applied to the
+    // same Config. Strip URI trust settings before applying task overrides.
+    fn without_tls_options(connection_string: &str) -> anyhow::Result<String> {
+        let keep = |key: &str| {
+            !matches!(
+                key.to_ascii_lowercase().as_str(),
+                "encrypt"
+                    | "trustservercertificate"
+                    | "trustservercertificateca"
+                    | "trust server certificate"
+                    | "trust server certificate ca"
+            )
+        };
+        if connection_string.starts_with("mssql://")
+            || connection_string.starts_with("sqlserver://")
+        {
+            let mut url = url::Url::parse(connection_string)
+                .map_err(|_| DtError::invalid_config("invalid MSSQL connection URL"))?;
+            let pairs: Vec<_> = url
+                .query_pairs()
+                .filter(|(key, _)| keep(key))
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
+            url.query_pairs_mut().clear().extend_pairs(pairs);
+            Ok(url.into())
+        } else if connection_string.starts_with("jdbc:") {
+            let mut parsed = connection_string::JdbcString::from_str(connection_string)
+                .map_err(|_| DtError::invalid_config("invalid MSSQL JDBC connection string"))?;
+            parsed.properties_mut().retain(|key, _| keep(key));
+            Ok(parsed.to_string())
+        } else {
+            let mut parsed = connection_string::AdoNetString::from_str(connection_string)
+                .map_err(|_| DtError::invalid_config("invalid MSSQL ADO.NET connection string"))?;
+            parsed.retain(|key, _| keep(key));
+            Ok(parsed.to_string())
+        }
+    }
+
     pub async fn get(&self) -> anyhow::Result<MssqlPooledConnection<'_>> {
         Ok(self.inner.get().await?)
     }
@@ -193,4 +236,43 @@ impl MssqlConnectionPool {
 fn assert_mssql_client_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<MssqlClient>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ssl_config::{SslConfig, SslMode};
+
+    #[test]
+    fn tls_overrides_do_not_panic_on_uri_trust_options() {
+        for connection_string in [
+            "mssql://sa:pass@localhost?trustservercertificate=true",
+            "mssql://sa:pass@localhost?trust+server+certificate=true",
+            "sqlserver://sa:pass@localhost?trustservercertificateca=old.crt",
+            "server=localhost;user=sa;password=pass;trustservercertificate=true",
+            "jdbc:sqlserver://localhost;user=sa;password=pass;trustservercertificate=true",
+        ] {
+            for mode in [
+                SslMode::Disable,
+                SslMode::Require,
+                SslMode::VerifyCa,
+                SslMode::VerifyFull,
+            ] {
+                let auth = ConnectionAuthConfig::BasicSsl {
+                    username: None,
+                    password: None,
+                    ssl_config: SslConfig {
+                        ssl_mode: mode.clone(),
+                        ssl_ca_path: "new.crt".into(),
+                        ..SslConfig::default()
+                    },
+                };
+                assert!(
+                    MssqlConnectionPool::build_client_config(connection_string, &auth, None)
+                        .is_ok(),
+                    "{connection_string}/{mode}"
+                );
+            }
+        }
+    }
 }

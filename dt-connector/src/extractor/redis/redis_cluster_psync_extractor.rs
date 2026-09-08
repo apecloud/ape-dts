@@ -14,7 +14,6 @@ use dt_common::{
     utils::redis_util::RedisUtil,
 };
 use tokio::{sync::Mutex, task::JoinSet};
-use url::Url;
 
 use crate::{
     extractor::{
@@ -240,27 +239,14 @@ impl RedisClusterPsyncExtractor {
     }
 
     fn node_url(base_url: &str, node: &ClusterNode) -> anyhow::Result<String> {
-        let mut url = Url::parse(base_url).context(DtError::DatabaseInvalidConfig(
-            DbType::Redis,
-            "invalid source Redis URL".to_string(),
-        ))?;
-        url.set_host(Some(&node.host)).map_err(|_| {
-            DtError::DatabaseInvalidConfig(
-                DbType::Redis,
-                format!("invalid Redis cluster node host: {}", node.host),
-            )
-        })?;
-        let port = node.port.parse().context(DtError::DatabaseInvalidConfig(
-            DbType::Redis,
-            format!("invalid Redis cluster node port: {}", node.port),
-        ))?;
-        url.set_port(Some(port)).map_err(|_| {
-            DtError::DatabaseInvalidConfig(
+        RedisUtil::replace_url_address(
+            base_url,
+            &node.host,
+            node.port.parse().context(DtError::DatabaseInvalidConfig(
                 DbType::Redis,
                 format!("invalid Redis cluster node port: {}", node.port),
-            )
-        })?;
-        Ok(url.to_string())
+            ))?,
+        )
     }
 }
 
