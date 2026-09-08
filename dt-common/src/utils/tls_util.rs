@@ -7,11 +7,9 @@ use rustls::{
         WebPkiServerVerifier,
     },
     crypto::WebPkiSupportedAlgorithms,
-    pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName, UnixTime},
-    ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
+    pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
+    DigitallySignedStruct, RootCertStore, SignatureScheme,
 };
-
-use crate::config::ssl_config::{SslConfig, SslMode};
 
 pub struct NoCertificateVerification {
     supported: WebPkiSupportedAlgorithms,
@@ -129,46 +127,7 @@ impl ServerCertVerifier for NoHostnameVerification {
     }
 }
 
-pub fn build_tls_client_config(ssl_config: &SslConfig) -> anyhow::Result<ClientConfig> {
-    ssl_config.validate_client_identity()?;
-    let builder = match &ssl_config.ssl_mode {
-        SslMode::Disable => bail!("can not build a TLS client when ssl_mode=disable"),
-        SslMode::Require => ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::default())),
-        SslMode::VerifyCa | SslMode::VerifyFull if ssl_config.ssl_allow_invalid_hostnames => {
-            let verifier =
-                NoHostnameVerification::new(load_root_cert_store(&ssl_config.ssl_ca_path)?)?;
-            ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(verifier))
-        }
-        SslMode::VerifyCa | SslMode::VerifyFull => ClientConfig::builder()
-            .with_root_certificates(load_root_cert_store(&ssl_config.ssl_ca_path)?),
-    };
-    let mut config = if ssl_config.ssl_client_cert_path.is_empty() {
-        builder.with_no_client_auth()
-    } else {
-        let pem = fs::read(&ssl_config.ssl_client_cert_path)
-            .context("failed to read TLS client certificate")?;
-        let certificates = CertificateDer::pem_slice_iter(&pem)
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to parse TLS client certificate")?;
-        let key = fs::read(ssl_config.client_key_path())
-            .context("failed to read TLS client private key")?;
-        let key = PrivateKeyDer::from_pem_slice(&key)
-            .context("failed to parse TLS client private key")?;
-        builder
-            .with_client_auth_cert(certificates, key)
-            .context("invalid TLS client certificate/private key")?
-    };
-    if ssl_config.ssl_mode == SslMode::Require {
-        config.enable_sni = false;
-    }
-    Ok(config)
-}
-
-fn load_root_cert_store(path: &str) -> anyhow::Result<RootCertStore> {
+pub(crate) fn load_root_cert_store(path: &str) -> anyhow::Result<RootCertStore> {
     if path.is_empty() {
         bail!("TLS CA certificate path is empty")
     }
@@ -196,6 +155,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::config::ssl_config::{SslConfig, SslMode};
 
     #[test]
     fn verified_modes_reject_invalid_certificates_and_hostnames() {
@@ -259,15 +219,16 @@ mod tests {
             assert_eq!(
                 result.is_ok(),
                 accepted_without_hostname,
-                "allow_invalid_hostnames {name}: {result:?}"
+                "verify_ca {name}: {result:?}"
             );
         }
         for mode in [SslMode::VerifyCa, SslMode::VerifyFull] {
-            let config = build_tls_client_config(&SslConfig {
+            let config = SslConfig {
                 ssl_mode: mode,
                 ssl_ca_path: ca_path.into(),
                 ..SslConfig::default()
-            })
+            }
+            .to_rustls_client_config()
             .unwrap();
             assert!(config.enable_sni);
         }

@@ -21,6 +21,19 @@ services:
     <<: *mysql-tls
     ports: ["13308:3306"]
 
+  # The binlog client cannot send a client certificate; use a matching SSL-only pair.
+  mysql-tls-cdc-src: &mysql-tls-cdc
+    <<: *mysql-tls
+    ports: ["13309:3306"]
+    volumes:
+      - ./docker/tls:/tls:ro
+      - ./docker/mysql/start-mysql-server-tls.sh:/usr/local/bin/start-mysql-server-tls.sh:ro
+      - ./docker/mysql/20-create-mysql-cdc-user-tls.sql:/docker-entrypoint-initdb.d/20-create-test-users-tls.sql:ro
+
+  mysql-tls-cdc-dst:
+    <<: *mysql-tls-cdc
+    ports: ["13310:3306"]
+
   postgres-tls-src: &postgres-tls
     image: postgres:17
     environment:
@@ -615,7 +628,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; else mongo "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; fi'
+        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; else mongo "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"; fi'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -640,63 +653,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; else mongo "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; fi'
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-      interval: 5s
-
-  # Dedicated endpoints for verify_full tests: both require a trusted client certificate.
-  mongo-mtls-src:
-    image: mongo:6.0.27
-    container_name: mongo-mtls-src-it
-    hostname: mongo-mtls-src
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: 123456
-      # Internal connections in this single-node replica set must match the certificate SAN.
-      MONGO_RS_HOST: localhost
-      MONGO_RS_NAME: mtls-rs0
-      MONGO_TLS_REQUIRE_CLIENT_CERTIFICATE: "true"
-    ports:
-      - "27217:27017"
-    volumes:
-      - ./docker/mongo/mongo-keyfile:/run/secrets/mongo-keyfile:ro
-      - ./docker/mongo/start-mongodb-replica-set-tls.sh:/usr/local/bin/start-mongodb-replica-set-tls.sh:ro
-      - ./docker/tls:/tls:ro
-    entrypoint:
-      - bash
-      - /usr/local/bin/start-mongodb-replica-set-tls.sh
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - 'if command -v mongosh >/dev/null 2>&1; then shell=mongosh; else shell=mongo; fi; $$shell "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin?tls=true" --tlsCAFile /tls/server/server-ca.crt --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"'
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-      interval: 5s
-
-  mongo-mtls-dst:
-    image: mongo:6.0.27
-    container_name: mongo-mtls-dst-it
-    hostname: mongo-mtls-dst
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: 123456
-      MONGO_TLS_REQUIRE_CLIENT_CERTIFICATE: "true"
-    ports:
-      - "27218:27017"
-    volumes:
-      - ./docker/mongo/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
-      - ./docker/mongo/start-mongodb-standalone-tls.sh:/usr/local/bin/start-mongodb-standalone-tls.sh:ro
-      - ./docker/tls:/tls:ro
-    entrypoint:
-      - bash
-      - /usr/local/bin/start-mongodb-standalone-tls.sh
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - 'if command -v mongosh >/dev/null 2>&1; then shell=mongosh; else shell=mongo; fi; $$shell "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin?tls=true" --tlsCAFile /tls/server/server-ca.crt --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+        - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; else mongo "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; fi'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -725,7 +682,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongosh "mongodb://127.0.0.1:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+        - 'mongosh "mongodb://127.0.0.1:37019/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -754,7 +711,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongosh "mongodb://127.0.0.1:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+        - 'mongosh "mongodb://127.0.0.1:37018/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -769,6 +726,7 @@ services:
       mongo-tls-sharding-src-shard:
         condition: service_healthy
     volumes:
+      - ./docker/tls:/tls:ro
       - ./docker/mongo/initialize-mongodb-replica-sets-tls.sh:/usr/local/bin/initialize-mongodb-replica-sets-tls.sh:ro
     entrypoint: ["bash", "/usr/local/bin/initialize-mongodb-replica-sets-tls.sh"]
     command: ["tls-source-config-rs", "mongo-tls-sharding-src-config:37019", "tls-source-shard-rs", "mongo-tls-sharding-src-shard:37018"]
@@ -798,7 +756,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongosh "mongodb://127.0.0.1:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+        - 'mongosh "mongodb://127.0.0.1:37017/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -811,6 +769,7 @@ services:
       mongo-tls-sharding-src-mongos:
         condition: service_healthy
     volumes:
+      - ./docker/tls:/tls:ro
       - ./docker/mongo/register-mongodb-shard-tls.sh:/usr/local/bin/register-mongodb-shard-tls.sh:ro
     entrypoint: ["bash", "/usr/local/bin/register-mongodb-shard-tls.sh"]
     command: ["mongo-tls-sharding-src-mongos:37017", "tls-source-shard-rs", "mongo-tls-sharding-src-shard:37018"]
@@ -838,7 +797,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongosh "mongodb://127.0.0.1:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+        - 'mongosh "mongodb://127.0.0.1:37019/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -867,7 +826,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongosh "mongodb://127.0.0.1:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+        - 'mongosh "mongodb://127.0.0.1:37018/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -882,6 +841,7 @@ services:
       mongo-tls-sharding-dst-shard:
         condition: service_healthy
     volumes:
+      - ./docker/tls:/tls:ro
       - ./docker/mongo/initialize-mongodb-replica-sets-tls.sh:/usr/local/bin/initialize-mongodb-replica-sets-tls.sh:ro
     entrypoint: ["bash", "/usr/local/bin/initialize-mongodb-replica-sets-tls.sh"]
     command: ["tls-target-config-rs", "mongo-tls-sharding-dst-config:37019", "tls-target-shard-rs", "mongo-tls-sharding-dst-shard:37018"]
@@ -911,7 +871,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'mongosh "mongodb://127.0.0.1:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+        - 'mongosh "mongodb://127.0.0.1:37017/admin?tls=true&tlsInsecure=true" --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -924,6 +884,7 @@ services:
       mongo-tls-sharding-dst-mongos:
         condition: service_healthy
     volumes:
+      - ./docker/tls:/tls:ro
       - ./docker/mongo/register-mongodb-shard-tls.sh:/usr/local/bin/register-mongodb-shard-tls.sh:ro
     entrypoint: ["bash", "/usr/local/bin/register-mongodb-shard-tls.sh"]
     command: ["mongo-tls-sharding-dst-mongos:37017", "tls-target-shard-rs", "mongo-tls-sharding-dst-shard:37018"]
@@ -1155,7 +1116,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26461", "16461"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1176,7 +1137,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26462", "16462"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1197,7 +1158,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26463", "16463"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1214,6 +1175,7 @@ services:
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
     volumes:
+      - ./docker/tls:/tls:ro
       - ./docker/redis/initialize-redis-cluster-tls.sh:/usr/local/bin/initialize-redis-cluster-tls.sh:ro
     entrypoint: ["sh", "/usr/local/bin/initialize-redis-cluster-tls.sh"]
     command: ["26461", "26462", "26463", "16462", "16463"]
@@ -1233,7 +1195,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26471", "16471"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1254,7 +1216,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26472", "16472"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1275,7 +1237,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26473", "16473"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1292,6 +1254,7 @@ services:
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
     volumes:
+      - ./docker/tls:/tls:ro
       - ./docker/redis/initialize-redis-cluster-tls.sh:/usr/local/bin/initialize-redis-cluster-tls.sh:ro
     entrypoint: ["sh", "/usr/local/bin/initialize-redis-cluster-tls.sh"]
     command: ["26471", "26472", "26473", "16472", "16473"]
@@ -1311,7 +1274,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26561", "16561"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1332,7 +1295,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26562", "16562"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1353,7 +1316,7 @@ services:
     entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
     command: ["26563", "16563"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1370,6 +1333,7 @@ services:
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
     volumes:
+      - ./docker/tls:/tls:ro
       - ./docker/redis/initialize-redis-cluster-tls.sh:/usr/local/bin/initialize-redis-cluster-tls.sh:ro
     entrypoint: ["sh", "/usr/local/bin/initialize-redis-cluster-tls.sh"]
     command: ["26561", "26562", "26563", "16562", "16563"]
@@ -1384,7 +1348,7 @@ services:
       - ./docker/tls:/tls:ro
       - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
     entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
-    command: ["yes"]
+    command: []
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1402,7 +1366,7 @@ services:
       - ./docker/tls:/tls:ro
       - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
     entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
-    command: ["yes"]
+    command: []
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1420,9 +1384,9 @@ services:
       - ./docker/tls:/tls:ro
       - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
     entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
-    command: ["no"]
+    command: []
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1438,9 +1402,9 @@ services:
       - ./docker/tls:/tls:ro
       - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
     entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
-    command: ["no"]
+    command: []
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s

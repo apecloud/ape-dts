@@ -23,8 +23,9 @@ as `verify_full` with the MongoDB driver's rustls backend.
 An explicit `ssl_mode` overrides URI TLS options; omit it to use the driver's URI settings.
 
 For a client certificate, set `ssl_client_cert_path` to a combined certificate/private-key PEM and
-leave `ssl_client_key_path` empty. `ssl_allow_invalid_hostnames` defaults to `false`; MongoDB's rustls
-backend ignores this option and continues verifying hostnames in both verification modes.
+leave `ssl_client_key_path` empty. Client-certificate authentication is controlled by the server,
+independently of `ssl_mode`: any encrypted mode can present a client certificate, and
+`verify_full` does not require one unless the server does.
 
 # Struct
 

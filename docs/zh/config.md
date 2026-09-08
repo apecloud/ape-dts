@@ -17,7 +17,6 @@
 | ssl_ca_path          | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS 校验使用的 CA 证书路径                            | /etc/ssl/certs/ca.pem                                                                                | 空                                                                                     |
 | ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
 | ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
-| ssl_allow_invalid_hostnames | 仅跳过主机名/IP 校验，仍校验 CA；MongoDB（rustls）和 MSSQL 忽略此参数 | false | false |
 | max_connections      | 源端连接池最大连接数                                                        | 10                                                                                                   | 10                                                                                     |
 | batch_size           | 批量拉取行数；使用 chunk 切分时，也作为源端目标 chunk 大小                  | 10000                                                                                                | `[pipeline].buffer_size / 有效 snapshot 并发数。为0的话直接使用[pipeline].buffer_size` |
 | max_rps              | 源端每秒最大记录数，`0` 表示不限制                                          | 1000                                                                                                 | 0                                                                                      |
@@ -44,9 +43,15 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 
 ## TLS 配置
 
-`ssl_mode` 可选值：`disable`（明文）、`require`（只加密，不验证服务端）、`verify_ca`、
-`verify_full`。两种验证模式默认都校验 CA 信任链和主机名/IP。`ssl_allow_invalid_hostnames`
-默认为 `false`；设为 `true` 仅请求跳过主机名/IP 校验，不会跳过 CA 校验。
+`ssl_mode` 控制客户端对 TLS 连接及服务端证书的要求：
+
+- `disable`：明文，不使用 TLS。
+- `require`：只加密，不验证服务端证书和主机名。
+- `verify_ca`：加密，并通过受信任 CA 校验服务端证书链。
+- `verify_full`：在 `verify_ca` 基础上，再校验 URL 主机名/IP 是否匹配证书 SAN。
+
+客户端证书认证由服务端独立配置。任意加密模式都可以提供客户端证书；
+`verify_full` 本身不要求客户端证书。
 
 MySQL、PostgreSQL、Redis 通过 `ssl_client_cert_path` 和 `ssl_client_key_path` 配置 PEM 客户端身份，
 适用于元数据、checkpoint 等连接。MySQL CDC 例外：当前 binlog 驱动仅支持 `disable`/`require`，
@@ -54,19 +59,20 @@ MySQL、PostgreSQL、Redis 通过 `ssl_client_cert_path` 和 `ssl_client_key_pat
 MongoDB 必须在 `ssl_client_cert_path` 指定证书和私钥合并的 PEM，`ssl_client_key_path` 留空。
 MSSQL 不支持客户端证书，配置这些输入会报错。
 
-`ssl_allow_invalid_hostnames` 的驱动限制：
+`verify_ca` 的驱动限制：
 
-- Redis、PostgreSQL CDC 支持此开关；MySQL CDC 暂不支持证书验证模式。
-- 当前 SQLx rustls 驱动虽然提供对应选项，但未处理新版 rustls 的 `NotValidForNameContext`
-  错误，因此 MySQL/PostgreSQL 普通查询连接仍会拒绝主机名不匹配，即使此参数为 `true`。
-- MongoDB rustls 后端和 MSSQL Tiberius 驱动没有独立的主机名开关，忽略此参数。
+- Redis、PostgreSQL CDC 跳过主机名校验，但仍验证证书链。
+- 当前 SQLx rustls 驱动映射了 `verify_ca`，但未处理新版 rustls 的
+  `NotValidForNameContext` 错误，因此 MySQL/PostgreSQL 普通查询连接在此模式下仍会拒绝主机名不匹配。
+- MongoDB rustls 后端和 MSSQL Tiberius 驱动没有独立的主机名开关，
+  所以它们的 `verify_ca` 目前与 `verify_full` 执行相同的服务端校验。
 
 MSSQL 支持四种模式，两种验证模式都必须配置 `ssl_ca_path`；显式 SSL 配置优先于
 URL、ADO.NET、JDBC 中的加密和证书信任选项。
 
 ### 任务支持情况
 
-下表描述当前分支中本次涉及的五个引擎。两种验证模式默认均验证证书链和主机名。
+下表描述当前分支中本次涉及的五个引擎；`verify_ca` 的驱动限制见上文。
 
 | 引擎 | ssl_mode | struct | snapshot | CDC | checker |
 | --- | --- | --- | --- | --- | --- |
@@ -83,16 +89,19 @@ TLS 测试和 fixture 统一放在 `dt-tests/tests/tls/`，引擎、架构和版
 `tls`（MySQL/PostgreSQL/MSSQL）、`mongo_to_mongo_tls`、`redis_to_redis_tls` 三个 suite。
 `tls` suite 覆盖上表 MySQL/PostgreSQL/MSSQL 的所有可用组合。Redis TLS 测试覆盖
 snapshot-and-CDC，包括集群只加密场景；MongoDB TLS 测试覆盖 `require` 的 snapshot/struct/CDC
-及分片场景，同时包含证书验证 snapshot 和连接验证矩阵。MongoDB checker、验证级别的集群工作流
+及分片场景，同时包含 `verify_full` snapshot。MongoDB checker、验证级别的集群工作流
 复用相同的客户端配置映射，但本次没有专门的 TLS E2E 用例。
+
+支持客户端证书的 TLS 任务账号和服务端均强制验证可信客户端证书。MySQL CDC
+使用独立的源端/目标端容器，只要求加密，不要求客户端证书；MSSQL 不支持 TLS 客户端证书。
 
 ## Redis TLS
 
 - Redis URL 支持 `redis://` 和 `rediss://`。未设置 `ssl_mode` 时，`redis://` 使用明文，`rediss://` 使用 TLS 但不校验服务端证书。
-- Redis 支持 `disable`、`require`、`verify_ca` 和 `verify_full`。两种校验模式都必须配置 `ssl_ca_path`，默认同时校验 CA 信任链及 URL 主机名/IP 是否匹配证书 SAN。
-- 显式 `ssl_mode` 的优先级高于 URL scheme 和 fragment。两种校验模式都会把 DNS URL host 作为 SNI 发送；`ssl_allow_invalid_hostnames=true` 仅跳过主机名/IP 校验。
+- Redis 支持 `disable`、`require`、`verify_ca` 和 `verify_full`。两种校验模式都必须配置 `ssl_ca_path`：`verify_ca` 校验 CA 信任链，`verify_full` 还校验 URL 主机名/IP 是否匹配证书 SAN。
+- 显式 `ssl_mode` 的优先级高于 URL scheme 和 fragment。两种校验模式都会把 DNS URL host 作为 SNI 发送。
 - 上述规则同时应用于普通 Redis 命令连接和 PSYNC 复制流连接，也会保留到自动发现的 Redis Cluster 节点 URL。
-- Redis Cluster 使用任一校验模式时，每个节点都必须提供由配置 CA 签发的证书；除非设置 `ssl_allow_invalid_hostnames=true`，自动发现的每个节点主机名/IP 还必须匹配该节点证书的 SAN。
+- Redis Cluster 使用任一校验模式时，每个节点都必须提供由配置 CA 签发的证书；使用 `verify_full` 时，自动发现的每个节点主机名/IP 还必须匹配该节点证书的 SAN。
 
 ## MongoDB TLS
 
@@ -138,7 +147,6 @@ snapshot-and-CDC，包括集群只加密场景；MongoDB TLS 测试覆盖 `requi
 | ssl_ca_path                    | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS 校验使用的 CA 证书路径                                                                    | /etc/ssl/certs/ca.pem    | 空                                                          |
 | ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
 | ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
-| ssl_allow_invalid_hostnames | 仅跳过主机名/IP 校验，仍校验 CA；MongoDB（rustls）和 MSSQL 忽略此参数 | false | false |
 | batch_size                     | 批量写入行数，必须大于 `0`                                                                                        | 200                      | 200                                                         |
 | max_connections                | 目标端连接池最大连接数                                                                                            | 10                       | 10                                                          |
 | max_rps                        | 目标端每秒最大记录数，`0` 表示不限制                                                                              | 1000                     | 0                                                           |
@@ -448,7 +456,6 @@ rebalance_cost=rows
 | ssl_ca_path          | `from_db` 使用的 MySQL/PostgreSQL/Redis/MongoDB CA 证书路径     | /etc/ssl/certs/ca.pem                  | 空                  |
 | ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
 | ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
-| ssl_allow_invalid_hostnames | 仅跳过主机名/IP 校验，仍校验 CA；MongoDB（rustls）和 MSSQL 忽略此参数 | false | false |
 | is_direct_connection | `from_db` 使用的 MongoDB driver `directConnection` 选项 | true                                   | 不设置              |
 | table_full_name      | `from_db` 或 `from_target` 保存断点状态的目标表         | apecloud_metadata.apedts_task_position | 空                  |
 | max_connections      | resumer 连接池最大连接数                                | 5                                      | 5                   |
@@ -487,7 +494,6 @@ Prometheus counter 仍保持累计语义。
 | ssl_ca_path         | CA 证书路径                               | /etc/ssl/certs/ca.pem    | 空        |
 | ssl_client_cert_path | 客户端证书 PEM 路径；MongoDB 使用证书和私钥合并的 PEM 文件；MSSQL 不支持 | /etc/ssl/client.crt | 空 |
 | ssl_client_key_path | 客户端私钥 PEM 路径；为空时从 ssl_client_cert_path 指定的合并 PEM 读取；MongoDB 必须使用合并文件 | /etc/ssl/client.key | 空 |
-| ssl_allow_invalid_hostnames | 仅跳过主机名/IP 校验，仍校验 CA；MongoDB（rustls）和 MSSQL 忽略此参数 | false | false |
 | ddl_conflict_policy | DDL 冲突策略：`interrupt` 或 `ignore`     | interrupt                | interrupt |
 
 元数据中心 URL 必须与 extractor URL 及实际目标端 URL 不同。

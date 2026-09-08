@@ -345,11 +345,10 @@ suite_services() {
     mock_test_pg_13_3_4) echo "postgres-src-13-3-4 postgres-dst-13-3-4" ;;
     mock_test_pg_17_3_4) echo "postgres-src-17-3-4 postgres-dst-17-3-4" ;;
     mssql_to_mssql) echo "mssql-src mssql-dst" ;;
-    tls) echo "mysql-tls-src mysql-tls-dst postgres-tls-src postgres-tls-dst mssql-tls-src mssql-tls-dst" ;;
+    tls) echo "mysql-tls-src mysql-tls-dst mysql-tls-cdc-src mysql-tls-cdc-dst postgres-tls-src postgres-tls-dst mssql-tls-src mssql-tls-dst" ;;
     mongo_to_mongo_tls)
       local services=(
         mongo-tls-src mongo-tls-dst
-        mongo-mtls-src mongo-mtls-dst
         mongo-tls-sharding-src-config mongo-tls-sharding-src-shard mongo-tls-sharding-src-init
         mongo-tls-sharding-src-mongos mongo-tls-sharding-src-add-shard-init
         mongo-tls-sharding-dst-config mongo-tls-sharding-dst-shard mongo-tls-sharding-dst-init

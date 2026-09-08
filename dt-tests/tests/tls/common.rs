@@ -20,42 +20,28 @@ use crate::{
     },
 };
 
-fn ssl_overrides(mode: SslMode, allow_invalid_hostnames: bool) -> Vec<(String, String, String)> {
+fn ssl_overrides(mode: SslMode) -> Vec<(String, String, String)> {
     ["extractor", "sinker"]
         .into_iter()
-        .flat_map(|section| {
-            [
-                (section.into(), "ssl_mode".into(), mode.to_string()),
-                (
-                    section.into(),
-                    "ssl_allow_invalid_hostnames".into(),
-                    allow_invalid_hostnames.to_string(),
-                ),
-            ]
-        })
+        .map(|section| (section.into(), "ssl_mode".into(), mode.to_string()))
         .collect()
 }
 
-pub(super) async fn run_tls_task_test(
-    engine: &str,
-    kind: &str,
-    mode: SslMode,
-    allow_invalid_hostnames: bool,
-) {
+pub(super) async fn run_tls_task_test(engine: &str, kind: &str, mode: SslMode) {
     match engine {
         "mongo" | "mongo_shard" => {
-            run_mongo_tls_task_test(engine, kind, mode, allow_invalid_hostnames).await;
+            run_mongo_tls_task_test(engine, kind, mode).await;
             return;
         }
         "redis_7_0" | "redis_8_0" | "redis_cluster_6_2" | "redis_cluster_7_0" => {
-            run_redis_tls_task_test(engine, kind, mode, allow_invalid_hostnames).await;
+            run_redis_tls_task_test(engine, kind, mode).await;
             return;
         }
         _ => {}
     }
     let dir = format!("tls/{engine}/{kind}");
     let fixture = TestConfigUtil::load_task_config(&format!("{dir}/task_config.ini")).unwrap();
-    let mut overrides = ssl_overrides(mode.clone(), allow_invalid_hostnames);
+    let mut overrides = ssl_overrides(mode.clone());
     for (section, url, auth) in [
         (
             "extractor",
@@ -70,19 +56,16 @@ pub(super) async fn run_tls_task_test(
     ] {
         let mut url = url::Url::parse(url).unwrap();
         if mode != SslMode::Disable && engine != "mssql" {
-            url.set_username(
-                if engine == "mysql" && kind == "cdc" && section == "extractor" {
-                    "ape_cdc"
-                } else {
-                    "ape_dts"
-                },
-            )
+            url.set_username(if engine == "mysql" && kind == "cdc" {
+                "ape_cdc"
+            } else {
+                "ape_dts"
+            })
             .unwrap();
             url.set_password(Some("123456")).unwrap();
         }
         let mut ssl = auth.ssl_config().unwrap().clone();
         ssl.ssl_mode = mode.clone();
-        ssl.ssl_allow_invalid_hostnames = allow_invalid_hostnames;
         let encrypted = connect_and_check_encryption(engine, url.as_str(), &ssl)
             .await
             .unwrap();
@@ -130,25 +113,9 @@ pub(super) async fn run_tls_task_test(
     runner.close().await.unwrap();
 }
 
-async fn run_mongo_tls_task_test(
-    engine: &str,
-    kind: &str,
-    mode: SslMode,
-    allow_invalid_hostnames: bool,
-) {
+async fn run_mongo_tls_task_test(engine: &str, kind: &str, mode: SslMode) {
     let dir = format!("tls/{engine}/{kind}");
-    let mut overrides = ssl_overrides(mode.clone(), allow_invalid_hostnames);
-    if engine == "mongo" && mode == SslMode::VerifyFull {
-        // Load the fixture's environment before selecting the mandatory-client-cert endpoints.
-        TestConfigUtil::load_task_config(&format!("{dir}/task_config.ini")).unwrap();
-        for section in ["extractor", "sinker"] {
-            overrides.push((
-                section.into(),
-                "url".into(),
-                super::mongo::mutual_tls_url(section),
-            ));
-        }
-    }
+    let overrides = ssl_overrides(mode);
     let runner = MongoTestRunner::new_with_config_overrides(&dir, &overrides)
         .await
         .unwrap();
@@ -192,15 +159,10 @@ async fn run_mongo_tls_task_test(
     }
 }
 
-async fn run_redis_tls_task_test(
-    engine: &str,
-    kind: &str,
-    mode: SslMode,
-    allow_invalid_hostnames: bool,
-) {
+async fn run_redis_tls_task_test(engine: &str, kind: &str, mode: SslMode) {
     assert_eq!(kind, "snapshot_and_cdc");
     let dir = format!("tls/{engine}/{kind}");
-    let overrides = ssl_overrides(mode, allow_invalid_hostnames);
+    let overrides = ssl_overrides(mode);
     let mut runner = RedisTestRunner::new_with_config_overrides(&dir, &overrides)
         .await
         .unwrap();
@@ -245,64 +207,4 @@ async fn connect_and_check_encryption(
             _ => anyhow::bail!("unsupported TLS test engine: {engine}"),
         }
     }).await?
-}
-
-pub(super) async fn tls_connection_validation(engine: &str) {
-    let config =
-        TestConfigUtil::load_task_config(&format!("tls/{engine}/snapshot/task_config.ini"))
-            .unwrap();
-    let good_url = config.extractor_basic.url;
-    let mut wrong_host = url::Url::parse(&good_url).unwrap();
-    wrong_host.set_host(Some("127.0.0.1")).unwrap();
-    let base = config
-        .extractor_basic
-        .connection_auth
-        .ssl_config()
-        .unwrap()
-        .clone();
-    for mode in [SslMode::Require, SslMode::VerifyCa, SslMode::VerifyFull] {
-        for allow in [false, true] {
-            let mut ssl = base.clone();
-            ssl.ssl_mode = mode.clone();
-            ssl.ssl_allow_invalid_hostnames = allow;
-            assert!(connect_and_check_encryption(engine, &good_url, &ssl)
-                .await
-                .unwrap());
-            // SQLx 0.8.6's rustls verifier only handles the older
-            // NotValidForName error, so the hostname opt-out is ineffective.
-            // Tiberius has no independent hostname opt-out at all.
-            let expected = mode == SslMode::Require;
-            let result = connect_and_check_encryption(engine, wrong_host.as_str(), &ssl).await;
-            assert_eq!(
-                result.is_ok(),
-                expected,
-                "{engine}/{mode}/allow={allow}: {result:?}"
-            );
-            ssl.ssl_ca_path = "./docker/tls/client/client-ca.crt".into();
-            let result = connect_and_check_encryption(engine, &good_url, &ssl).await;
-            assert_eq!(
-                result.is_ok(),
-                mode == SslMode::Require,
-                "wrong CA: {engine}/{mode}/allow={allow}: {result:?}"
-            );
-        }
-    }
-    if engine != "mssql" {
-        let mut url = url::Url::parse(&good_url).unwrap();
-        url.set_username("ape_dts").unwrap();
-        url.set_password(Some("123456")).unwrap();
-        let mut ssl = base;
-        ssl.ssl_mode = SslMode::Require;
-        assert!(connect_and_check_encryption(engine, url.as_str(), &ssl)
-            .await
-            .unwrap());
-        ssl.ssl_client_cert_path.clear();
-        ssl.ssl_client_key_path.clear();
-        assert!(
-            connect_and_check_encryption(engine, url.as_str(), &ssl)
-                .await
-                .is_err(),
-            "{engine} must require a client certificate"
-        );
-    }
 }

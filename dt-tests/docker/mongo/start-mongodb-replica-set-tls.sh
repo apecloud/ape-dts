@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Purpose: bootstrap a single-node replica set and root user, then run MongoDB with TLS.
+# Purpose: bootstrap a replica set and root user, then require TLS client certificates.
 # Called as TLS replica-set sources' entrypoint on every start; bootstrap runs only when the
 # initialization marker is absent. Env: MONGO_RS_NAME, MONGO_RS_HOST and
-# MONGO_INITDB_ROOT_USERNAME/PASSWORD; MONGO_TLS_REQUIRE_CLIENT_CERTIFICATE defaults
-# to false, or true to reject clients without certificates. No positional arguments.
+# MONGO_INITDB_ROOT_USERNAME/PASSWORD. No positional arguments.
 set -euo pipefail
 
 KEYFILE_SRC=/run/secrets/mongo-keyfile
@@ -16,12 +15,6 @@ MONGO_RS_NAME=${MONGO_RS_NAME:-rs0}
 MONGO_RS_HOST=${MONGO_RS_HOST:-mongo-tls-src}
 MONGO_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-root}
 MONGO_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-123456}
-TLS_CLIENT_OPTIONS=()
-case "${MONGO_TLS_REQUIRE_CLIENT_CERTIFICATE:-false}" in
-  true) ;;
-  false) TLS_CLIENT_OPTIONS+=(--tlsAllowConnectionsWithoutCertificates) ;;
-  *) echo "MONGO_TLS_REQUIRE_CLIENT_CERTIFICATE must be true or false" >&2; exit 1 ;;
-esac
 if command -v mongosh >/dev/null 2>&1; then
   MONGO_SHELL=mongosh
 else
@@ -98,5 +91,4 @@ exec gosu mongodb mongod \
   --keyFile "${KEYFILE_DST}" \
   --tlsMode requireTLS \
   --tlsCertificateKeyFile "${TLS_PEM_DST}" \
-  --tlsCAFile /tmp/mongo-ca.crt \
-  "${TLS_CLIENT_OPTIONS[@]}"
+  --tlsCAFile /tmp/mongo-ca.crt

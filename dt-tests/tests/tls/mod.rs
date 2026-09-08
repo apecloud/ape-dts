@@ -1,12 +1,12 @@
 macro_rules! tls_task_tests {
-    ($module:ident, $engine:literal, $mode:ident, $allow:expr; $($task:ident => $kind:literal),+ $(,)?) => {
+    ($module:ident, $engine:literal, $mode:ident; $($task:ident => $kind:literal),+ $(,)?) => {
         mod $module {
             $(
                 #[tokio::test]
                 #[serial_test::serial]
                 async fn $task() {
                     crate::tls::common::run_tls_task_test(
-                        $engine, $kind, dt_common::config::ssl_config::SslMode::$mode, $allow,
+                        $engine, $kind, dt_common::config::ssl_config::SslMode::$mode,
                     ).await;
                 }
             )+

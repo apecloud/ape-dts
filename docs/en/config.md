@@ -17,7 +17,6 @@ For configuration changes between releases, see [Config changelog](/docs/en/conf
 | ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS verification                                                     | /etc/ssl/certs/ca.pem                                                                                | empty                                                                                                            |
 | ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
 | ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
-| ssl_allow_invalid_hostnames | Skip only hostname/IP verification; CA verification remains enabled. Ignored by MongoDB (rustls) and MSSQL | false | false |
 | max_connections      | maximum source connection pool size                                                                                    | 10                                                                                                   | 10                                                                                                               |
 | batch_size           | number of rows extracted per batch; if using chunk splitting, this is also the target chunk size for the source        | 10000                                                                                                | `[pipeline].buffer_size / effective snapshot parallel_size`. If set to 0, uses `[pipeline].buffer_size` directly |
 | max_rps              | optional source-side rate limit in records per second; `0` disables the limit                                          | 1000                                                                                                 | 0                                                                                                                |
@@ -45,10 +44,15 @@ server setup require a CA certificate.
 
 ## TLS Options
 
-`ssl_mode` accepts `disable` (plaintext), `require` (encryption without server verification),
-`verify_ca`, and `verify_full`. By default both verification modes validate the CA chain and
-hostname/IP. `ssl_allow_invalid_hostnames` defaults to `false`; setting it to `true` requests
-only a hostname/IP opt-out and never disables CA validation.
+`ssl_mode` controls the client's TLS requirements and verification of the server:
+
+- `disable`: plaintext without TLS.
+- `require`: encryption without verifying the server certificate or hostname.
+- `verify_ca`: encryption and server certificate-chain verification against a trusted CA.
+- `verify_full`: the checks in `verify_ca`, plus verification of the URL hostname/IP against the certificate SAN.
+
+Client-certificate authentication is a separate server policy. An optional client identity
+can be configured with any encrypted mode; `verify_full` does not require one by itself.
 
 `ssl_client_cert_path` and `ssl_client_key_path` configure a PEM client identity for MySQL, PostgreSQL and
 Redis, including metadata and checkpoint connections. MySQL CDC is an exception: its current
@@ -57,13 +61,14 @@ are rejected without downgrading. An empty key path uses the same
 combined PEM as the certificate path. MongoDB requires a combined PEM in `ssl_client_cert_path` and
 an empty `ssl_client_key_path`. MSSQL does not support client certificates and rejects those inputs.
 
-Driver limits for `ssl_allow_invalid_hostnames`:
+Driver limits for `verify_ca`:
 
-- Redis and PostgreSQL CDC support it. MySQL CDC has no certificate verification mode yet.
-- The current SQLx rustls driver maps the option but does not recognize rustls's newer
+- Redis and PostgreSQL CDC skip hostname checks while retaining certificate-chain verification.
+- The current SQLx rustls driver maps `verify_ca` but does not recognize rustls's newer
   `NotValidForNameContext` error. MySQL/PostgreSQL query connections therefore still reject
-  a hostname mismatch, even with this option enabled.
-- MongoDB's rustls backend and Tiberius (MSSQL) have no independent hostname opt-out and ignore it.
+  hostname mismatches in this mode.
+- MongoDB's rustls backend and Tiberius (MSSQL) have no independent hostname opt-out.
+  Their `verify_ca` currently performs the same server checks as `verify_full`.
 
 MSSQL supports all four modes. Its two verification modes require `ssl_ca_path`; explicit
 task SSL settings override URL, ADO.NET and JDBC encryption/trust settings.
@@ -71,7 +76,7 @@ task SSL settings override URL, ADO.NET and JDBC encryption/trust settings.
 ### Task Support
 
 This matrix describes the five engines covered by these TLS settings on this branch.
-Both verification modes validate certificate chains and hostnames by default.
+The driver-specific limits for `verify_ca` are described above.
 
 | Engine | ssl_mode | struct | snapshot | CDC | checker |
 | --- | --- | --- | --- | --- | --- |
@@ -89,17 +94,21 @@ prepare data for each SSL mode. The runner uses
 three independent suites: `tls` (MySQL/PostgreSQL/MSSQL), `mongo_to_mongo_tls`, and
 `redis_to_redis_tls`. The `tls` suite covers all supported relational cells above. Redis
 TLS tests exercise snapshot-and-CDC, including cluster encryption; MongoDB TLS tests exercise
-snapshot/struct/CDC with `require`, including sharding, plus a verified snapshot and connection
-verification matrix. MongoDB checker and verified cluster workflows reuse the same client
+snapshot/struct/CDC with `require`, including sharding, plus a `verify_full` snapshot.
+MongoDB checker and verified cluster workflows reuse the same client
 mapping but do not have a dedicated TLS E2E test in this change.
+
+TLS task accounts and servers require trusted client certificates where supported. MySQL CDC
+uses a separate source/target container pair that requires encryption without client certificates;
+MSSQL does not support TLS client certificates.
 
 ## Redis TLS
 
 - Redis URLs support `redis://` and `rediss://`. Without `ssl_mode`, `redis://` is plaintext and `rediss://` uses TLS without server certificate verification.
-- Redis supports `disable`, `require`, `verify_ca`, and `verify_full`. Both verification modes require `ssl_ca_path` and check the CA chain and URL hostname/IP against the certificate SAN by default.
-- An explicit `ssl_mode` overrides the URL scheme and fragment. A DNS URL host is sent as SNI for both verification modes. `ssl_allow_invalid_hostnames=true` skips only hostname/IP verification.
+- Redis supports `disable`, `require`, `verify_ca`, and `verify_full`. Both verification modes require `ssl_ca_path`: `verify_ca` checks the CA chain, and `verify_full` additionally checks the URL hostname/IP against the certificate SAN.
+- An explicit `ssl_mode` overrides the URL scheme and fragment. A DNS URL host is sent as SNI for both verification modes.
 - These rules apply to ordinary Redis command connections and PSYNC replication streams, and are preserved for discovered Redis Cluster node URLs.
-- With Redis Cluster and either verification mode, every node must present a certificate signed by the configured CA. Unless `ssl_allow_invalid_hostnames=true`, each discovered node hostname or IP must also match its certificate SAN.
+- With Redis Cluster and either verification mode, every node must present a certificate signed by the configured CA. With `verify_full`, each discovered node hostname or IP must also match its certificate SAN.
 
 ## MongoDB TLS
 
@@ -146,7 +155,6 @@ mapping but do not have a dedicated TLS E2E test in this change.
 | ssl_ca_path                    | CA certificate path used by MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS verification                                                            | /etc/ssl/certs/ca.pem    | empty                                                                   |
 | ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
 | ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
-| ssl_allow_invalid_hostnames | Skip only hostname/IP verification; CA verification remains enabled. Ignored by MongoDB (rustls) and MSSQL | false | false |
 | max_connections                | maximum target connection pool size                                                                                            | 10                       | 10                                                                      |
 | batch_size                     | records written per batch; must be greater than `0`                                                                            | 200                      | 200                                                                     |
 | max_rps                        | optional target-side rate limit in records per second; `0` disables the limit                                                  | 1000                     | 0                                                                       |
@@ -464,7 +472,6 @@ In some scenarios, task_id is used to distinguish task uniqueness, such as when 
 | ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/Redis/MongoDB `from_db` TLS verification | /etc/ssl/certs/ca.pem                  | empty                  |
 | ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
 | ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
-| ssl_allow_invalid_hostnames | Skip only hostname/IP verification; CA verification remains enabled. Ignored by MongoDB (rustls) and MSSQL | false | false |
 | is_direct_connection | MongoDB driver `directConnection` option used by `from_db`             | true                                   | not set                |
 | table_full_name      | target table used to store resume state for `from_db` or `from_target` | apecloud_metadata.apedts_task_position | empty                  |
 | max_connections      | maximum resumer connection pool size                                   | 5                                      | 5                      |
@@ -505,7 +512,6 @@ This optional section is used by the MySQL `dbengine` metadata-center mode.
 | ssl_ca_path         | CA certificate path                                       | /etc/ssl/certs/ca.pem    | empty     |
 | ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
 | ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
-| ssl_allow_invalid_hostnames | Skip only hostname/IP verification; CA verification remains enabled. Ignored by MongoDB (rustls) and MSSQL | false | false |
 | ddl_conflict_policy | DDL conflict policy: `interrupt` or `ignore`              | interrupt                | interrupt |
 
 The metadata-center URL must differ from both the extractor URL and the effective destination URL.

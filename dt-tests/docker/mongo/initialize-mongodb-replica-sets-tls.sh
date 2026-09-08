@@ -10,16 +10,19 @@ CONFIG_HOST=${2:?Config server address is required}
 SHARD_RS=${3:?Shard replica set name is required}
 SHARD_HOST=${4:?Shard server address is required}
 
-mongosh "mongodb://${CONFIG_HOST}/admin?tls=true&tlsInsecure=true" --quiet \
+mongosh "mongodb://${CONFIG_HOST}/admin?tls=true&tlsInsecure=true" \
+  --tlsCertificateKeyFile /tls/client/client.pem --quiet \
   --eval "rs.initiate({ _id: '${CONFIG_RS}', configsvr: true, members: [{ _id: 0, host: '${CONFIG_HOST}' }] })" >/dev/null || true
-mongosh "mongodb://${SHARD_HOST}/admin?tls=true&tlsInsecure=true" --quiet \
+mongosh "mongodb://${SHARD_HOST}/admin?tls=true&tlsInsecure=true" \
+  --tlsCertificateKeyFile /tls/client/client.pem --quiet \
   --eval "rs.initiate({ _id: '${SHARD_RS}', members: [{ _id: 0, host: '${SHARD_HOST}' }] })" >/dev/null || true
 
 # mongos must wait for both replica sets to elect their primaries.
 for target in "$CONFIG_HOST" "$SHARD_HOST"; do
   ready=false
   for _ in $(seq 1 60); do
-    if mongosh "mongodb://${target}/admin?tls=true&tlsInsecure=true" --quiet \
+    if mongosh "mongodb://${target}/admin?tls=true&tlsInsecure=true" \
+      --tlsCertificateKeyFile /tls/client/client.pem --quiet \
       --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)" >/dev/null 2>&1; then
       ready=true
       break

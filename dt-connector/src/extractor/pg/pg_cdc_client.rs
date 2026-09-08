@@ -113,7 +113,7 @@ impl PgCdcClient {
                 "failed to configure PostgreSQL TLS".to_string(),
             ))?;
         let mut connector = MakeTlsConnector::new(builder);
-        if ssl_config.ssl_allow_invalid_hostnames {
+        if matches!(ssl_config.ssl_mode, SslMode::Require | SslMode::VerifyCa) {
             connector.set_callback(|config, _domain| {
                 config.set_verify_hostname(false);
                 Ok(())

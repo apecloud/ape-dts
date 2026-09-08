@@ -1,7 +1,7 @@
-use std::{collections::HashMap, fs, str::FromStr};
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::{bail, Context};
-use redis::{Client, ClientTlsConfig, Connection, ConnectionLike, TlsCertificates, Value};
+use redis::{Connection, ConnectionLike, Value};
 use regex::Regex;
 use url::Url;
 
@@ -34,8 +34,10 @@ impl RedisUtil {
         connection_auth: &ConnectionAuthConfig,
     ) -> anyhow::Result<redis::Connection> {
         let resolved = Self::resolve_connection_config(url, connection_auth)?;
-        let client =
-            Self::create_redis_client(&resolved).context("invalid Redis TLS configuration")?;
+        let client = resolved
+            .ssl_config
+            .apply_redis(&resolved.url)
+            .context("invalid Redis TLS configuration")?;
         let conn = client
             .get_connection()
             .context("failed to connect to Redis")?;
@@ -47,7 +49,7 @@ impl RedisUtil {
         connection_auth: &ConnectionAuthConfig,
     ) -> anyhow::Result<ResolvedRedisConfig> {
         let final_url = ConnectionAuthConfig::merge_url_with_auth(url, connection_auth)?;
-        let mut parsed = Url::parse(&final_url).context(DtError::DatabaseInvalidConfig(
+        let parsed = Url::parse(&final_url).context(DtError::DatabaseInvalidConfig(
             DbType::Redis,
             "invalid Redis connection URL".to_string(),
         ))?;
@@ -58,21 +60,10 @@ impl RedisUtil {
                 ssl_ca_path: String::new(),
                 ..SslConfig::default()
             },
-            "rediss" => {
-                if let Some(fragment) = parsed.fragment() {
-                    if fragment != "insecure" {
-                        bail!(DtError::DatabaseInvalidConfig(
-                            DbType::Redis,
-                            format!("unsupported Redis URL fragment: {}", fragment)
-                        ))
-                    }
-                }
-                SslConfig {
-                    ssl_mode: SslMode::Require,
-                    ssl_ca_path: String::new(),
-                    ..SslConfig::default()
-                }
-            }
+            "rediss" => SslConfig {
+                ssl_mode: SslMode::Require,
+                ..SslConfig::default()
+            },
             scheme => bail!(DtError::DatabaseInvalidConfig(
                 DbType::Redis,
                 format!("unsupported Redis URL scheme: {}", scheme)
@@ -83,78 +74,12 @@ impl RedisUtil {
             .ssl_config()
             .cloned()
             .unwrap_or(url_ssl_config);
-        ssl_config.validate_client_identity()?;
-
-        match &ssl_config.ssl_mode {
-            SslMode::Disable => {
-                parsed
-                    .set_scheme("redis")
-                    .map_err(|_| anyhow::anyhow!("failed to set Redis URL scheme"))?;
-                parsed.set_fragment(None);
-            }
-            SslMode::Require => {
-                parsed
-                    .set_scheme("rediss")
-                    .map_err(|_| anyhow::anyhow!("failed to set Redis URL scheme"))?;
-                parsed.set_fragment(Some("insecure"));
-            }
-            SslMode::VerifyCa | SslMode::VerifyFull => {
-                if ssl_config.ssl_ca_path.is_empty() {
-                    bail!(DtError::DatabaseInvalidConfig(
-                        DbType::Redis,
-                        format!(
-                            "ssl_ca_path is required when Redis ssl_mode={}",
-                            ssl_config.ssl_mode
-                        )
-                    ))
-                }
-                parsed
-                    .set_scheme("rediss")
-                    .map_err(|_| anyhow::anyhow!("failed to set Redis URL scheme"))?;
-                parsed.set_fragment(None);
-            }
-        }
+        let parsed = ssl_config.apply_redis_url(parsed)?;
 
         Ok(ResolvedRedisConfig {
             url: parsed.to_string(),
             ssl_config,
         })
-    }
-
-    fn create_redis_client(resolved: &ResolvedRedisConfig) -> anyhow::Result<Client> {
-        let ssl = &resolved.ssl_config;
-        if ssl.ssl_mode == SslMode::Disable {
-            return Client::open(resolved.url.as_str()).map_err(Into::into);
-        }
-
-        let root_cert = if ssl.ssl_mode == SslMode::Require {
-            None
-        } else {
-            Some(fs::read(&ssl.ssl_ca_path).context("failed to read Redis CA certificate")?)
-        };
-        let client_tls = if ssl.ssl_client_cert_path.is_empty() {
-            None
-        } else {
-            Some(ClientTlsConfig {
-                client_cert: fs::read(&ssl.ssl_client_cert_path)
-                    .context("failed to read Redis client certificate")?,
-                client_key: fs::read(ssl.client_key_path())
-                    .context("failed to read Redis client private key")?,
-            })
-        };
-        let certificates = TlsCertificates {
-            client_tls,
-            root_cert,
-        };
-        let client = Client::build_with_tls(resolved.url.as_str(), certificates)?;
-        if !ssl.ssl_allow_invalid_hostnames {
-            return Ok(client);
-        }
-        let mut connection_info = client.get_connection_info().clone();
-        connection_info
-            .addr
-            .set_danger_accept_invalid_hostnames(true);
-        Client::open(connection_info).map_err(Into::into)
     }
 
     pub fn replace_url_address(base_url: &str, host: &str, port: u16) -> anyhow::Result<String> {

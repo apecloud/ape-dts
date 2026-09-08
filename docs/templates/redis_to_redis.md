@@ -15,11 +15,12 @@ the URL scheme:
 
 - `ssl_mode=disable`: plaintext.
 - `ssl_mode=require`: TLS encryption without server certificate verification.
-- `ssl_mode=verify_ca`: TLS with CA chain and hostname/IP verification against the certificate SAN.
+- `ssl_mode=verify_ca`: TLS with CA chain verification, without hostname/IP verification.
 - `ssl_mode=verify_full`: TLS with CA chain and hostname/IP verification against the certificate SAN.
 
-`ssl_allow_invalid_hostnames` defaults to `false`. Set it to `true` to skip only hostname/IP
-verification, retaining CA verification. For mutual TLS, set `ssl_client_cert_path` and `ssl_client_key_path`.
+For client-certificate authentication, set `ssl_client_cert_path` and `ssl_client_key_path`.
+This is independent of `ssl_mode`: any encrypted mode can present a client certificate,
+and `verify_full` does not require one unless the server does.
 
 `ssl_ca_path` is required for `verify_ca` and `verify_full`. Without an explicit `ssl_mode`, `rediss://` selects
 `require`. An explicit mode overrides the URL scheme and `#insecure` fragment. The same settings

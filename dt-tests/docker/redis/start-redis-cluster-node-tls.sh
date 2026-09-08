@@ -1,8 +1,11 @@
 #!/bin/sh
-# Purpose: start one TLS-enabled Redis Cluster node with host-reachable addresses.
+# Purpose: start a Redis Cluster node requiring TLS client certificates, with host-reachable addresses.
 # Called on every start of a redis-tls-*-node* service, before cluster initialization.
 # Args: <host-tls-port> <host-cluster-bus-port>. Env: DT_IT_HOST_IP.
 set -eu
+
+# Trust task client identities and the server identities used on the cluster bus.
+cat /tls/server/server-ca.crt /tls/client/client-ca.crt > /tmp/redis-ca.crt
 
 # Announce host-mapped ports so both the test client and peer nodes can connect.
 exec redis-server \
@@ -10,8 +13,8 @@ exec redis-server \
   --tls-port 6379 \
   --tls-cert-file /tls/server/server.crt \
   --tls-key-file /tls/server/server.key \
-  --tls-ca-cert-file /tls/server/server-ca.crt \
-  --tls-auth-clients no \
+  --tls-ca-cert-file /tmp/redis-ca.crt \
+  --tls-auth-clients yes \
   --tls-cluster yes \
   --requirepass 123456 \
   --masterauth 123456 \

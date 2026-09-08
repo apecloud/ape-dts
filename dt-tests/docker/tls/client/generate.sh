@@ -19,14 +19,7 @@ openssl x509 -req -sha256 -days 3650 \
 # MongoDB takes a combined PEM identity; other engines can use the separate files.
 cat client.crt client.key > client.pem
 
-# A well-formed self-signed identity tests server rejection of an untrusted issuer.
-openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
-  -keyout untrusted-client.key -out untrusted-client.crt -subj "/CN=ape_dts_untrusted" \
-  -config openssl.cnf -extensions client_cert
-cat untrusted-client.crt untrusted-client.key > untrusted-client.pem
-
 rm -f client-ca.srl client.csr
 chmod 0600 client-ca.key
 # Public test fixtures must be readable by unprivileged database containers.
 chmod 0644 client-ca.crt client.crt client.key client.pem
-chmod 0644 untrusted-client.crt untrusted-client.key untrusted-client.pem

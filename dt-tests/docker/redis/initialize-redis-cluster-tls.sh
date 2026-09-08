@@ -15,7 +15,8 @@ export REDISCLI_AUTH=123456
 redis_cli() {
   port="$1"
   shift
-  redis-cli --tls --insecure -h "${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$port" "$@"
+  redis-cli --tls --insecure --cert /tls/client/client.crt --key /tls/client/client.key \
+    -h "${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$port" "$@"
 }
 
 until redis_cli "$NODE1_PORT" ping \

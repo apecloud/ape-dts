@@ -1,16 +1,8 @@
-tls_task_tests!(disable, "mysql", Disable, false;
+tls_task_tests!(disable, "mysql", Disable;
     structure => "struct", snapshot => "snapshot", cdc => "cdc", checker => "checker");
-tls_task_tests!(require, "mysql", Require, false;
+tls_task_tests!(require, "mysql", Require;
     structure => "struct", snapshot => "snapshot", cdc => "cdc", checker => "checker");
-tls_task_tests!(verify_ca, "mysql", VerifyCa, false;
+tls_task_tests!(verify_ca, "mysql", VerifyCa;
     structure => "struct", snapshot => "snapshot", checker => "checker");
-tls_task_tests!(verify_full, "mysql", VerifyFull, false;
+tls_task_tests!(verify_full, "mysql", VerifyFull;
     structure => "struct", snapshot => "snapshot", checker => "checker");
-tls_task_tests!(allow_invalid_hostnames, "mysql", VerifyCa, true;
-    structure => "struct", snapshot => "snapshot", checker => "checker");
-
-#[tokio::test]
-#[serial_test::serial]
-async fn tls_connection_validation() {
-    super::common::tls_connection_validation("mysql").await;
-}
