@@ -13,7 +13,7 @@ use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     error::Error,
     meta::redis::{command::cmd_encoder::CmdEncoder, redis_object::RedisCmd},
-    utils::{redis_util::RedisUtil, tls_util::build_tls_client_config},
+    utils::redis_util::RedisUtil,
 };
 
 pub struct RedisClient {
@@ -50,7 +50,7 @@ impl RedisClient {
             let server_name = ServerName::try_from(host.clone())
                 .with_context(|| format!("invalid Redis TLS server name: {}", host))?;
             let connector =
-                TlsConnector::from(Arc::new(build_tls_client_config(&resolved.ssl_config)?));
+                TlsConnector::from(Arc::new(resolved.ssl_config.to_rustls_client_config()?));
             Either::Right(
                 connector
                     .connect(server_name, tcp_stream)

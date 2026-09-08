@@ -2,6 +2,13 @@
 
 Refer to [config details](/docs/en/config.md) for explanations of common fields.
 
+# TLS
+
+Extractor, sinker and resumer connections support `ssl_mode=disable`, `require`,
+`verify_ca`, and `verify_full`. `require` encrypts without server verification.
+Both verification modes require `ssl_ca_path` and check the server certificate chain
+and URI hostname/IP using rustls. An explicit `ssl_mode` overrides URI TLS settings.
+
 # Struct
 
 ```
