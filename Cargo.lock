@@ -1666,6 +1666,7 @@ dependencies = [
  "chrono",
  "concurrent-queue",
  "configparser",
+ "connection-string",
  "console-subscriber",
  "dashmap",
  "dotenv",

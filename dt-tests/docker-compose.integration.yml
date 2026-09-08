@@ -1,4 +1,72 @@
 services:
+  mysql-tls-src: &mysql-tls
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: test_db
+    ports: ["13307:3306"]
+    entrypoint: ["bash", "/usr/local/bin/start-mysql-server-tls.sh"]
+    volumes:
+      - ./docker/tls:/tls:ro
+      - ./docker/mysql/start-mysql-server-tls.sh:/usr/local/bin/start-mysql-server-tls.sh:ro
+      - ./docker/mysql/20-create-mysql-test-users-tls.sql:/docker-entrypoint-initdb.d/20-create-test-users-tls.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -uroot -p123456 -e 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+
+  mysql-tls-dst:
+    <<: *mysql-tls
+    ports: ["13308:3306"]
+
+  postgres-tls-src: &postgres-tls
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports: ["15433:5432"]
+    entrypoint: ["bash", "/usr/local/bin/start-postgresql-server-tls.sh"]
+    volumes:
+      - ./docker/tls:/tls:ro
+      - ./docker/postgres/start-postgresql-server-tls.sh:/usr/local/bin/start-postgresql-server-tls.sh:ro
+      - ./docker/postgres/pg_hba-tls.conf:/etc/postgresql/pg_hba-tls.conf:ro
+      - ./docker/postgres/20-create-postgresql-test-user-tls.sql:/docker-entrypoint-initdb.d/20-create-test-users-tls.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U postgres -c 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+
+  postgres-tls-dst:
+    <<: *postgres-tls
+    ports: ["15434:5432"]
+
+  mssql-tls-src: &mssql-tls
+    image: mcr.microsoft.com/mssql/server:2022-CU26-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "ApeDts_mssql_2022!"
+      MSSQL_MEMORY_LIMIT_MB: "2048"
+    ports: ["11433:1433"]
+    volumes:
+      - ./docker/tls:/tls:ro
+      - ./docker/mssql/mssql-tls.conf:/var/opt/mssql/mssql.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+
+  mssql-tls-dst:
+    <<: *mssql-tls
+    ports: ["11434:1433"]
+
   mysql-src:
     image: mysql:8.0
     container_name: mysql-src-it
@@ -302,7 +370,7 @@ services:
       - -c
       - max_replication_slots=10
     volumes:
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -356,7 +424,7 @@ services:
       - -c
       - max_replication_slots=10
     volumes:
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -384,7 +452,7 @@ services:
       - -c
       - max_replication_slots=10
     volumes:
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -412,7 +480,7 @@ services:
       - -c
       - max_replication_slots=10
     volumes:
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -440,7 +508,7 @@ services:
       - -c
       - max_replication_slots=10
     volumes:
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -468,7 +536,7 @@ services:
       - -c
       - max_replication_slots=10
     volumes:
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -490,8 +558,8 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - ./docker/mongo-init/mongo-keyfile:/run/secrets/mongo-keyfile:ro
-      - ./docker/mongo-init/start-mongo-rs.sh:/usr/local/bin/start-mongo-rs.sh:ro
+      - ./docker/mongo/mongo-keyfile:/run/secrets/mongo-keyfile:ro
+      - ./docker/mongo/start-mongo-rs.sh:/usr/local/bin/start-mongo-rs.sh:ro
     entrypoint:
       - bash
       - /usr/local/bin/start-mongo-rs.sh
@@ -515,7 +583,7 @@ services:
       - "27016:27017"
       - "27018:27017"
     volumes:
-      - ./docker/mongo-init/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
+      - ./docker/mongo/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
     command: mongod --bind_ip_all
     healthcheck:
       test:
@@ -538,12 +606,12 @@ services:
     ports:
       - "27117:27017"
     volumes:
-      - ./docker/mongo-init/mongo-keyfile:/run/secrets/mongo-keyfile:ro
-      - ./docker/mongo-init/start-mongo-rs-tls.sh:/usr/local/bin/start-mongo-rs-tls.sh:ro
+      - ./docker/mongo/mongo-keyfile:/run/secrets/mongo-keyfile:ro
+      - ./docker/mongo/start-mongodb-replica-set-tls.sh:/usr/local/bin/start-mongodb-replica-set-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - /usr/local/bin/start-mongo-rs-tls.sh
+      - /usr/local/bin/start-mongodb-replica-set-tls.sh
     healthcheck:
       test:
         - CMD-SHELL
@@ -563,25 +631,72 @@ services:
     ports:
       - "27118:27017"
     volumes:
-      - ./docker/mongo-init/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
+      - ./docker/mongo/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
+      - ./docker/mongo/start-mongodb-standalone-tls.sh:/usr/local/bin/start-mongodb-standalone-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - -lc
-      - |
-        cat /tls/server/server.key /tls/server/server.crt > /tmp/mongo-server.pem
-        chown mongodb:mongodb /tmp/mongo-server.pem
-        chmod 600 /tmp/mongo-server.pem
-        exec docker-entrypoint.sh mongod \
-          --bind_ip_all \
-          --tlsMode requireTLS \
-          --tlsCertificateKeyFile /tmp/mongo-server.pem \
-          --tlsCAFile /tls/server/server-ca.crt \
-          --tlsAllowConnectionsWithoutCertificates
+      - /usr/local/bin/start-mongodb-standalone-tls.sh
     healthcheck:
       test:
         - CMD-SHELL
         - 'if command -v mongosh >/dev/null 2>&1; then mongosh "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; else mongo "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@127.0.0.1:27017/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand(''ping'').ok ? 0 : 1)"; fi'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  # Dedicated endpoints for verify_full tests: both require a trusted client certificate.
+  mongo-mtls-src:
+    image: mongo:6.0.27
+    container_name: mongo-mtls-src-it
+    hostname: mongo-mtls-src
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123456
+      # Internal connections in this single-node replica set must match the certificate SAN.
+      MONGO_RS_HOST: localhost
+      MONGO_RS_NAME: mtls-rs0
+      MONGO_TLS_REQUIRE_CLIENT_CERTIFICATE: "true"
+    ports:
+      - "27217:27017"
+    volumes:
+      - ./docker/mongo/mongo-keyfile:/run/secrets/mongo-keyfile:ro
+      - ./docker/mongo/start-mongodb-replica-set-tls.sh:/usr/local/bin/start-mongodb-replica-set-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongodb-replica-set-tls.sh
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'if command -v mongosh >/dev/null 2>&1; then shell=mongosh; else shell=mongo; fi; $$shell "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin?tls=true" --tlsCAFile /tls/server/server-ca.crt --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-mtls-dst:
+    image: mongo:6.0.27
+    container_name: mongo-mtls-dst-it
+    hostname: mongo-mtls-dst
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123456
+      MONGO_TLS_REQUIRE_CLIENT_CERTIFICATE: "true"
+    ports:
+      - "27218:27017"
+    volumes:
+      - ./docker/mongo/20-create-mongo-dst-user.js:/docker-entrypoint-initdb.d/20-create-mongo-dst-user.js:ro
+      - ./docker/mongo/start-mongodb-standalone-tls.sh:/usr/local/bin/start-mongodb-standalone-tls.sh:ro
+      - ./docker/tls:/tls:ro
+    entrypoint:
+      - bash
+      - /usr/local/bin/start-mongodb-standalone-tls.sh
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'if command -v mongosh >/dev/null 2>&1; then shell=mongosh; else shell=mongo; fi; $$shell "mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin?tls=true" --tlsCAFile /tls/server/server-ca.crt --tlsCertificateKeyFile /tls/client/client.pem --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
       timeout: 5s
       retries: 10
       start_period: 20s
@@ -594,11 +709,11 @@ services:
     ports:
       - "37219:37019"
     volumes:
-      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/mongo/start-mongodb-cluster-node-tls.sh:/usr/local/bin/start-mongodb-cluster-node-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - /usr/local/bin/start-mongo-component-tls.sh
+      - /usr/local/bin/start-mongodb-cluster-node-tls.sh
     command:
       - mongod
       - --configsvr
@@ -623,11 +738,11 @@ services:
     ports:
       - "37218:37018"
     volumes:
-      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/mongo/start-mongodb-cluster-node-tls.sh:/usr/local/bin/start-mongodb-cluster-node-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - /usr/local/bin/start-mongo-component-tls.sh
+      - /usr/local/bin/start-mongodb-cluster-node-tls.sh
     command:
       - mongod
       - --shardsvr
@@ -653,21 +768,10 @@ services:
         condition: service_healthy
       mongo-tls-sharding-src-shard:
         condition: service_healthy
-    entrypoint:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        mongosh "mongodb://mongo-tls-sharding-src-config:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-source-config-rs', configsvr: true, members: [{ _id: 0, host: 'mongo-tls-sharding-src-config:37019' }] })" >/dev/null || true
-        mongosh "mongodb://mongo-tls-sharding-src-shard:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-source-shard-rs', members: [{ _id: 0, host: 'mongo-tls-sharding-src-shard:37018' }] })" >/dev/null || true
-        for target in "mongo-tls-sharding-src-config:37019" "mongo-tls-sharding-src-shard:37018"; do
-          for _ in $$(seq 1 60); do
-            if mongosh "mongodb://$${target}/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)" >/dev/null 2>&1; then
-              break
-            fi
-            sleep 1
-          done
-        done
+    volumes:
+      - ./docker/mongo/initialize-mongodb-replica-sets-tls.sh:/usr/local/bin/initialize-mongodb-replica-sets-tls.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/initialize-mongodb-replica-sets-tls.sh"]
+    command: ["tls-source-config-rs", "mongo-tls-sharding-src-config:37019", "tls-source-shard-rs", "mongo-tls-sharding-src-shard:37018"]
 
   mongo-tls-sharding-src-mongos:
     image: mongo:7.0
@@ -679,11 +783,11 @@ services:
     ports:
       - "37217:37017"
     volumes:
-      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/mongo/start-mongodb-cluster-node-tls.sh:/usr/local/bin/start-mongodb-cluster-node-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - /usr/local/bin/start-mongo-component-tls.sh
+      - /usr/local/bin/start-mongodb-cluster-node-tls.sh
     command:
       - mongos
       - --configdb
@@ -706,12 +810,10 @@ services:
     depends_on:
       mongo-tls-sharding-src-mongos:
         condition: service_healthy
-    entrypoint:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        mongosh "mongodb://mongo-tls-sharding-src-mongos:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "sh.addShard('tls-source-shard-rs/mongo-tls-sharding-src-shard:37018')" >/dev/null || true
+    volumes:
+      - ./docker/mongo/register-mongodb-shard-tls.sh:/usr/local/bin/register-mongodb-shard-tls.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/register-mongodb-shard-tls.sh"]
+    command: ["mongo-tls-sharding-src-mongos:37017", "tls-source-shard-rs", "mongo-tls-sharding-src-shard:37018"]
 
   mongo-tls-sharding-dst-config:
     image: mongo:7.0
@@ -720,11 +822,11 @@ services:
     ports:
       - "37319:37019"
     volumes:
-      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/mongo/start-mongodb-cluster-node-tls.sh:/usr/local/bin/start-mongodb-cluster-node-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - /usr/local/bin/start-mongo-component-tls.sh
+      - /usr/local/bin/start-mongodb-cluster-node-tls.sh
     command:
       - mongod
       - --configsvr
@@ -749,11 +851,11 @@ services:
     ports:
       - "37318:37018"
     volumes:
-      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/mongo/start-mongodb-cluster-node-tls.sh:/usr/local/bin/start-mongodb-cluster-node-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - /usr/local/bin/start-mongo-component-tls.sh
+      - /usr/local/bin/start-mongodb-cluster-node-tls.sh
     command:
       - mongod
       - --shardsvr
@@ -779,21 +881,10 @@ services:
         condition: service_healthy
       mongo-tls-sharding-dst-shard:
         condition: service_healthy
-    entrypoint:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        mongosh "mongodb://mongo-tls-sharding-dst-config:37019/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-target-config-rs', configsvr: true, members: [{ _id: 0, host: 'mongo-tls-sharding-dst-config:37019' }] })" >/dev/null || true
-        mongosh "mongodb://mongo-tls-sharding-dst-shard:37018/admin?tls=true&tlsInsecure=true" --quiet --eval "rs.initiate({ _id: 'tls-target-shard-rs', members: [{ _id: 0, host: 'mongo-tls-sharding-dst-shard:37018' }] })" >/dev/null || true
-        for target in "mongo-tls-sharding-dst-config:37019" "mongo-tls-sharding-dst-shard:37018"; do
-          for _ in $$(seq 1 60); do
-            if mongosh "mongodb://$${target}/admin?tls=true&tlsInsecure=true" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)" >/dev/null 2>&1; then
-              break
-            fi
-            sleep 1
-          done
-        done
+    volumes:
+      - ./docker/mongo/initialize-mongodb-replica-sets-tls.sh:/usr/local/bin/initialize-mongodb-replica-sets-tls.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/initialize-mongodb-replica-sets-tls.sh"]
+    command: ["tls-target-config-rs", "mongo-tls-sharding-dst-config:37019", "tls-target-shard-rs", "mongo-tls-sharding-dst-shard:37018"]
 
   mongo-tls-sharding-dst-mongos:
     image: mongo:7.0
@@ -805,11 +896,11 @@ services:
     ports:
       - "37317:37017"
     volumes:
-      - ./docker/mongo-init/start-mongo-component-tls.sh:/usr/local/bin/start-mongo-component-tls.sh:ro
+      - ./docker/mongo/start-mongodb-cluster-node-tls.sh:/usr/local/bin/start-mongodb-cluster-node-tls.sh:ro
       - ./docker/tls:/tls:ro
     entrypoint:
       - bash
-      - /usr/local/bin/start-mongo-component-tls.sh
+      - /usr/local/bin/start-mongodb-cluster-node-tls.sh
     command:
       - mongos
       - --configdb
@@ -832,12 +923,10 @@ services:
     depends_on:
       mongo-tls-sharding-dst-mongos:
         condition: service_healthy
-    entrypoint:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        mongosh "mongodb://mongo-tls-sharding-dst-mongos:37017/admin?tls=true&tlsInsecure=true" --quiet --eval "sh.addShard('tls-target-shard-rs/mongo-tls-sharding-dst-shard:37018')" >/dev/null || true
+    volumes:
+      - ./docker/mongo/register-mongodb-shard-tls.sh:/usr/local/bin/register-mongodb-shard-tls.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/register-mongodb-shard-tls.sh"]
+    command: ["mongo-tls-sharding-dst-mongos:37017", "tls-target-shard-rs", "mongo-tls-sharding-dst-shard:37018"]
 
   mongo-sharding-src-config:
     image: mongo:7.0
@@ -1062,29 +1151,9 @@ services:
       - "16461:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26461 \
-          --cluster-announce-bus-port 16461
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26461", "16461"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1103,29 +1172,9 @@ services:
       - "16462:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26462 \
-          --cluster-announce-bus-port 16462
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26462", "16462"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1144,29 +1193,9 @@ services:
       - "16463:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26463 \
-          --cluster-announce-bus-port 16463
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26463", "16463"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1184,52 +1213,10 @@ services:
       - redis-tls-source-cluster-node3
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        export REDISCLI_AUTH=123456
-
-        redis_cli() {
-          port="$$1"
-          shift
-          redis-cli --tls --insecure -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$$port" "$$@"
-        }
-
-        until redis_cli 26461 ping \
-          && redis_cli 26462 ping \
-          && redis_cli 26463 ping; do
-          sleep 1
-        done
-
-        cluster_ok() {
-          redis_cli 26461 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
-            && redis_cli 26461 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
-        }
-
-        if ! cluster_ok; then
-          redis_cli 26461 cluster addslots $$(seq 0 5460)
-          redis_cli 26462 cluster addslots $$(seq 5461 10922)
-          redis_cli 26463 cluster addslots $$(seq 10923 16383)
-          redis_cli 26461 cluster set-config-epoch 1
-          redis_cli 26462 cluster set-config-epoch 2
-          redis_cli 26463 cluster set-config-epoch 3
-          redis_cli 26461 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26462 16462
-          redis_cli 26461 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26463 16463
-        fi
-
-        for _ in $(seq 1 10); do
-          if cluster_ok; then
-            exit 0
-          fi
-          sleep 2
-        done
-
-        echo "Redis source TLS cluster failed to become ready" >&2
-        redis_cli 26461 cluster nodes || true
-        redis_cli 26461 cluster info || true
-        exit 1
+    volumes:
+      - ./docker/redis/initialize-redis-cluster-tls.sh:/usr/local/bin/initialize-redis-cluster-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/initialize-redis-cluster-tls.sh"]
+    command: ["26461", "26462", "26463", "16462", "16463"]
 
   redis-tls-target-cluster-node1:
     image: redis:6.2
@@ -1242,29 +1229,9 @@ services:
       - "16471:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26471 \
-          --cluster-announce-bus-port 16471
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26471", "16471"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1283,29 +1250,9 @@ services:
       - "16472:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26472 \
-          --cluster-announce-bus-port 16472
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26472", "16472"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1324,29 +1271,9 @@ services:
       - "16473:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26473 \
-          --cluster-announce-bus-port 16473
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26473", "16473"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1364,52 +1291,10 @@ services:
       - redis-tls-target-cluster-node3
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        export REDISCLI_AUTH=123456
-
-        redis_cli() {
-          port="$$1"
-          shift
-          redis-cli --tls --insecure -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$$port" "$$@"
-        }
-
-        until redis_cli 26471 ping \
-          && redis_cli 26472 ping \
-          && redis_cli 26473 ping; do
-          sleep 1
-        done
-
-        cluster_ok() {
-          redis_cli 26471 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
-            && redis_cli 26471 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
-        }
-
-        if ! cluster_ok; then
-          redis_cli 26471 cluster addslots $$(seq 0 5460)
-          redis_cli 26472 cluster addslots $$(seq 5461 10922)
-          redis_cli 26473 cluster addslots $$(seq 10923 16383)
-          redis_cli 26471 cluster set-config-epoch 1
-          redis_cli 26472 cluster set-config-epoch 2
-          redis_cli 26473 cluster set-config-epoch 3
-          redis_cli 26471 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26472 16472
-          redis_cli 26471 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26473 16473
-        fi
-
-        for _ in $(seq 1 10); do
-          if cluster_ok; then
-            exit 0
-          fi
-          sleep 2
-        done
-
-        echo "Redis target TLS cluster failed to become ready" >&2
-        redis_cli 26471 cluster nodes || true
-        redis_cli 26471 cluster info || true
-        exit 1
+    volumes:
+      - ./docker/redis/initialize-redis-cluster-tls.sh:/usr/local/bin/initialize-redis-cluster-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/initialize-redis-cluster-tls.sh"]
+    command: ["26471", "26472", "26473", "16472", "16473"]
 
   redis-tls-source-cluster-7-0-node1:
     image: redis:7.0
@@ -1422,29 +1307,9 @@ services:
       - "16561:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26561 \
-          --cluster-announce-bus-port 16561
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26561", "16561"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1463,29 +1328,9 @@ services:
       - "16562:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26562 \
-          --cluster-announce-bus-port 16562
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26562", "16562"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1504,29 +1349,9 @@ services:
       - "16563:16379"
     volumes:
       - ./docker/tls:/tls:ro
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        exec redis-server \
-          --port 0 \
-          --tls-port 6379 \
-          --tls-cert-file /tls/server/server.crt \
-          --tls-key-file /tls/server/server.key \
-          --tls-ca-cert-file /tls/server/server-ca.crt \
-          --tls-auth-clients no \
-          --tls-cluster yes \
-          --requirepass 123456 \
-          --masterauth 123456 \
-          --cluster-enabled yes \
-          --cluster-config-file nodes.conf \
-          --cluster-node-timeout 5000 \
-          --appendonly yes \
-          --cluster-announce-ip "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" \
-          --cluster-announce-port 0 \
-          --cluster-announce-tls-port 26563 \
-          --cluster-announce-bus-port 16563
+      - ./docker/redis/start-redis-cluster-node-tls.sh:/usr/local/bin/start-redis-cluster-node-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-cluster-node-tls.sh"]
+    command: ["26563", "16563"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1544,52 +1369,10 @@ services:
       - redis-tls-source-cluster-7-0-node3
     environment:
       DT_IT_HOST_IP: ${DT_IT_HOST_IP:-}
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -eu
-        export REDISCLI_AUTH=123456
-
-        redis_cli() {
-          port="$$1"
-          shift
-          redis-cli --tls --insecure -h "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" -p "$$port" "$$@"
-        }
-
-        until redis_cli 26561 ping \
-          && redis_cli 26562 ping \
-          && redis_cli 26563 ping; do
-          sleep 1
-        done
-
-        cluster_ok() {
-          redis_cli 26561 cluster info 2>/dev/null | grep -q 'cluster_state:ok' \
-            && redis_cli 26561 cluster info 2>/dev/null | grep -q 'cluster_slots_assigned:16384'
-        }
-
-        if ! cluster_ok; then
-          redis_cli 26561 cluster addslots $$(seq 0 5460)
-          redis_cli 26562 cluster addslots $$(seq 5461 10922)
-          redis_cli 26563 cluster addslots $$(seq 10923 16383)
-          redis_cli 26561 cluster set-config-epoch 1
-          redis_cli 26562 cluster set-config-epoch 2
-          redis_cli 26563 cluster set-config-epoch 3
-          redis_cli 26561 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26562 16562
-          redis_cli 26561 cluster meet "$${DT_IT_HOST_IP:?DT_IT_HOST_IP is required}" 26563 16563
-        fi
-
-        for _ in $(seq 1 10); do
-          if cluster_ok; then
-            exit 0
-          fi
-          sleep 2
-        done
-
-        echo "Redis 7.0 source TLS cluster failed to become ready" >&2
-        redis_cli 26561 cluster nodes || true
-        redis_cli 26561 cluster info || true
-        exit 1
+    volumes:
+      - ./docker/redis/initialize-redis-cluster-tls.sh:/usr/local/bin/initialize-redis-cluster-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/initialize-redis-cluster-tls.sh"]
+    command: ["26561", "26562", "26563", "16562", "16563"]
 
   redis-tls-source-7-0:
     image: redis:7.0
@@ -1599,29 +1382,11 @@ services:
       - "26480:6379"
     volumes:
       - ./docker/tls:/tls:ro
-    command:
-      - redis-server
-      - --port
-      - "0"
-      - --tls-port
-      - "6379"
-      - --tls-cert-file
-      - /tls/server/server.crt
-      - --tls-key-file
-      - /tls/server/server.key
-      - --tls-ca-cert-file
-      - /tls/server/server-ca.crt
-      - --tls-auth-clients
-      - "no"
-      - --requirepass
-      - "123456"
-      - --save
-      - "60"
-      - "1"
-      - --loglevel
-      - warning
+      - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
+    command: ["yes"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1635,29 +1400,11 @@ services:
       - "26490:6379"
     volumes:
       - ./docker/tls:/tls:ro
-    command:
-      - redis-server
-      - --port
-      - "0"
-      - --tls-port
-      - "6379"
-      - --tls-cert-file
-      - /tls/server/server.crt
-      - --tls-key-file
-      - /tls/server/server.key
-      - --tls-ca-cert-file
-      - /tls/server/server-ca.crt
-      - --tls-auth-clients
-      - "no"
-      - --requirepass
-      - "123456"
-      - --save
-      - "60"
-      - "1"
-      - --loglevel
-      - warning
+      - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
+    command: ["yes"]
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/tls/client/client.crt", "--key", "/tls/client/client.key", "--cacert", "/tls/server/server-ca.crt", "-h", "localhost", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
       retries: 10
       start_period: 10s
@@ -1671,27 +1418,9 @@ services:
       - "26580:6379"
     volumes:
       - ./docker/tls:/tls:ro
-    command:
-      - redis-server
-      - --port
-      - "0"
-      - --tls-port
-      - "6379"
-      - --tls-cert-file
-      - /tls/server/server.crt
-      - --tls-key-file
-      - /tls/server/server.key
-      - --tls-ca-cert-file
-      - /tls/server/server-ca.crt
-      - --tls-auth-clients
-      - "no"
-      - --requirepass
-      - "123456"
-      - --save
-      - "60"
-      - "1"
-      - --loglevel
-      - warning
+      - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
+    command: ["no"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s
@@ -1707,27 +1436,9 @@ services:
       - "26590:6379"
     volumes:
       - ./docker/tls:/tls:ro
-    command:
-      - redis-server
-      - --port
-      - "0"
-      - --tls-port
-      - "6379"
-      - --tls-cert-file
-      - /tls/server/server.crt
-      - --tls-key-file
-      - /tls/server/server.key
-      - --tls-ca-cert-file
-      - /tls/server/server-ca.crt
-      - --tls-auth-clients
-      - "no"
-      - --requirepass
-      - "123456"
-      - --save
-      - "60"
-      - "1"
-      - --loglevel
-      - warning
+      - ./docker/redis/start-redis-server-tls.sh:/usr/local/bin/start-redis-server-tls.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-redis-server-tls.sh"]
+    command: ["no"]
     healthcheck:
       test: ["CMD", "redis-cli", "--tls", "--insecure", "-p", "6379", "-a", "123456", "ping"]
       timeout: 5s

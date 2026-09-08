@@ -7,7 +7,7 @@ use rustls::{
         WebPkiServerVerifier,
     },
     crypto::WebPkiSupportedAlgorithms,
-    pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
+    pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName, UnixTime},
     ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
 };
 
@@ -130,29 +130,42 @@ impl ServerCertVerifier for NoHostnameVerification {
 }
 
 pub fn build_tls_client_config(ssl_config: &SslConfig) -> anyhow::Result<ClientConfig> {
-    match &ssl_config.ssl_mode {
+    ssl_config.validate_client_identity()?;
+    let builder = match &ssl_config.ssl_mode {
         SslMode::Disable => bail!("can not build a TLS client when ssl_mode=disable"),
-        SslMode::Require => {
-            let mut config = ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::default()))
-                .with_no_client_auth();
-            config.enable_sni = false;
-            Ok(config)
-        }
-        SslMode::VerifyCa => {
+        SslMode::Require => ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::default())),
+        SslMode::VerifyCa | SslMode::VerifyFull if ssl_config.ssl_allow_invalid_hostnames => {
             let verifier =
                 NoHostnameVerification::new(load_root_cert_store(&ssl_config.ssl_ca_path)?)?;
-            Ok(ClientConfig::builder()
+            ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(verifier))
-                .with_no_client_auth())
         }
-        unsupported => bail!(
-            "ssl_mode={} is not supported by this TLS client",
-            unsupported
-        ),
+        SslMode::VerifyCa | SslMode::VerifyFull => ClientConfig::builder()
+            .with_root_certificates(load_root_cert_store(&ssl_config.ssl_ca_path)?),
+    };
+    let mut config = if ssl_config.ssl_client_cert_path.is_empty() {
+        builder.with_no_client_auth()
+    } else {
+        let pem = fs::read(&ssl_config.ssl_client_cert_path)
+            .context("failed to read TLS client certificate")?;
+        let certificates = CertificateDer::pem_slice_iter(&pem)
+            .collect::<Result<Vec<_>, _>>()
+            .context("failed to parse TLS client certificate")?;
+        let key = fs::read(ssl_config.client_key_path())
+            .context("failed to read TLS client private key")?;
+        let key = PrivateKeyDer::from_pem_slice(&key)
+            .context("failed to parse TLS client private key")?;
+        builder
+            .with_client_auth_cert(certificates, key)
+            .context("invalid TLS client certificate/private key")?
+    };
+    if ssl_config.ssl_mode == SslMode::Require {
+        config.enable_sni = false;
     }
+    Ok(config)
 }
 
 fn load_root_cert_store(path: &str) -> anyhow::Result<RootCertStore> {
@@ -185,55 +198,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verify_ca_checks_certificates_without_matching_hostnames() {
-        let ca = CertificateDer::from_pem_slice(include_bytes!(
-            "../../../dt-tests/docker/tls/server/server-ca.crt"
-        ))
-        .unwrap();
+    fn verified_modes_reject_invalid_certificates_and_hostnames() {
         let certificate = CertificateDer::from_pem_slice(include_bytes!(
             "../../../dt-tests/docker/tls/server/server.crt"
         ))
         .unwrap();
-        let mut roots = RootCertStore::empty();
-        roots.add(ca).unwrap();
-        let verifier = NoHostnameVerification::new(roots).unwrap();
+        let ca_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../dt-tests/docker/tls/server/server-ca.crt"
+        );
         let now = UnixTime::now();
-
-        // Corrupt the certificate signature while leaving its DER structure intact.
+        // Keep the DER structure intact while invalidating the certificate signature.
         let mut corrupted = certificate.to_vec();
         *corrupted.last_mut().unwrap() ^= 1;
         let corrupted = CertificateDer::from(corrupted);
         let expired = UnixTime::since_unix_epoch(Duration::from_secs(
             now.as_secs() + 20 * 365 * 24 * 60 * 60,
         ));
-        let cases = [
-            ("matching hostname", &certificate, "localhost", now, true),
+        let verifier =
+            WebPkiServerVerifier::builder(Arc::new(load_root_cert_store(ca_path).unwrap()))
+                .build()
+                .unwrap();
+        let relaxed = NoHostnameVerification::new(load_root_cert_store(ca_path).unwrap()).unwrap();
+        for (name, cert, host, time, accepted, accepted_without_hostname) in [
+            ("valid", &certificate, "localhost", now, true, true),
             (
-                "different hostname",
+                "hostname mismatch",
                 &certificate,
                 "different.example",
                 now,
+                false,
                 true,
             ),
+            ("IP mismatch", &certificate, "127.0.0.1", now, false, true),
             (
                 "invalid signature",
                 &corrupted,
-                "different.example",
+                "localhost",
                 now,
                 false,
-            ),
-            (
-                "expired certificate",
-                &certificate,
-                "different.example",
-                expired,
                 false,
             ),
-        ];
-        for (name, certificate, hostname, time, accepted) in cases {
-            let hostname = ServerName::try_from(hostname).unwrap();
-            let result = verifier.verify_server_cert(certificate, &[], &hostname, &[], time);
-            assert_eq!(result.is_ok(), accepted, "{}: {:?}", name, result);
+            ("expired", &certificate, "localhost", expired, false, false),
+        ] {
+            let result = verifier.verify_server_cert(
+                cert,
+                &[],
+                &ServerName::try_from(host).unwrap(),
+                &[],
+                time,
+            );
+            assert_eq!(result.is_ok(), accepted, "{name}: {result:?}");
+            let result = relaxed.verify_server_cert(
+                cert,
+                &[],
+                &ServerName::try_from(host).unwrap(),
+                &[],
+                time,
+            );
+            assert_eq!(
+                result.is_ok(),
+                accepted_without_hostname,
+                "allow_invalid_hostnames {name}: {result:?}"
+            );
+        }
+        for mode in [SslMode::VerifyCa, SslMode::VerifyFull] {
+            let config = build_tls_client_config(&SslConfig {
+                ssl_mode: mode,
+                ssl_ca_path: ca_path.into(),
+                ..SslConfig::default()
+            })
+            .unwrap();
+            assert!(config.enable_sni);
         }
     }
 }

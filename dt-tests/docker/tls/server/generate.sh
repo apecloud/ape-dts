@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Purpose: regenerate the shared test server CA, certificate and private keys.
+# Run manually before tests when replacing server fixtures, not during container
+# startup. No arguments; overwrites this directory's server CA and identity files.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

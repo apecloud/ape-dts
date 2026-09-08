@@ -118,7 +118,7 @@ impl TaskUtil {
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
-            conn_options = ssl.apply_mysql(conn_options);
+            conn_options = ssl.apply_mysql(conn_options)?;
         }
         if !matches!(db_type, DbType::Mysql) {
             conn_options = conn_options
@@ -206,7 +206,7 @@ impl TaskUtil {
         }
 
         if let Some(ssl) = connection_auth.ssl_config() {
-            conn_options = ssl.apply_pg(conn_options);
+            conn_options = ssl.apply_pg(conn_options)?;
         }
 
         let mut pool_options = PgPoolOptions::new().max_connections(max_connections);

@@ -96,6 +96,7 @@ declare -a ALL_SUITES=(
   # "pg_to_starrocks"       # disabled: temporarily excluded from default local matrix
   "mongo_to_mongo"
   "mongo_to_mongo_tls"
+  "tls"
   "mongo_to_mongo_precheck"
   "redis_to_redis_2_8"
   "redis_to_redis_4_0"
@@ -145,6 +146,7 @@ TEST_FAIL_FAST=1
 declare -a REQUESTED_SUITES=()
 declare -a EXTRA_TEST_ARGS=()
 declare -a ARM_UNSUPPORTED_SUITES=(
+  "tls"
   "mock_test_mysql_5_7"
   "mssql_to_mssql"
   "redis_to_redis_2_8"
@@ -343,6 +345,30 @@ suite_services() {
     mock_test_pg_13_3_4) echo "postgres-src-13-3-4 postgres-dst-13-3-4" ;;
     mock_test_pg_17_3_4) echo "postgres-src-17-3-4 postgres-dst-17-3-4" ;;
     mssql_to_mssql) echo "mssql-src mssql-dst" ;;
+    tls) echo "mysql-tls-src mysql-tls-dst postgres-tls-src postgres-tls-dst mssql-tls-src mssql-tls-dst" ;;
+    mongo_to_mongo_tls)
+      local services=(
+        mongo-tls-src mongo-tls-dst
+        mongo-mtls-src mongo-mtls-dst
+        mongo-tls-sharding-src-config mongo-tls-sharding-src-shard mongo-tls-sharding-src-init
+        mongo-tls-sharding-src-mongos mongo-tls-sharding-src-add-shard-init
+        mongo-tls-sharding-dst-config mongo-tls-sharding-dst-shard mongo-tls-sharding-dst-init
+        mongo-tls-sharding-dst-mongos mongo-tls-sharding-dst-add-shard-init
+      )
+      echo "${services[*]}"
+      ;;
+    redis_to_redis_tls)
+      local services=(
+        redis-tls-source-cluster-node1 redis-tls-source-cluster-node2 redis-tls-source-cluster-node3
+        redis-tls-source-cluster-init
+        redis-tls-target-cluster-node1 redis-tls-target-cluster-node2 redis-tls-target-cluster-node3
+        redis-tls-target-cluster-init
+        redis-tls-source-cluster-7-0-node1 redis-tls-source-cluster-7-0-node2 redis-tls-source-cluster-7-0-node3
+        redis-tls-source-cluster-7-0-init
+        redis-tls-source-7-0 redis-tls-target-7-0 redis-tls-source-8-0 redis-tls-target-8-0
+      )
+      echo "${services[*]}"
+      ;;
     mysql_to_clickhouse) echo "mysql-src clickhouse" ;;
     mysql_to_doris) echo "mysql-src doris-2-1-0" ;;
     mysql_to_kafka_to_mysql) echo "mysql-src mysql-dst kafka" ;;
@@ -361,7 +387,6 @@ suite_services() {
     pg_to_pg_lua) echo "postgres-src postgres-dst" ;;
     pg_to_starrocks) echo "postgres-src starrocks-3-2-11" ;;
     mongo_to_mongo) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
-    mongo_to_mongo_tls) echo "mongo-tls-src mongo-tls-dst mongo-tls-sharding-src-config mongo-tls-sharding-src-shard mongo-tls-sharding-src-init mongo-tls-sharding-src-mongos mongo-tls-sharding-src-add-shard-init mongo-tls-sharding-dst-config mongo-tls-sharding-dst-shard mongo-tls-sharding-dst-init mongo-tls-sharding-dst-mongos mongo-tls-sharding-dst-add-shard-init" ;;
     mongo_to_mongo_precheck) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
     redis_to_redis_2_8) echo "redis-src-2-8 redis-dst-2-8" ;;
     redis_to_redis_4_0) echo "redis-src-4-0 redis-dst-4-0" ;;
@@ -370,7 +395,6 @@ suite_services() {
     redis_to_redis_6_2) echo "redis-src-6-2 redis-dst-6-2" ;;
     redis_to_redis_7_0) echo "redis-src redis-dst redis-cycle-node3 redis-source-cluster-node1 redis-source-cluster-node2 redis-source-cluster-node3 redis-source-cluster-init redis-target-cluster-node1 redis-target-cluster-node2 redis-target-cluster-node3 redis-target-cluster-init" ;;
     redis_to_redis_8_0) echo "redis-src-8-0 redis-dst-8-0" ;;
-    redis_to_redis_tls) echo "redis-tls-source-cluster-node1 redis-tls-source-cluster-node2 redis-tls-source-cluster-node3 redis-tls-source-cluster-init redis-tls-target-cluster-node1 redis-tls-target-cluster-node2 redis-tls-target-cluster-node3 redis-tls-target-cluster-init redis-tls-source-cluster-7-0-node1 redis-tls-source-cluster-7-0-node2 redis-tls-source-cluster-7-0-node3 redis-tls-source-cluster-7-0-init redis-tls-source-7-0 redis-tls-target-7-0 redis-tls-source-8-0 redis-tls-target-8-0" ;;
     redis_to_redis_cross_version) echo "redis-src-4-0 redis-src-5-0 redis-src-6-0 redis-src-6-2 redis-dst" ;;
     redis_to_redis_graph) echo "falkordb-src falkordb-dst" ;;
     redis_to_redis_rebloom) echo "redis-rebloom" ;;
@@ -400,8 +424,9 @@ suite_wait_timeout_secs() {
   case "${suite}" in
     mongo_to_mongo | mongo_to_mongo_precheck) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
     mssql_to_mssql) echo "${MSSQL_WAIT_TIMEOUT_SECS:-120}" ;;
-    redis_to_redis_tls) echo "${REDIS_TLS_CLUSTER_WAIT_TIMEOUT_SECS:-90}" ;;
+    tls) echo "${MSSQL_WAIT_TIMEOUT_SECS:-120}" ;;
     mongo_to_mongo_tls) echo "${MONGO_TLS_WAIT_TIMEOUT_SECS:-120}" ;;
+    redis_to_redis_tls) echo "${REDIS_TLS_CLUSTER_WAIT_TIMEOUT_SECS:-90}" ;;
     *) echo "${WAIT_TIMEOUT_SECS}" ;;
   esac
 }
@@ -434,6 +459,9 @@ suite_nextest_filter() {
     mock_test_pg_13_3_4) echo "test(/^mock_test::pg_to_pg::from_13_3_4_to_13_3_4::/)" ;;
     mock_test_pg_17_3_4) echo "test(/^mock_test::pg_to_pg::from_17_3_4_to_17_3_4::/)" ;;
     mssql_to_mssql) echo "test(/^mssql_to_mssql::/)" ;;
+    tls) echo "test(/^tls::(mysql|pg|mssql)::/)" ;;
+    mongo_to_mongo_tls) echo "test(/^tls::mongo(_shard)?::/)" ;;
+    redis_to_redis_tls) echo "test(/^tls::redis(_cluster)?_[0-9]+_[0-9]+::/)" ;;
     mysql_to_clickhouse) echo "test(/^mysql_to_clickhouse::/)" ;;
     mysql_to_doris) echo "test(/^mysql_to_doris::/)" ;;
     mysql_to_kafka_to_mysql) echo "test(/^mysql_to_kafka_to_mysql::/)" ;;
@@ -452,7 +480,6 @@ suite_nextest_filter() {
     pg_to_pg_lua) echo "test(/^pg_to_pg_lua::/)" ;;
     pg_to_starrocks) echo "test(/^pg_to_starrocks::/)" ;;
     mongo_to_mongo) echo "test(/^mongo_to_mongo::cdc_tests::/) | test(/^mongo_to_mongo::check_tests::/) | test(/^mongo_to_mongo::review_tests::/) | test(/^mongo_to_mongo::revise_tests::/) | test(/^mongo_to_mongo::snapshot_tests::/) | test(/^mongo_to_mongo::struct_tests::/)" ;;
-    mongo_to_mongo_tls) echo "test(/^mongo_to_mongo::tls_tests::/)" ;;
     mongo_to_mongo_precheck) echo "test(/^mongo_to_mongo::precheck_tests::/)" ;;
     redis_to_redis_2_8) echo "test(/^redis_to_redis::cdc_2_8_tests::/) | test(/^redis_to_redis::snapshot_2_8_tests::/)" ;;
     redis_to_redis_4_0) echo "test(/^redis_to_redis::cdc_4_0_tests::/) | test(/^redis_to_redis::snapshot_4_0_tests::/)" ;;
@@ -461,7 +488,6 @@ suite_nextest_filter() {
     redis_to_redis_6_2) echo "test(/^redis_to_redis::cdc_6_2_tests::/) | test(/^redis_to_redis::snapshot_6_2_tests::/)" ;;
     redis_to_redis_7_0) echo "test(/^redis_to_redis::cdc_7_0_tests::/) | test(/^redis_to_redis::snapshot_7_0_tests::/) | test(/^redis_to_redis::snapshot_and_cdc_7_0_tests::/)" ;;
     redis_to_redis_8_0) echo "test(/^redis_to_redis::cdc_8_0_tests::/) | test(/^redis_to_redis::snapshot_8_0_tests::/)" ;;
-    redis_to_redis_tls) echo "test(/^redis_to_redis::tls_tests::/)" ;;
     redis_to_redis_cross_version) echo "test(/^redis_to_redis::cdc_cross_version_tests::/) | test(/^redis_to_redis::snapshot_cross_version_tests::/)" ;;
     redis_to_redis_graph) echo "test(/^redis_to_redis::cdc_graph_tests::/) | test(/^redis_to_redis::snapshot_graph_tests::/)" ;;
     redis_to_redis_rebloom) echo "test(/^redis_to_redis::cdc_rebloom_tests::/) | test(/^redis_to_redis::snapshot_rebloom_tests::/)" ;;

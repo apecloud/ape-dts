@@ -14,12 +14,17 @@ ssl_mode=require
 server certificate chain and hostname using the MongoDB driver's rustls backend:
 
 ```ini
-ssl_mode=verify_ca
+ssl_mode=verify_full
 ssl_ca_path=/etc/ssl/certs/mongo-ca.pem
 ```
 
-The URI hostname must match the server certificate SAN. `verify_full` is not supported.
+The URI hostname or IP must match the server certificate SAN. `verify_ca` has the same behavior
+as `verify_full` with the MongoDB driver's rustls backend.
 An explicit `ssl_mode` overrides URI TLS options; omit it to use the driver's URI settings.
+
+For a client certificate, set `ssl_client_cert_path` to a combined certificate/private-key PEM and
+leave `ssl_client_key_path` empty. `ssl_allow_invalid_hostnames` defaults to `false`; MongoDB's rustls
+backend ignores this option and continues verifying hostnames in both verification modes.
 
 # Struct
 

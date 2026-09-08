@@ -104,7 +104,7 @@ impl ResumerUtil {
                     .context("failed to parse MySQL connection URL")?;
 
                 if let Some(ssl) = connection_auth.ssl_config() {
-                    conn_options = ssl.apply_mysql(conn_options);
+                    conn_options = ssl.apply_mysql(conn_options)?;
                 }
 
                 let pool = MySqlPoolOptions::new()
@@ -122,7 +122,7 @@ impl ResumerUtil {
                     .context("failed to parse PostgreSQL connection URL")?;
 
                 if let Some(ssl) = connection_auth.ssl_config() {
-                    conn_options = ssl.apply_pg(conn_options);
+                    conn_options = ssl.apply_pg(conn_options)?;
                 }
 
                 let pool = PgPoolOptions::new()

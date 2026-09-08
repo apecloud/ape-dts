@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs, str::FromStr};
 
 use anyhow::{bail, Context};
-use redis::{Client, Connection, ConnectionLike, TlsCertificates, Value};
+use redis::{Client, ClientTlsConfig, Connection, ConnectionLike, TlsCertificates, Value};
 use regex::Regex;
 use url::Url;
 
@@ -56,6 +56,7 @@ impl RedisUtil {
             "redis" => SslConfig {
                 ssl_mode: SslMode::Disable,
                 ssl_ca_path: String::new(),
+                ..SslConfig::default()
             },
             "rediss" => {
                 if let Some(fragment) = parsed.fragment() {
@@ -69,6 +70,7 @@ impl RedisUtil {
                 SslConfig {
                     ssl_mode: SslMode::Require,
                     ssl_ca_path: String::new(),
+                    ..SslConfig::default()
                 }
             }
             scheme => bail!(DtError::DatabaseInvalidConfig(
@@ -81,6 +83,7 @@ impl RedisUtil {
             .ssl_config()
             .cloned()
             .unwrap_or(url_ssl_config);
+        ssl_config.validate_client_identity()?;
 
         match &ssl_config.ssl_mode {
             SslMode::Disable => {
@@ -95,11 +98,14 @@ impl RedisUtil {
                     .map_err(|_| anyhow::anyhow!("failed to set Redis URL scheme"))?;
                 parsed.set_fragment(Some("insecure"));
             }
-            SslMode::VerifyCa => {
+            SslMode::VerifyCa | SslMode::VerifyFull => {
                 if ssl_config.ssl_ca_path.is_empty() {
                     bail!(DtError::DatabaseInvalidConfig(
                         DbType::Redis,
-                        "ssl_ca_path is required when Redis ssl_mode=verify_ca".to_string()
+                        format!(
+                            "ssl_ca_path is required when Redis ssl_mode={}",
+                            ssl_config.ssl_mode
+                        )
                     ))
                 }
                 parsed
@@ -107,10 +113,6 @@ impl RedisUtil {
                     .map_err(|_| anyhow::anyhow!("failed to set Redis URL scheme"))?;
                 parsed.set_fragment(None);
             }
-            unsupported => bail!(DtError::DatabaseInvalidConfig(
-                DbType::Redis,
-                format!("Redis ssl_mode={} is not supported", unsupported)
-            )),
         }
 
         Ok(ResolvedRedisConfig {
@@ -120,21 +122,34 @@ impl RedisUtil {
     }
 
     fn create_redis_client(resolved: &ResolvedRedisConfig) -> anyhow::Result<Client> {
-        if !matches!(&resolved.ssl_config.ssl_mode, SslMode::VerifyCa) {
+        let ssl = &resolved.ssl_config;
+        if ssl.ssl_mode == SslMode::Disable {
             return Client::open(resolved.url.as_str()).map_err(Into::into);
         }
 
-        let root_cert = fs::read(&resolved.ssl_config.ssl_ca_path).with_context(|| {
-            format!(
-                "failed to read Redis CA certificate: {}",
-                resolved.ssl_config.ssl_ca_path
-            )
-        })?;
+        let root_cert = if ssl.ssl_mode == SslMode::Require {
+            None
+        } else {
+            Some(fs::read(&ssl.ssl_ca_path).context("failed to read Redis CA certificate")?)
+        };
+        let client_tls = if ssl.ssl_client_cert_path.is_empty() {
+            None
+        } else {
+            Some(ClientTlsConfig {
+                client_cert: fs::read(&ssl.ssl_client_cert_path)
+                    .context("failed to read Redis client certificate")?,
+                client_key: fs::read(ssl.client_key_path())
+                    .context("failed to read Redis client private key")?,
+            })
+        };
         let certificates = TlsCertificates {
-            client_tls: None,
-            root_cert: Some(root_cert),
+            client_tls,
+            root_cert,
         };
         let client = Client::build_with_tls(resolved.url.as_str(), certificates)?;
+        if !ssl.ssl_allow_invalid_hostnames {
+            return Ok(client);
+        }
         let mut connection_info = client.get_connection_info().clone();
         connection_info
             .addr
@@ -472,6 +487,7 @@ mod tests {
             ssl_config: SslConfig {
                 ssl_mode,
                 ssl_ca_path: ssl_ca_path.to_string(),
+                ..SslConfig::default()
             },
         }
     }
@@ -588,10 +604,22 @@ mod tests {
                 },
             },
             ResolveCase {
-                name: "verify_full is unsupported",
-                url: "redis://localhost:6379",
+                name: "verify_full overrides insecure URL",
+                url: "rediss://localhost:6379/0#insecure",
                 auth: ssl_auth_with_ca(SslMode::VerifyFull, "/tmp/redis-ca.pem"),
-                expected: ResolveExpectation::Error("ssl_mode=verify_full is not supported"),
+                expected: ResolveExpectation::Resolved {
+                    scheme: "rediss",
+                    fragment: None,
+                    query: None,
+                    ssl_mode: SslMode::VerifyFull,
+                    ssl_ca_path: "/tmp/redis-ca.pem",
+                },
+            },
+            ResolveCase {
+                name: "verify_full requires a CA path",
+                url: "redis://localhost:6379",
+                auth: ssl_auth(SslMode::VerifyFull),
+                expected: ResolveExpectation::Error("ssl_ca_path is required"),
             },
             ResolveCase {
                 name: "unknown scheme is rejected",

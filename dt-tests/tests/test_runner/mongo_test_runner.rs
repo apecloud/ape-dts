@@ -35,7 +35,21 @@ pub const DST: &str = "dst";
 #[allow(dead_code)]
 impl MongoTestRunner {
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let base = BaseTestRunner::new(relative_test_dir).await.unwrap();
+        Self::new_with_config_overrides(relative_test_dir, &[]).await
+    }
+
+    pub async fn new_with_config_overrides(
+        relative_test_dir: &str,
+        overrides: &[(String, String, String)],
+    ) -> anyhow::Result<Self> {
+        let base = BaseTestRunner::new(relative_test_dir).await?;
+        if !overrides.is_empty() {
+            TestConfigUtil::update_task_config(
+                &base.task_config_file,
+                &base.task_config_file,
+                overrides,
+            );
+        }
 
         let mut src_mongo_client = None;
         let mut dst_mongo_client = None;
