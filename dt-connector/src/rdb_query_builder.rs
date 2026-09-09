@@ -973,7 +973,7 @@ impl RdbQueryBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     use dt_common::meta::{
         col_value::ColValue,
@@ -1027,18 +1027,13 @@ mod tests {
 
         MysqlTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
-                key_map: HashMap::new(),
                 order_cols: vec!["id".to_string()],
                 partition_col: "id".to_string(),
                 id_cols: vec!["id".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             col_type_map,
         }
@@ -1065,18 +1060,14 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
                 key_map,
                 order_cols: vec!["id".to_string()],
                 partition_col: "id".to_string(),
                 id_cols: vec!["id".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 1,
             col_type_map,
@@ -1094,18 +1085,14 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
                 key_map,
                 order_cols: vec!["code".to_string()],
                 partition_col: "code".to_string(),
                 id_cols: vec!["code".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 1,
             col_type_map,
@@ -1126,18 +1113,12 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
-                key_map: HashMap::new(),
-                order_cols: vec![],
                 partition_col: "id".to_string(),
                 id_cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 1,
             col_type_map,
@@ -1150,18 +1131,12 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "bit_t1".to_string(),
                 cols: vec!["bits".to_string()],
-                col_origin_type_map: HashMap::new(),
-                key_map: HashMap::new(),
-                order_cols: vec![],
                 partition_col: "bits".to_string(),
                 id_cols: vec!["bits".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 2,
             col_type_map,

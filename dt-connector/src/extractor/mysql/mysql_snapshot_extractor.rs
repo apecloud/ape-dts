@@ -11,7 +11,7 @@ use dt_common::{
     error::{DtError, DtErrorContextExt, DtOptionExt, Stage},
     log_debug, log_info,
     meta::{
-        adaptor::{mysql_col_value_convertor::MysqlColValueConvertor, sqlx_ext::SqlxMysqlExt},
+        adaptor::mysql_col_value_convertor::MysqlColValueConvertor,
         col_value::ColValue,
         dt_data::DtData,
         mysql::{
@@ -20,6 +20,7 @@ use dt_common::{
         },
         order_key::OrderKey,
         position::Position,
+        rdb_tb_meta::SortDirection,
         row_data::RowData,
     },
     quote_mysql,
@@ -37,6 +38,7 @@ use crate::{
         estimated_sample_limit,
         mysql::mysql_snapshot_splitter::MySqlSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
+        rdb_snapshot_query::RdbSnapshotQuery,
         resumer::recovery::Recovery,
         snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
         snapshot_dispatcher::{SnapshotDispatcher, TableMonitorGuard},
@@ -78,8 +80,8 @@ enum MysqlSnapshotWork {
         tb_meta: Box<MysqlTbMeta>,
         partition_col: String,
         partition_col_type: MysqlColType,
-        sql_le: String,
-        sql_range: String,
+        sql_le: Arc<RdbSnapshotQuery>,
+        sql_range: Arc<RdbSnapshotQuery>,
         chunk: Box<SnapshotChunk>,
         extract_state: ExtractState,
     },
@@ -395,8 +397,8 @@ impl MysqlSnapshotExtractor {
         tb_meta: MysqlTbMeta,
         partition_col: String,
         partition_col_type: MysqlColType,
-        sql_le: String,
-        sql_range: String,
+        sql_le: Arc<RdbSnapshotQuery>,
+        sql_range: Arc<RdbSnapshotQuery>,
         chunk: SnapshotChunk,
         mut extract_state: ExtractState,
     ) -> anyhow::Result<(u64, u64, ColValue)> {
@@ -407,22 +409,24 @@ impl MysqlSnapshotExtractor {
         );
         let chunk_id = chunk.chunk_id;
         let (start_value, end_value) = chunk.chunk_range;
-        let query = match (&start_value, &end_value) {
-            (ColValue::None, ColValue::None) | (_, ColValue::None) => {
-                bail!(
-                    "chunk {} has bad chunk range from {}.{}",
-                    chunk_id,
-                    quote!(&tb_meta.basic.schema),
-                    quote!(&tb_meta.basic.tb)
-                );
-            }
-            (ColValue::None, _) => {
-                sqlx::query(&sql_le).bind_col_value(Some(&end_value), &partition_col_type)
-            }
-            _ => sqlx::query(&sql_range)
-                .bind_col_value(Some(&start_value), &partition_col_type)
-                .bind_col_value(Some(&end_value), &partition_col_type),
+        if matches!(end_value, ColValue::None) {
+            bail!(DtError::InvariantViolated(format!(
+                "chunk {chunk_id} has no end value"
+            )));
+        }
+        let range_values = [&start_value, &end_value];
+        let (snapshot_query, values) = if matches!(start_value, ColValue::None) {
+            (&sql_le, &range_values[1..])
+        } else {
+            (&sql_range, &range_values[..])
         };
+        if snapshot_query.cols.iter().any(|col| col != &partition_col) {
+            bail!(DtError::InvariantViolated(format!(
+                "unexpected chunk binding columns {:?}",
+                snapshot_query.cols
+            )));
+        }
+        let query = snapshot_query.create_mysql_query(&tb_meta, values)?;
 
         let mut extracted_cnt = 0u64;
         let mut partition_col_value = ColValue::None;
@@ -486,8 +490,8 @@ enum MysqlActiveTableMode {
         running_chunks: usize,
         partition_col: String,
         partition_col_type: MysqlColType,
-        sql_le: String,
-        sql_range: String,
+        sql_le: Arc<RdbSnapshotQuery>,
+        sql_range: Arc<RdbSnapshotQuery>,
     },
 }
 
@@ -768,6 +772,7 @@ impl MysqlTableCtx {
         }
 
         let order_cols = vec![partition_col.clone()];
+        let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = tb_meta.get_col_type(&partition_col)?.clone();
         let ignore_cols = self
             .shared
@@ -783,15 +788,19 @@ impl MysqlTableCtx {
         let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&order_cols)
+            .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
-            .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual)
-            .build()?;
+            .with_predicate_type(OrderKeyPredicateType::AtOrBefore)
+            .build()
+            .map(Arc::new)?;
         let sql_range = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&order_cols)
+            .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::Range)
-            .build()?;
+            .build()
+            .map(Arc::new)?;
 
         Ok(MysqlActiveTableMode::Chunk {
             splitter,
@@ -955,7 +964,9 @@ impl MysqlTableCtx {
         }
         let sql = stmt.build()?;
 
-        let mut rows = sqlx::query(&sql).fetch(&self.shared.conn_pool);
+        let mut rows = sql
+            .create_mysql_query(tb_meta, &[])?
+            .fetch(&self.shared.conn_pool);
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         while let Some(row) = rows.try_next().await? {
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
@@ -1011,6 +1022,7 @@ impl MysqlTableCtx {
         let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
+            .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
             .with_limit(page_limit)
@@ -1018,8 +1030,9 @@ impl MysqlTableCtx {
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
+            .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
-            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_predicate_type(OrderKeyPredicateType::After)
             .with_limit(page_limit)
             .build()?;
         let missing_order_col = |order_col: &str| {
@@ -1038,13 +1051,14 @@ impl MysqlTableCtx {
             let order_col_type = tb_meta.get_col_type(order_col)?;
             loop {
                 let bind_values = start_values.clone();
-                let query = if start_from_beginning {
+                let snapshot_query = if start_from_beginning {
                     start_from_beginning = false;
-                    sqlx::query(&sql_from_beginning)
+                    &sql_from_beginning
                 } else {
-                    sqlx::query(&sql_from_value)
-                        .bind_col_value(bind_values.get(order_col), order_col_type)
+                    &sql_from_value
                 };
+                let values = snapshot_query.get_bind_values(&bind_values)?;
+                let query = snapshot_query.create_mysql_query(tb_meta, &values)?;
 
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
@@ -1088,17 +1102,14 @@ impl MysqlTableCtx {
         } else {
             loop {
                 let bind_values = start_values.clone();
-                let query = if start_from_beginning {
+                let snapshot_query = if start_from_beginning {
                     start_from_beginning = false;
-                    sqlx::query(&sql_from_beginning)
+                    &sql_from_beginning
                 } else {
-                    let mut query = sqlx::query(&sql_from_value);
-                    for order_col in &tb_meta.basic.order_cols {
-                        let order_col_type = tb_meta.get_col_type(order_col)?;
-                        query = query.bind_col_value(bind_values.get(order_col), order_col_type)
-                    }
-                    query
+                    &sql_from_value
                 };
+                let values = snapshot_query.get_bind_values(&bind_values)?;
+                let query = snapshot_query.create_mysql_query(tb_meta, &values)?;
 
                 let mut rows = query.fetch(&self.shared.conn_pool);
                 let mut slice_count = 0usize;
@@ -1169,7 +1180,7 @@ impl MysqlTableCtx {
         &self,
         extract_state: &mut ExtractState,
         tb_meta: &MysqlTbMeta,
-        order_cols: &Vec<String>,
+        order_cols: &[String],
         limit: Option<usize>,
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
@@ -1186,9 +1197,14 @@ impl MysqlTableCtx {
             .unwrap_or_default();
         let empty_ignore_cols = HashSet::new();
         let stmt_ignore_cols = ignore_cols.unwrap_or(&empty_ignore_cols);
+        let order_col_attrs = order_cols
+            .iter()
+            .map(|col| (col.clone(), SortDirection::Asc))
+            .collect();
         let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(stmt_ignore_cols)
             .with_order_cols(order_cols)
+            .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::IsNull);
         if let Some(limit) = limit {
@@ -1196,7 +1212,9 @@ impl MysqlTableCtx {
         }
         let sql_for_null = stmt.build()?;
 
-        let mut rows = sqlx::query(&sql_for_null).fetch(&self.shared.conn_pool);
+        let mut rows = sql_for_null
+            .create_mysql_query(tb_meta, &[])?
+            .fetch(&self.shared.conn_pool);
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();

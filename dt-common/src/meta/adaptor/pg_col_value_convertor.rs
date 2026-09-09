@@ -46,7 +46,10 @@ impl PgColValueConvertor {
         }
 
         let col_value = match col_type.value_type {
-            PgValueType::Boolean => ColValue::Bool("t" == value_str.to_lowercase()),
+            PgValueType::Boolean => ColValue::Bool(matches!(
+                value_str.to_ascii_lowercase().as_str(),
+                "t" | "true"
+            )),
 
             PgValueType::Int32 => {
                 let res: i32 = value_str.parse()?;

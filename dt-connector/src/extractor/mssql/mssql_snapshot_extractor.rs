@@ -10,7 +10,7 @@ use dt_common::{
     error::{DtError, DtErrorContextExt, ErrorObject, Stage},
     log_debug, log_info,
     meta::{
-        adaptor::{mssql_col_value_convertor::MssqlColValueConvertor, tiberius_ext::TiberiusExt},
+        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         col_value::ColValue,
         dt_data::DtData,
         mssql::{
@@ -19,13 +19,13 @@ use dt_common::{
         },
         order_key::OrderKey,
         position::Position,
+        rdb_tb_meta::SortDirection,
         row_data::RowData,
     },
     rdb_filter::RdbFilter,
     utils::{serialize_util::SerializeUtil, sql_util::SqlUtil},
 };
 use futures::TryStreamExt;
-use tiberius::Query;
 
 use crate::{
     extractor::{
@@ -33,6 +33,7 @@ use crate::{
         base_splitter::SnapshotChunk,
         mssql::mssql_snapshot_splitter::MssqlSnapshotSplitter,
         rdb_snapshot_extract_statement::{OrderKeyPredicateType, RdbSnapshotExtractStatement},
+        rdb_snapshot_query::RdbSnapshotQuery,
         resumer::recovery::Recovery,
         snapshot_chunk_id_generator::SnapshotChunkIdGenerator,
         snapshot_dispatcher::{SnapshotDispatcher, TableMonitorGuard},
@@ -73,8 +74,8 @@ enum MssqlSnapshotWork {
         tb_meta: Box<MssqlTbMeta>,
         partition_col: String,
         partition_col_type: MssqlColType,
-        sql_le: String,
-        sql_range: String,
+        sql_le: Arc<RdbSnapshotQuery>,
+        sql_range: Arc<RdbSnapshotQuery>,
         chunk: Box<SnapshotChunk>,
         extract_state: ExtractState,
     },
@@ -130,8 +131,8 @@ enum MssqlActiveTableMode {
         running_chunks: usize,
         partition_col: String,
         partition_col_type: Box<MssqlColType>,
-        sql_le: String,
-        sql_range: String,
+        sql_le: Arc<RdbSnapshotQuery>,
+        sql_range: Arc<RdbSnapshotQuery>,
     },
 }
 
@@ -419,8 +420,8 @@ impl MssqlSnapshotExtractor {
         tb_meta: MssqlTbMeta,
         partition_col: String,
         partition_col_type: MssqlColType,
-        sql_le: String,
-        sql_range: String,
+        sql_le: Arc<RdbSnapshotQuery>,
+        sql_range: Arc<RdbSnapshotQuery>,
         chunk: SnapshotChunk,
         mut extract_state: ExtractState,
     ) -> anyhow::Result<(u64, u64, ColValue)> {
@@ -431,29 +432,29 @@ impl MssqlSnapshotExtractor {
         );
         let chunk_id = chunk.chunk_id;
         let (start_value, end_value) = chunk.chunk_range;
-        let mut query = match (&start_value, &end_value) {
-            (ColValue::None, ColValue::None) | (_, ColValue::None) => bail!(
-                "chunk {} has bad range for {}.{}",
-                chunk_id,
-                Self::quote(&tb_meta.basic.schema),
-                Self::quote(&tb_meta.basic.tb)
-            ),
-            (ColValue::None, _) => Query::new(sql_le),
-            _ => Query::new(sql_range),
-        };
-        match (&start_value, &end_value) {
-            (ColValue::None, end) => {
-                query.bind_col_value(end, &partition_col_type)?;
-            }
-            (start, end) => {
-                query.bind_col_value(start, &partition_col_type)?;
-                query.bind_col_value(end, &partition_col_type)?;
-            }
+        if matches!(end_value, ColValue::None) {
+            bail!(DtError::InvariantViolated(format!(
+                "chunk {chunk_id} has no end value"
+            )));
         }
+        let range_values = [&start_value, &end_value];
+        let (snapshot_query, values) = if matches!(start_value, ColValue::None) {
+            (&sql_le, &range_values[1..])
+        } else {
+            (&sql_range, &range_values[..])
+        };
+        if snapshot_query.cols.iter().any(|col| col != &partition_col) {
+            bail!(DtError::InvariantViolated(format!(
+                "unexpected chunk binding columns {:?}",
+                snapshot_query.cols
+            )));
+        }
+        let query = snapshot_query.create_mssql_query(&tb_meta, values)?;
         let ignore_cols = shared
             .filter
             .get_ignore_cols_with_db(&tb_meta.basic.db, &tb_meta.basic.schema, &tb_meta.basic.tb)
             .cloned();
+
         let mut connection = shared.connection_pool.get().await?;
         let mut rows = query
             .query(connection.client_mut())
@@ -792,6 +793,7 @@ impl MssqlTableCtx {
             return Ok(MssqlActiveTableMode::Table);
         }
         let order_cols = vec![partition_col.clone()];
+        let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = *tb_meta.get_col_type(&partition_col)?;
         let ignore_cols = self
             .shared
@@ -799,8 +801,6 @@ impl MssqlTableCtx {
             .get_ignore_cols_with_db(&self.table_id.db, &self.table_id.schema, &self.table_id.tb)
             .cloned()
             .unwrap_or_default();
-        let mut select_ignore_cols = ignore_cols;
-        select_ignore_cols.remove(&partition_col);
         let where_condition = self
             .shared
             .filter
@@ -812,17 +812,21 @@ impl MssqlTableCtx {
             .cloned()
             .unwrap_or_default();
         let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(&select_ignore_cols)
+            .with_ignore_cols(&ignore_cols)
             .with_order_cols(&order_cols)
+            .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
-            .with_predicate_type(OrderKeyPredicateType::LessThanOrEqual)
-            .build()?;
+            .with_predicate_type(OrderKeyPredicateType::AtOrBefore)
+            .build()
+            .map(Arc::new)?;
         let sql_range = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(&select_ignore_cols)
+            .with_ignore_cols(&ignore_cols)
             .with_order_cols(&order_cols)
+            .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::Range)
-            .build()?;
+            .build()
+            .map(Arc::new)?;
         Ok(MssqlActiveTableMode::Chunk {
             splitter,
             initial_chunks,
@@ -879,17 +883,21 @@ impl MssqlTableCtx {
             .cloned()
             .unwrap_or_default();
         let empty_ignore_cols = HashSet::new();
-        let order_cols = order_cols.to_vec();
+        let order_col_attrs = order_cols
+            .iter()
+            .map(|col| (col.clone(), SortDirection::Asc))
+            .collect();
         let sql = RdbSnapshotExtractStatement::from(tb_meta)
             .with_ignore_cols(ignore_cols.unwrap_or(&empty_ignore_cols))
-            .with_order_cols(&order_cols)
+            .with_order_cols(order_cols)
+            .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::IsNull)
             .build()?;
         let mut connection = self.shared.connection_pool.get().await?;
-        let mut rows = connection
-            .client_mut()
-            .query(&sql, &[])
+        let mut rows = sql
+            .create_mssql_query(tb_meta, &[])?
+            .query(connection.client_mut())
             .await?
             .into_row_stream();
         let mut count = 0u64;
@@ -1023,9 +1031,9 @@ impl MssqlTableCtx {
             .with_where_condition(&where_condition)
             .build()?;
         let mut connection = self.shared.connection_pool.get().await?;
-        let mut rows = connection
-            .client_mut()
-            .query(&sql, &[])
+        let mut rows = sql
+            .create_mssql_query(tb_meta, &[])?
+            .query(connection.client_mut())
             .await?
             .into_row_stream();
         let mut count = 0u64;
@@ -1073,22 +1081,20 @@ impl MssqlTableCtx {
             )
             .cloned()
             .unwrap_or_default();
-        let mut select_ignore_cols = ignore_cols.cloned().unwrap_or_default();
-        for order_col in &tb_meta.basic.order_cols {
-            select_ignore_cols.remove(order_col);
-        }
         let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(&select_ignore_cols)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
+            .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
             .with_predicate_type(OrderKeyPredicateType::None)
             .with_limit(self.shared.batch_size)
             .build()?;
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(&select_ignore_cols)
+            .with_ignore_cols(ignore_cols.unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
+            .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
-            .with_predicate_type(OrderKeyPredicateType::GreaterThan)
+            .with_predicate_type(OrderKeyPredicateType::After)
             .with_limit(self.shared.batch_size)
             .build()?;
         let mut extracted_count = 0u64;
@@ -1096,24 +1102,14 @@ impl MssqlTableCtx {
 
         loop {
             let bind_values = start_values.clone();
-            let query = if start_from_beginning {
+            let snapshot_query = if start_from_beginning {
                 start_from_beginning = false;
-                Query::new(sql_from_beginning.clone())
+                &sql_from_beginning
             } else {
-                let mut query = Query::new(sql_from_value.clone());
-                for order_col in &tb_meta.basic.order_cols {
-                    let value = bind_values.get(order_col).ok_or_else(|| {
-                        anyhow!(
-                            "{}.{} order column {} has no resume value",
-                            MssqlSnapshotExtractor::quote(&self.table_id.schema),
-                            MssqlSnapshotExtractor::quote(&self.table_id.tb),
-                            MssqlSnapshotExtractor::quote(order_col)
-                        )
-                    })?;
-                    query.bind_col_value(value, tb_meta.get_col_type(order_col)?)?;
-                }
-                query
+                &sql_from_value
             };
+            let values = snapshot_query.get_bind_values(&bind_values)?;
+            let query = snapshot_query.create_mssql_query(tb_meta, &values)?;
 
             let mut connection = self.shared.connection_pool.get().await?;
             let mut rows = query

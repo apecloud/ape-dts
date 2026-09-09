@@ -42,6 +42,32 @@ pub enum MssqlColType {
 }
 
 impl MssqlColType {
+    pub fn order_key_weight(&self) -> Option<u32> {
+        Some(match self {
+            Self::Int1 | Self::Int2 | Self::Int4 | Self::Int8 => 1,
+            Self::Datetime4
+            | Self::Datetime
+            | Self::Datetimen
+            | Self::Daten
+            | Self::Timen
+            | Self::Datetime2
+            | Self::DatetimeOffsetn => 2,
+            Self::Money | Self::Money4 | Self::Decimaln | Self::Numericn => 3,
+            Self::Guid | Self::Bit | Self::Bitn => 4,
+            Self::BigVarBin | Self::BigBinary => 6,
+            Self::BigVarChar | Self::BigChar | Self::NVarchar | Self::NChar => 8,
+            Self::Float4 | Self::Float8 => 12,
+            Self::Xml
+            | Self::Text
+            | Self::Image
+            | Self::NText
+            | Self::Geometry
+            | Self::Geography
+            | Self::HierarchyId
+            | Self::AssemblyUdt => return None,
+        })
+    }
+
     pub fn can_be_splitted(&self) -> bool {
         matches!(
             self,

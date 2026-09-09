@@ -16,6 +16,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_order_key_test() -> anyhow::Result<()> {
+        crate::test_runner::rdb_order_key_test::run_order_key_test(DbType::Mysql).await
+    }
+
+    #[tokio::test]
+    #[serial]
     #[ignore = "requires SSL-enabled MySQL instances and configured ssl_ca_path"]
     async fn snapshot_ssl_test() {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/ssl_test").await;

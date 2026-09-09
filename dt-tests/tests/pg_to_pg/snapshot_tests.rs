@@ -16,6 +16,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn snapshot_order_key_test() -> anyhow::Result<()> {
+        crate::test_runner::rdb_order_key_test::run_order_key_test(DbType::Pg).await
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn snapshot_big_packet_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/big_packet_test").await;
     }

@@ -13,8 +13,8 @@ use crate::{
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         ddl_meta::ddl_data::DdlData,
-        rdb_meta_manager::{RdbMetaManager, RDB_PRIMARY_KEY_FLAG},
-        rdb_tb_meta::RdbTbMeta,
+        rdb_meta_manager::{RdbMetaManager, RDB_PRIMARY_KEY},
+        rdb_tb_meta::{RdbTbMeta, SortDirection},
         row_data::RowData,
     },
     utils::sql_util::SqlUtil,
@@ -58,6 +58,7 @@ const TABLE_KEYS_SQL: &str = r#"
 SELECT
     i.name AS index_name,
     i.is_primary_key,
+    ic.is_descending_key,
     c.name AS column_name
 FROM {catalog}sys.tables AS t
 JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
@@ -152,47 +153,27 @@ impl MssqlMetaManager {
                 return Err(Self::table_not_found(db, schema, tb));
             }
 
-            let key_map = self.parse_keys(db, schema, tb).await?;
-            // Special values are projected to a driver-compatible wire type. Its ordering is
-            // not necessarily the SQL Server ordering of the source type, so it cannot safely
-            // drive snapshot pagination or resume predicates.
-            let snapshot_key_map = key_map
-                .iter()
-                .filter(|(_, cols)| {
-                    !cols.iter().any(|col| {
-                        col_type_map
-                            .get(col)
-                            .is_some_and(MssqlColType::requires_special_transfer)
-                    })
-                })
-                .map(|(key, cols)| (key.clone(), cols.clone()))
-                .collect::<HashMap<_, _>>();
-            let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&snapshot_key_map, &cols, &nullable_cols)?;
-            self.cache.insert(
-                cache_key.clone(),
-                MssqlTbMeta {
-                    basic: RdbTbMeta {
-                        db: db.to_string(),
-                        schema: schema.to_string(),
-                        tb: tb.to_string(),
-                        cols,
-                        nullable_cols,
-                        col_origin_type_map,
-                        key_map,
-                        order_cols,
-                        partition_col,
-                        id_cols,
-                        foreign_keys: vec![],
-                        ref_by_foreign_keys: vec![],
-                    },
-                    col_type_map,
-                    identity_col,
-                    computed_cols,
-                    generated_always_type_map,
-                    rowversion_cols,
+            let (key_map, key_col_attrs) = self.parse_keys(db, schema, tb).await?;
+            let mut tb_meta = MssqlTbMeta {
+                basic: RdbTbMeta {
+                    db: db.to_string(),
+                    schema: schema.to_string(),
+                    tb: tb.to_string(),
+                    cols,
+                    nullable_cols,
+                    col_origin_type_map,
+                    key_map,
+                    ..Default::default()
                 },
-            );
+                col_type_map,
+                identity_col,
+                computed_cols,
+                generated_always_type_map,
+                rowversion_cols,
+            };
+            let key_scores = Self::get_key_scores(&tb_meta)?;
+            RdbMetaManager::set_order_cols(&mut tb_meta.basic, &key_scores, key_col_attrs)?;
+            self.cache.insert(cache_key.clone(), tb_meta);
         }
 
         self.cache
@@ -408,12 +389,54 @@ impl MssqlMetaManager {
         })
     }
 
+    pub fn get_key_scores(tb_meta: &MssqlTbMeta) -> anyhow::Result<HashMap<String, u32>> {
+        let mut scores = HashMap::new();
+        for (key, cols) in &tb_meta.basic.key_map {
+            if cols.is_empty() {
+                continue;
+            }
+            let mut score = Some(0);
+            for col in cols {
+                let weight = tb_meta.get_col_type(col)?.order_key_weight();
+                score = score.zip(weight).map(|(total, weight)| total + weight);
+            }
+            if let Some(score) = score {
+                scores.insert(key.clone(), score);
+            }
+        }
+        Ok(scores)
+    }
+
+    // Example (exercised by snapshot/order_key_test):
+    // CREATE TABLE [order_key_src].[dbo].[parse_keys_example] (
+    //     id int NOT NULL, value int NOT NULL,
+    //     CONSTRAINT some_pk_name PRIMARY KEY (id DESC, value ASC),
+    //     CONSTRAINT some_uk_name UNIQUE (value DESC)
+    // );
+    // CREATE UNIQUE INDEX uk_example ON [order_key_src].[dbo].[parse_keys_example] (value ASC, id DESC);
+    // CREATE INDEX non_unique_key ON [order_key_src].[dbo].[parse_keys_example] (id);
+    // TABLE_KEYS_SQL returns these rows (shown grouped by key):
+    // index_name   | is_primary_key | is_descending_key | column_name
+    // some_pk_name | 1              | 1                 | id
+    // some_pk_name | 1              | 0                 | value
+    // some_uk_name | 0              | 1                 | value
+    // uk_example   | 0              | 0                 | value
+    // uk_example   | 0              | 1                 | id
+    // key_map = {RDB_PRIMARY_KEY: [id, value], some_uk_name: [value], uk_example: [value, id]}
+    // key_col_attrs = {RDB_PRIMARY_KEY: {id: Desc, value: Asc},
+    //                  some_uk_name: {value: Desc}, uk_example: {value: Asc, id: Desc}}
+    // is_primary_key identifies named primary keys; key_ordinal preserves column
+    // order. Non-unique, filtered, disabled and hypothetical indexes are excluded;
+    // INCLUDE columns do not become key columns (covered by catalog_key in the test).
     async fn parse_keys(
         &self,
         db: &str,
         schema: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
+    ) -> anyhow::Result<(
+        HashMap<String, Vec<String>>,
+        HashMap<String, HashMap<String, SortDirection>>,
+    )> {
         let mut query = Query::new(Self::catalog_sql(TABLE_KEYS_SQL, db));
         query.bind(schema);
         query.bind(tb);
@@ -427,6 +450,7 @@ impl MssqlMetaManager {
             .object(Self::table_object(schema, tb))?;
 
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut key_col_attrs: HashMap<String, HashMap<String, SortDirection>> = HashMap::new();
         for row in rows {
             let index_name =
                 MssqlColValueConvertor::from_query_required_string(&row, "index_name")?;
@@ -434,13 +458,23 @@ impl MssqlMetaManager {
                 MssqlColValueConvertor::from_query_required_bool(&row, "is_primary_key")?;
             let col = MssqlColValueConvertor::from_query_required_string(&row, "column_name")?;
             let key_name = if is_primary_key {
-                RDB_PRIMARY_KEY_FLAG.to_string()
+                RDB_PRIMARY_KEY.to_string()
             } else {
                 index_name
             };
+            let direction =
+                if MssqlColValueConvertor::from_query_required_bool(&row, "is_descending_key")? {
+                    SortDirection::Desc
+                } else {
+                    SortDirection::Asc
+                };
+            key_col_attrs
+                .entry(key_name.clone())
+                .or_default()
+                .insert(col.clone(), direction);
             key_map.entry(key_name).or_default().push(col);
         }
-        Ok(key_map)
+        Ok((key_map, key_col_attrs))
     }
 
     fn catalog_sql(template: &str, db: &str) -> String {

@@ -11,6 +11,7 @@ pub mod rdb_clickhouse_test_runner;
 pub mod rdb_cycle_test_runner;
 pub mod rdb_kafka_rdb_test_runner;
 pub mod rdb_lua_test_runner;
+pub mod rdb_order_key_test;
 pub mod rdb_redis_test_runner;
 pub mod rdb_sql_test_runner;
 pub mod rdb_starrocks_test_runner;
