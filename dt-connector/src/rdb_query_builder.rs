@@ -13,6 +13,7 @@ use dt_common::{
         col_value::ColValue,
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
         pg::pg_tb_meta::PgTbMeta,
+        rdb_meta_manager::RDB_PRIMARY_KEY,
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
         row_type::RowType,
@@ -366,7 +367,7 @@ impl RdbQueryBuilder<'_> {
         key_cols: &HashSet<&String>,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
         let mut query_info = self.get_insert_query(row_data, placeholder)?;
-        let primary_key_cols = self.rdb_tb_meta.key_map.get("primary");
+        let primary_key_cols = self.rdb_tb_meta.key_map.get(RDB_PRIMARY_KEY);
         let after = row_data.require_after()?;
         let mut index = query_info.cols.len() + 1;
         let mut set_pairs = Vec::new();
@@ -949,7 +950,7 @@ impl RdbQueryBuilder<'_> {
     }
 
     fn check_primary_key_changed(&self, row_data: &RowData) -> anyhow::Result<bool> {
-        let Some(primary_key_cols) = self.rdb_tb_meta.key_map.get("primary") else {
+        let Some(primary_key_cols) = self.rdb_tb_meta.key_map.get(RDB_PRIMARY_KEY) else {
             return Ok(false);
         };
         if self.rdb_tb_meta.id_cols.len() != primary_key_cols.len()
@@ -979,6 +980,7 @@ mod tests {
         col_value::ColValue,
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
         pg::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, pg_value_type::PgValueType},
+        rdb_meta_manager::RDB_PRIMARY_KEY,
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
         row_type::RowType,
@@ -1050,7 +1052,7 @@ mod tests {
 
     fn build_pg_tb_meta() -> PgTbMeta {
         let mut key_map = HashMap::new();
-        key_map.insert("primary".to_string(), vec!["id".to_string()]);
+        key_map.insert(RDB_PRIMARY_KEY.to_string(), vec!["id".to_string()]);
         key_map.insert("uk_code".to_string(), vec!["code".to_string()]);
 
         let mut col_type_map = HashMap::new();

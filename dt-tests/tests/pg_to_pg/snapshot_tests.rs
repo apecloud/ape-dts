@@ -6,7 +6,9 @@ mod test {
     use dt_common::config::config_enums::DbType;
     use serial_test::serial;
 
-    use crate::test_runner::test_base::TestBase;
+    use crate::test_runner::{
+        test_base::TestBase, test_cases::rdb_order_key_test::run_order_key_test,
+    };
 
     #[tokio::test]
     #[serial]
@@ -17,7 +19,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn snapshot_order_key_test() -> anyhow::Result<()> {
-        crate::test_runner::rdb_order_key_test::run_order_key_test(DbType::Pg).await
+        run_order_key_test(DbType::Pg).await
     }
 
     #[tokio::test]
