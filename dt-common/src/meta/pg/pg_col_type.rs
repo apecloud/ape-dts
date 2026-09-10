@@ -25,6 +25,25 @@ impl std::fmt::Display for PgColType {
 
 #[allow(dead_code)]
 impl PgColType {
+    pub fn order_key_weight(&self) -> Option<u32> {
+        // Unknown types are represented as strings too. Use catalog OIDs/category,
+        // rather than assigning them the cost of a built-in text column.
+        Some(match self.oid {
+            20 | 21 | 23 | 26 => 1,
+            1082 | 1083 | 1114 | 1184 | 1186 | 1266 => 2,
+            790 | 1700 => 3,
+            16 | 1560 | 1562 | 2950 => 4,
+            17 => 6,
+            18 | 19 | TEXT_OID | VARCHAR_OID | BPCHAR_OID => 8,
+            700 | 701 => 12,
+            650 | 774 | 829 | 869 => 16,
+            _ if self.is_array() || matches!(self.category.as_str(), "R") => 20,
+            // The key catalog guarantees a complete ordinary-column unique index.
+            // Keep existing indexable types eligible, including text-roundtripped types.
+            _ => 32,
+        })
+    }
+
     pub fn get_alias(&self) -> String {
         // PostgreSQL bit string docs:
         // https://www.postgresql.org/docs/current/datatype-bit.html

@@ -148,6 +148,9 @@ impl<'pool, 'meta> MssqlTableSinkSession<'pool, 'meta> {
             .filter(|col| self.tb_meta.is_writable_col(col))
             .map(|col| {
                 let col_type = *self.tb_meta.get_col_type(col)?;
+                if col_type.requires_special_transfer() {
+                    bail!("MSSQL bulk insert does not support specially transferred column {col}");
+                }
                 Self::ensure_bulk_insert_type_supported(col, &col_type)?;
                 Ok((col.as_str(), col_type))
             })

@@ -78,4 +78,12 @@ CREATE TABLE [ape_dts_snapshot_splitter_component_test].[full_table].[image_valu
     ([id] int NOT NULL PRIMARY KEY, [value] image NULL);
 CREATE TABLE [ape_dts_snapshot_splitter_component_test].[full_table].[xml_value]
     ([id] int NOT NULL PRIMARY KEY, [value] xml NULL);
+CREATE TABLE [ape_dts_snapshot_splitter_component_test].[full_table].[geometry_value]
+    ([id] int NOT NULL PRIMARY KEY, [value] geometry NULL);
+CREATE TABLE [ape_dts_snapshot_splitter_component_test].[full_table].[geography_value]
+    ([id] int NOT NULL PRIMARY KEY, [value] geography NULL);
+CREATE TABLE [ape_dts_snapshot_splitter_component_test].[full_table].[hierarchyid_value]
+    ([id] int NOT NULL PRIMARY KEY, [value] hierarchyid NULL);
+CREATE TABLE [ape_dts_snapshot_splitter_component_test].[full_table].[bigvariant_value]
+    ([id] int NOT NULL PRIMARY KEY, [value] [dbo].[BigVariant] NULL);
 GO

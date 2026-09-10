@@ -1,16 +1,20 @@
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
     use anyhow::{ensure, Context};
     use dt_common::meta::{
-        adaptor::{mssql_col_value_convertor::MssqlColValueConvertor, tiberius_ext::TiberiusExt},
+        adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         col_value::ColValue,
         mssql::{
             mssql_col_type::MssqlColType, mssql_connection_pool::MssqlClient,
-            mssql_meta_manager::MssqlMetaManager,
+            mssql_meta_manager::MssqlMetaManager, mssql_query_builder::MssqlTableSqlBuilder,
+            mssql_tb_meta::MssqlTbMeta,
         },
+        row_data::RowData,
+        row_type::RowType,
     };
     use serial_test::serial;
-    use tiberius::Query;
 
     use crate::{
         mssql_to_mssql::functionality::mssql_component_test_context::{
@@ -22,6 +26,8 @@ mod test {
     struct ColumnCase {
         source_table: TestTableName,
         destination_table: TestTableName,
+        source_meta: MssqlTbMeta,
+        destination_meta: MssqlTbMeta,
         col_type: MssqlColType,
     }
 
@@ -64,6 +70,8 @@ mod test {
             cases.push(ColumnCase {
                 source_table: source_table.clone(),
                 destination_table,
+                source_meta,
+                destination_meta,
                 col_type: source_type,
             });
         }
@@ -75,10 +83,12 @@ mod test {
         destination_client: &mut MssqlClient,
         case: &ColumnCase,
     ) -> anyhow::Result<()> {
+        let source_cols =
+            MssqlTableSqlBuilder::new(&case.source_meta, None).build_extract_cols_str()?;
         let source_rows = source_client
             .query(
                 format!(
-                    "SELECT [case_id], [value] FROM {} ORDER BY [case_id]",
+                    "SELECT {source_cols} FROM {} ORDER BY [case_id]",
                     case.source_table.quoted_name()
                 ),
                 &[],
@@ -109,27 +119,46 @@ mod test {
                 None => ColValue::None,
             };
 
-            let mut insert = Query::new(format!(
-                "INSERT INTO {} ([case_id], [value]) VALUES (@P1, @P2)",
-                case.destination_table.quoted_name()
-            ));
-            insert.bind(case_id);
-            insert
-                .bind_col_value(&parsed_value, &case.col_type)
+            let row_data = RowData::new(
+                case.destination_table.db.clone(),
+                case.destination_table.schema.clone(),
+                case.destination_table.tb.clone(),
+                0,
+                RowType::Insert,
+                None,
+                Some(HashMap::from([
+                    ("case_id".to_string(), ColValue::UnsignedTiny(case_id)),
+                    ("value".to_string(), parsed_value),
+                ])),
+            );
+            let destination_builder = MssqlTableSqlBuilder::new(&case.destination_meta, None);
+            let query_info = destination_builder
+                .get_insert_query(&row_data, false)
+                .with_context(|| {
+                    format!(
+                        "failed to build insert for {} row {case_id}",
+                        case.destination_table.quoted_name()
+                    )
+                })?;
+            destination_builder
+                .create_query(&query_info)
                 .with_context(|| {
                     format!(
                         "failed to bind value for {} row {case_id}",
                         case.source_table.quoted_name()
                     )
-                })?;
-            insert.execute(destination_client).await?;
+                })?
+                .execute(destination_client)
+                .await?;
             expected_rows.push((case_id, source_value));
         }
 
+        let destination_cols =
+            MssqlTableSqlBuilder::new(&case.destination_meta, None).build_extract_cols_str()?;
         let destination_rows = destination_client
             .query(
                 format!(
-                    "SELECT [case_id], [value] FROM {} ORDER BY [case_id]",
+                    "SELECT {destination_cols} FROM {} ORDER BY [case_id]",
                     case.destination_table.quoted_name()
                 ),
                 &[],

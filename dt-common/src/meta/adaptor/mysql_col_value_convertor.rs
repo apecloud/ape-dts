@@ -3,6 +3,7 @@ use std::io::Cursor;
 use anyhow::bail;
 use byteorder::{LittleEndian, ReadBytesExt};
 use chrono::{TimeZone, Utc};
+use geozero::{wkb::Wkb, ToWkt};
 use mysql_binlog_connector_rust::column::{
     column_value::ColumnValue, json::json_binary::JsonBinary,
 };
@@ -10,7 +11,7 @@ use sqlx::{mysql::MySqlRow, types::BigDecimal, Row};
 
 use crate::{
     config::config_enums::DbType,
-    error::DtError,
+    error::{DtError, DtOptionExt, DtResultExt},
     meta::{
         col_value::ColValue, mysql::mysql_col_type::MysqlColType, time::dt_utc_time::DtNaiveTime,
     },
@@ -21,12 +22,23 @@ pub struct MysqlColValueConvertor {}
 
 impl MysqlColValueConvertor {
     // ref https://dev.mysql.com/doc/refman/8.0/en/gis-data-formats.html
-    fn normalize_spatial_binlog_value(value: Vec<u8>) -> Vec<u8> {
-        if value.len() > 4 && Self::looks_like_wkb(&value[4..]) {
-            value[4..].to_vec()
+    fn parse_spatial_binlog_value(value: Vec<u8>) -> anyhow::Result<ColValue> {
+        let (srid, wkb) = if value.len() > 4 && Self::looks_like_wkb(&value[4..]) {
+            let srid = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
+            let srid = i32::try_from(srid).dt_error(DtError::DatabaseInvariant(
+                DbType::Mysql,
+                format!("spatial value has unsupported SRID {srid}"),
+            ))?;
+            (srid, &value[4..])
         } else {
-            value
-        }
+            (0, value.as_slice())
+        };
+
+        let wkt = Wkb(wkb).to_wkt().dt_error(DtError::DatabaseInvariant(
+            DbType::Mysql,
+            "failed to convert spatial WKB to WKT".to_string(),
+        ))?;
+        Ok(ColValue::Spatial { srid, wkt })
     }
 
     fn looks_like_wkb(value: &[u8]) -> bool {
@@ -41,6 +53,23 @@ impl MysqlColValueConvertor {
         } % 1000;
 
         (1..=7).contains(&geometry_type)
+    }
+
+    fn parse_spatial_text(value: &str) -> anyhow::Result<ColValue> {
+        let (srid, wkt) = value
+            .split_once('|')
+            .or_dt_error(DtError::DatabaseInvariant(
+                DbType::Mysql,
+                "spatial transfer value is missing the SRID separator".to_string(),
+            ))?;
+        let srid = srid.parse::<i32>().dt_error(DtError::DatabaseInvariant(
+            DbType::Mysql,
+            format!("spatial transfer value has invalid SRID {srid}"),
+        ))?;
+        Ok(ColValue::Spatial {
+            srid,
+            wkt: wkt.to_string(),
+        })
     }
 
     pub fn parse_time(buf: Vec<u8>) -> anyhow::Result<ColValue> {
@@ -217,7 +246,7 @@ impl MysqlColValueConvertor {
                     // tinytext, mediumtext, longtext, text
                     ColValue::RawString(v)
                 } else if col_type.is_spatial() {
-                    ColValue::Blob(Self::normalize_spatial_binlog_value(v))
+                    Self::parse_spatial_binlog_value(v)?
                 } else {
                     // tinyblob, mediumblob, longblob, blob
                     ColValue::Blob(v)
@@ -350,16 +379,17 @@ impl MysqlColValueConvertor {
 
                 MysqlColType::Json => ColValue::Json2(value_str),
 
-                MysqlColType::Binary { .. }
-                | MysqlColType::VarBinary { .. }
-                | MysqlColType::Geometry
+                MysqlColType::Geometry
                 | MysqlColType::Point
                 | MysqlColType::LineString
                 | MysqlColType::Polygon
                 | MysqlColType::MultiPoint
                 | MysqlColType::MultiLineString
                 | MysqlColType::MultiPolygon
-                | MysqlColType::GeometryCollection
+                | MysqlColType::GeometryCollection => Self::parse_spatial_text(&value_str)?,
+
+                MysqlColType::Binary { .. }
+                | MysqlColType::VarBinary { .. }
                 | MysqlColType::TinyBlob
                 | MysqlColType::MediumBlob
                 | MysqlColType::Blob
@@ -490,16 +520,20 @@ impl MysqlColValueConvertor {
                 Ok(ColValue::String(value))
             }
 
-            MysqlColType::Binary { .. }
-            | MysqlColType::VarBinary { .. }
-            | MysqlColType::Geometry
+            MysqlColType::Geometry
             | MysqlColType::Point
             | MysqlColType::LineString
             | MysqlColType::Polygon
             | MysqlColType::MultiPoint
             | MysqlColType::MultiLineString
             | MysqlColType::MultiPolygon
-            | MysqlColType::GeometryCollection
+            | MysqlColType::GeometryCollection => {
+                let value: String = row.try_get(col)?;
+                Self::parse_spatial_text(&value)
+            }
+
+            MysqlColType::Binary { .. }
+            | MysqlColType::VarBinary { .. }
             | MysqlColType::TinyBlob
             | MysqlColType::MediumBlob
             | MysqlColType::Blob
@@ -581,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn from_binlog_strips_mysql_spatial_srid_prefix() {
+    fn from_binlog_preserves_mysql_spatial_srid() {
         let wkb = point_wkb();
         let mut mysql_internal = 4326u32.to_le_bytes().to_vec();
         mysql_internal.extend_from_slice(&wkb);
@@ -592,7 +626,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ColValue::Blob(wkb), value);
+        assert_eq!(
+            ColValue::Spatial {
+                srid: 4326,
+                wkt: "POINT(0 0)".to_string(),
+            },
+            value
+        );
     }
 
     #[test]
@@ -607,7 +647,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ColValue::Blob(wkb), value);
+        assert_eq!(
+            ColValue::Spatial {
+                srid: 0,
+                wkt: "POINT(0 0)".to_string(),
+            },
+            value
+        );
     }
 
     #[test]
@@ -620,7 +666,24 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ColValue::Blob(wkb), value);
+        assert_eq!(
+            ColValue::Spatial {
+                srid: 0,
+                wkt: "POINT(0 0)".to_string(),
+            },
+            value
+        );
+    }
+
+    #[test]
+    fn from_str_parses_spatial_transfer_value() {
+        assert_eq!(
+            ColValue::Spatial {
+                srid: 4326,
+                wkt: "POINT(1 2)".to_string(),
+            },
+            MysqlColValueConvertor::from_str(&MysqlColType::Point, "4326|POINT(1 2)").unwrap()
+        );
     }
 
     #[test]

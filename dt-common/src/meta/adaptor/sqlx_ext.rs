@@ -210,8 +210,15 @@ impl<'q> SqlxMysqlExt<'q> for Query<'q, MySql, MySqlArguments> {
     fn bind_col_value<'b: 'q>(
         self,
         col_value: Option<&'b ColValue>,
-        _col_type: &MysqlColType,
+        col_type: &MysqlColType,
     ) -> Self {
+        if col_type.is_spatial() {
+            return match col_value {
+                Some(ColValue::Spatial { srid, wkt }) => self.bind(wkt).bind(srid),
+                _ => self.bind(Option::<String>::None).bind(Option::<i32>::None),
+            };
+        }
+
         if let Some(value) = col_value {
             match value {
                 ColValue::Tiny(v) => self.bind(v),

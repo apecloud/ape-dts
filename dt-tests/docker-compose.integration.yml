@@ -1413,10 +1413,16 @@ services:
       MSSQL_SA_PASSWORD: "ApeDts_mssql_2022!"
     ports:
       - "1433:1433"
+    volumes:
+      - ./docker/mssql/install-bigvariant.sql:/opt/ape-dts-mssql/install-bigvariant.sql:ro
+      - ./docker/mssql/start-with-bigvariant.sh:/opt/ape-dts-mssql/start-with-bigvariant.sh:ro
+    command:
+      - /bin/bash
+      - /opt/ape-dts-mssql/start-with-bigvariant.sh
     healthcheck:
       test:
         - CMD-SHELL
-        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$${MSSQL_SA_PASSWORD}" -C -Q "SELECT 1" || exit 1
+        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$${MSSQL_SA_PASSWORD}" -C -d model -Q "IF TYPE_ID(N'dbo.BigVariant') IS NULL THROW 50000, 'BigVariant is not initialized', 1" || exit 1
       timeout: 5s
       retries: 24
       start_period: 30s
@@ -1431,10 +1437,16 @@ services:
       MSSQL_SA_PASSWORD: "ApeDts_mssql_2022!"
     ports:
       - "1434:1433"
+    volumes:
+      - ./docker/mssql/install-bigvariant.sql:/opt/ape-dts-mssql/install-bigvariant.sql:ro
+      - ./docker/mssql/start-with-bigvariant.sh:/opt/ape-dts-mssql/start-with-bigvariant.sh:ro
+    command:
+      - /bin/bash
+      - /opt/ape-dts-mssql/start-with-bigvariant.sh
     healthcheck:
       test:
         - CMD-SHELL
-        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$${MSSQL_SA_PASSWORD}" -C -Q "SELECT 1" || exit 1
+        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$${MSSQL_SA_PASSWORD}" -C -d model -Q "IF TYPE_ID(N'dbo.BigVariant') IS NULL THROW 50000, 'BigVariant is not initialized', 1" || exit 1
       timeout: 5s
       retries: 24
       start_period: 30s
