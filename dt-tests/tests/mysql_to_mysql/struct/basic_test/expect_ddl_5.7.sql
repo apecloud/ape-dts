@@ -22,8 +22,8 @@ CREATE TABLE `full_column_type` (
   `date_col` date DEFAULT NULL COMMENT 'date_col_comment',
   `datetime_col` datetime DEFAULT NULL COMMENT 'datetime_col_comment',
   `datetime_col2` datetime(6) DEFAULT NULL COMMENT 'datetime_col2_comment',
-  `timestamp_col` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'timestamp_col_comment',
-  `timestamp_col2` timestamp(6) NOT NULL DEFAULT '0000-00-00 00:00:00.000000' COMMENT 'timestamp_col2_comment',
+  `timestamp_col` timestamp NULL DEFAULT NULL COMMENT 'timestamp_col_comment',
+  `timestamp_col2` timestamp(6) NULL DEFAULT NULL COMMENT 'timestamp_col2_comment',
   `time_col` time DEFAULT NULL COMMENT 'time_col_comment',
   `time_col2` time(2) DEFAULT NULL COMMENT 'time_col2_comment',
   `year_col` year(4) DEFAULT NULL COMMENT 'year_col_comment',
@@ -64,9 +64,13 @@ CREATE TABLE `full_column_type_with_default` (
   `datetime_col` datetime DEFAULT '1970-01-01 00:00:00' COMMENT 'datetime_col_comment',
   `datetime_col2` datetime(6) DEFAULT '1970-01-01 00:00:00.000000' COMMENT 'datetime_col2_comment',
   `datetime_col3` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'datetime_col2_comment',
+  `datetime_precision_col4` datetime(6) DEFAULT CURRENT_TIMESTAMP(6),
+  `datetime_precision_col5` datetime(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'datetime_precision_col5_comment',
   `timestamp_col` timestamp NOT NULL DEFAULT '2024-01-01 00:00:00' COMMENT 'timestamp_col_comment',
   `timestamp_col2` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'timestamp_col2_comment',
   `timestamp_col3` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'timestamp_col3_comment',
+  `timestamp_precision_col4` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `timestamp_precision_col5` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'timestamp_precision_col5_comment',
   `time_col` time DEFAULT '00:00:00' COMMENT 'time_col_comment',
   `time_col2` time(2) DEFAULT '01:01:01.01' COMMENT 'time_col2_comment',
   `year_col` year(4) DEFAULT '1970' COMMENT 'year_col_comment',
@@ -99,7 +103,7 @@ CREATE TABLE `spatial_column_type` (
   `multipoint_col` multipoint DEFAULT NULL COMMENT 'multipoint_col_comment',
   `multilinestring_col` multilinestring DEFAULT NULL COMMENT 'multilinestring_col_comment',
   `multipolygon_col` multipolygon DEFAULT NULL COMMENT 'multipolygon_col_comment',
-  `geometrycollection_col` geomcollection DEFAULT NULL COMMENT 'geometrycollection_col_comment',
+  `geometrycollection_col` geometrycollection DEFAULT NULL COMMENT 'geometrycollection_col_comment',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8
 
@@ -160,14 +164,14 @@ CREATE TABLE `case_sensitive_column_name` (
 
 struct_it_mysql2mysql_1.match
 CREATE TABLE `match` (
-  `select_id` int NOT NULL AUTO_INCREMENT,
+  `select_id` int(11) NOT NULL AUTO_INCREMENT,
   `table` varchar(50) NOT NULL,
   `column` varchar(100) NOT NULL,
-  `offset` int NOT NULL,
+  `offset` int(11) NOT NULL,
   `unique_col` varchar(20) DEFAULT NULL,
-  `match` int DEFAULT NULL,
-  `check_col` int DEFAULT NULL,
-  `constraint_col` int DEFAULT NULL,
+  `match` int(11) DEFAULT NULL,
+  `check_col` int(11) DEFAULT NULL,
+  `constraint_col` int(11) DEFAULT NULL,
   PRIMARY KEY (`select_id`),
   UNIQUE KEY `uniq_unique_col` (`unique_col`),
   KEY `idx_index_on_index` (`offset`),

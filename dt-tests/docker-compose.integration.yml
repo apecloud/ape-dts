@@ -207,6 +207,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
+      - --character-set-server=utf8
+      - --collation-server=utf8_general_ci
     healthcheck:
       test:
         - CMD
@@ -238,6 +240,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
+      - --character-set-server=utf8
+      - --collation-server=utf8_general_ci
     healthcheck:
       test:
         - CMD
@@ -269,6 +273,8 @@ services:
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
       - --log-slave-updates=ON
+      - --character-set-server=utf8
+      - --collation-server=utf8_general_ci
     healthcheck:
       test:
         - CMD
