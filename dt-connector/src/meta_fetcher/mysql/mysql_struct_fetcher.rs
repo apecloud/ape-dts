@@ -253,6 +253,7 @@ impl MysqlStructFetcher {
     /// quoted literal. This applies to `CURRENT_TIMESTAMP` on TIMESTAMP / DATETIME columns.
     /// `col_type` is the raw `information_schema.COLUMNS.COLUMN_TYPE` string and may carry a
     /// precision suffix (e.g. `timestamp(6)`), so the base type name is compared by prefix.
+    #[inline(always)]
     fn is_current_timestamp_expression(col_type: &str, value: &str) -> bool {
         let t = col_type.to_lowercase();
         value.to_uppercase().starts_with("CURRENT_TIMESTAMP")
