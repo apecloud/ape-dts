@@ -8,7 +8,7 @@ use dt_common::{
     config::config_enums::DbType,
     error::DtError,
     meta::{
-        mysql::{mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager},
+        mysql::mysql_meta_manager::MysqlMetaManager,
         struct_meta::{
             statement::{
                 mysql_create_database_statement::MysqlCreateDatabaseStatement,
@@ -249,6 +249,16 @@ impl MysqlStructFetcher {
         Ok(results)
     }
 
+    /// Whether a column default value must be emitted as a bare expression (no quotes) instead of a
+    /// quoted literal. This applies to `CURRENT_TIMESTAMP` on TIMESTAMP / DATETIME columns.
+    /// `col_type` is the raw `information_schema.COLUMNS.COLUMN_TYPE` string and may carry a
+    /// precision suffix (e.g. `timestamp(6)`), so the base type name is compared by prefix.
+    fn is_current_timestamp_expression(col_type: &str, value: &str) -> bool {
+        let t = col_type.to_lowercase();
+        value.to_uppercase().starts_with("CURRENT_TIMESTAMP")
+            && (t.starts_with("timestamp") || t.starts_with("datetime"))
+    }
+
     async fn parse_column_default(
         &mut self,
         col_type: &str,
@@ -289,13 +299,13 @@ impl MysqlStructFetcher {
         // such as NOW() or CURRENT_DATE. The exception is that, for TIMESTAMP and DATETIME columns,
         // you can specify CURRENT_TIMESTAMP as the default.
         // 8.0: function or expression will also cause EXTRA to be 'DEFAULT_GENERATED'
-        let simple_mysql_col_type = self.meta_manager.to_simple_mysql_col_type(col_type);
-        if str.to_uppercase().starts_with("CURRENT_TIMESTAMP")
-            && matches!(
-                simple_mysql_col_type,
-                MysqlColType::DateTime { .. } | MysqlColType::Timestamp { .. }
-            )
-        {
+        //
+        // `col_type` is the raw information_schema.COLUMNS.COLUMN_TYPE string, which may carry a
+        // precision suffix, e.g. "timestamp(6)" / "datetime(6)". Match the base type name directly
+        // instead of `to_simple_mysql_col_type`, which does an exact match and returns Unknown for
+        // such types, causing the value to be emitted as DEFAULT 'CURRENT_TIMESTAMP(6)' and rejected
+        // by MySQL with 1064 (5.7) / 1067 (8.0).
+        if Self::is_current_timestamp_expression(col_type, &str) {
             return Ok(ColumnDefault::Expression(str));
         }
 
