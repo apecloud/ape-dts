@@ -49,6 +49,7 @@ pub(super) fn classify_mysql_code(code: &str) -> Option<ErrorCode> {
     match code {
         "1051" | "1054" | "1091" | "1109" | "1146" | "1305" => Some(ErrorCode::ObjectNotFound),
         "1049" => Some(ErrorCode::DatabaseNotFound),
+        "1050" | "1061" | "1826" => Some(ErrorCode::ObjectAlreadyExists),
         "1045" | "1698" | "3118" => Some(ErrorCode::AuthenticationFailed),
         "1044" | "1142" | "1143" | "1144" | "1145" | "1227" | "1370" | "1410" => {
             Some(ErrorCode::PermissionDenied)
@@ -63,5 +64,29 @@ pub(super) fn classify_mysql_code(code: &str) -> Option<ErrorCode> {
         | "2006" | "2013" => Some(ErrorCode::ConnectionFailed),
         "1235" | "1289" | "1295" => Some(ErrorCode::PrerequisiteNotMet),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::ErrorCode;
+
+    use super::classify_mysql_code;
+
+    #[test]
+    fn mysql_duplicate_object_codes_map_to_object_already_exists() {
+        // 1050 table exists, 1061 duplicate key name, 1826 duplicate foreign key name.
+        for code in ["1050", "1061", "1826"] {
+            assert_eq!(
+                classify_mysql_code(code),
+                Some(ErrorCode::ObjectAlreadyExists),
+                "mysql code {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrecognized_mysql_code_has_no_classification() {
+        assert_eq!(classify_mysql_code("9999"), None);
     }
 }

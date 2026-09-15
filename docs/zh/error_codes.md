@@ -52,6 +52,7 @@ ERROR REPORT
 | `RS001` | `ResourceExhausted` | 源端或目标端达到资源限制 |
 | `MD001` | `ObjectNotFound` | 必要的表、topic 或其他端点对象不存在 |
 | `MD002` | `DatabaseNotFound` | 数据库不存在 |
+| `MD003` | `ObjectAlreadyExists` | 迁移要创建的目标对象已存在 |
 | `DB001` | `DatabaseOperationFailed` | 数据库操作失败 |
 | `DB002` | `DatabaseOperationTimeout` | 数据库操作超时 |
 | `DB003` | `DatabaseOperationConflict` | 数据库操作与并发操作或已有数据库状态冲突 |
@@ -188,7 +189,7 @@ code 时使用 `IN999`。失败路径测试和代码评审仍需覆盖 raw provi
 错误及调用点 metadata。
 
 读取端点 catalog 或控制面元数据失败时保留类型化 provider error，由 provider 分类器
-决定错误码。对象不存在使用 `MD001`/`MD002`，结构不受支持使用 `PR005`，Ape-DTS
+决定错误码。对象不存在使用 `MD001`/`MD002`，迁移要创建但目标端已存在的对象使用 `MD003`，结构不受支持使用 `PR005`，Ape-DTS
 解析器不支持源端语句使用 `PR006`，版本或拓扑前置条件不满足使用 `PR001`/`PR002`，
 目标端拒绝 DDL 使用 `DB001`。源端 payload 或持久化迁移记录格式无效时使用 `DT001`。
 
@@ -210,6 +211,7 @@ origin 字段。错误码同时用于以下首批 SQLx 分类映射：
 |---|---|
 | PostgreSQL 缺少 schema/table/column/object/function；MySQL 缺少 table/column/object/routine | `MD001` |
 | PostgreSQL `3D000`/`57P04`，MySQL `1049` | `MD002` |
+| MySQL `1050`/`1061`/`1826`（表、索引或外键已存在） | `MD003` |
 | PostgreSQL SQLSTATE 类别 `28`；MySQL 账号拒绝、锁定或访问被拒绝 | `AU001` |
 | PostgreSQL `42501`；MySQL 命令、对象或管理权限错误 | `AU002` |
 | PostgreSQL SQLSTATE 类别 `08` 和 shutdown；MySQL client/server 连接错误 | `CN001` |

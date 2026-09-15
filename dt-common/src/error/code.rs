@@ -127,6 +127,11 @@ define_error_codes! {
         message: "The configured database was not found",
         hint: "Check the database name and create the database if it is required.",
     }
+    ObjectAlreadyExists {
+        code: "MD003",
+        message: "A destination object that the migration creates already exists",
+        hint: "Drop or rename the existing destination object, or leave it in place when structure sync is intentionally re-run.",
+    }
     DatabaseOperationFailed {
         code: "DB001",
         message: "A database operation failed",
