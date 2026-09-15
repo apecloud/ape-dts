@@ -69,9 +69,8 @@ pub(super) fn classify_mysql_code(code: &str) -> Option<ErrorCode> {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::ErrorCode;
-
     use super::classify_mysql_code;
+    use crate::error::ErrorCode;
 
     #[test]
     fn mysql_duplicate_object_codes_map_to_object_already_exists() {
