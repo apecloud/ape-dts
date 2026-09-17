@@ -158,16 +158,16 @@ impl SqlUtil {
         escaped_cols
     }
 
-    pub fn mysql_spatial_as_wkb_expr(col: &str, alias: &str) -> String {
-        format!("ST_AsBinary({}) AS {}", col, alias)
+    pub fn mysql_spatial_as_text_expr(col: &str, alias: &str) -> String {
+        format!("CONCAT(ST_SRID({col}), '|', ST_AsText({col})) AS {alias}")
     }
 
-    pub fn mysql_spatial_from_wkb_hex_expr(hex_value: &str) -> String {
-        format!("ST_GeomFromWKB(x'{}')", hex_value)
+    pub fn mysql_spatial_from_text_expr(wkt: &str, srid: i32) -> String {
+        format!("ST_GeomFromText('{}', {srid})", wkt.replace('\'', "''"))
     }
 
-    pub fn mysql_spatial_from_wkb_placeholder_expr() -> String {
-        "ST_GeomFromWKB(?)".to_string()
+    pub fn mysql_spatial_from_text_placeholder_expr() -> String {
+        "ST_GeomFromText(?, ?)".to_string()
     }
 
     pub fn mysql_comparison_placeholder(col_type: &MysqlColType) -> String {
@@ -371,16 +371,20 @@ mod tests {
     #[test]
     fn test_mysql_spatial_exprs() {
         assert_eq!(
-            "ST_AsBinary(`geo`) AS `geo`",
-            SqlUtil::mysql_spatial_as_wkb_expr("`geo`", "`geo`")
+            "CONCAT(ST_SRID(`geo`), '|', ST_AsText(`geo`)) AS `geo`",
+            SqlUtil::mysql_spatial_as_text_expr("`geo`", "`geo`")
         );
         assert_eq!(
-            "ST_GeomFromWKB(x'0101000000000000000000F03F000000000000F03F')",
-            SqlUtil::mysql_spatial_from_wkb_hex_expr("0101000000000000000000F03F000000000000F03F")
+            "ST_GeomFromText('POINT(1 2)', 4326)",
+            SqlUtil::mysql_spatial_from_text_expr("POINT(1 2)", 4326)
         );
         assert_eq!(
-            "ST_GeomFromWKB(?)",
-            SqlUtil::mysql_spatial_from_wkb_placeholder_expr()
+            "ST_GeomFromText(?, ?)",
+            SqlUtil::mysql_spatial_from_text_placeholder_expr()
+        );
+        assert_eq!(
+            "ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 2), POINT(3 4))', 0)",
+            SqlUtil::mysql_spatial_from_text_expr("GEOMETRYCOLLECTION(POINT(1 2), POINT(3 4))", 0)
         );
     }
 

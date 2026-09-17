@@ -7,7 +7,10 @@ use super::mssql_col_value_convertor::{
     parse_date, parse_datetime, parse_datetime_offset, parse_time, parse_uuid, parse_xml,
     MssqlColValueConvertor, MssqlColValueKind,
 };
-use crate::meta::{col_value::ColValue, mssql::mssql_col_type::MssqlColType};
+use crate::{
+    error::DtError,
+    meta::{col_value::ColValue, mssql::mssql_col_type::MssqlColType},
+};
 
 pub trait TiberiusExt<'q> {
     fn bind_col_value(
@@ -59,6 +62,26 @@ impl<'q> TiberiusExt<'q> for Query<'q> {
                 MssqlColType::Guid => MssqlColValueConvertor::bind_as(self, value, parse_uuid),
                 MssqlColType::Xml => MssqlColValueConvertor::bind_as(self, value, parse_xml),
                 _ => MssqlColValueConvertor::bind_as(self, value, as_text),
+            },
+            MssqlColValueKind::Spatial => match value {
+                ColValue::Spatial { srid, wkt } => {
+                    self.bind(Some(wkt.as_str()));
+                    self.bind(Some(*srid));
+                    Ok(())
+                }
+                ColValue::None => {
+                    self.bind(Option::<&str>::None);
+                    self.bind(Option::<i32>::None);
+                    Ok(())
+                }
+                ColValue::UnchangedToast => bail!(DtError::InvariantViolated(
+                    "cannot bind ColValue::UnchangedToast to MSSQL".to_string()
+                )),
+                _ => bail!(invalid_value(
+                    value,
+                    "MSSQL spatial",
+                    "expected ColValue::Spatial"
+                )),
             },
             MssqlColValueKind::Blob => MssqlColValueConvertor::bind_as(self, value, as_binary),
             MssqlColValueKind::Date => MssqlColValueConvertor::bind_as(self, value, parse_date),

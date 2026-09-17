@@ -6,6 +6,7 @@ mod test {
     use crate::test_runner::{
         rdb_test_runner::{RdbTestRunner, DST},
         test_base::TestBase,
+        test_cases::rdb_order_key_test::run_order_key_test,
     };
 
     async fn run_resume_test(test_dir: &str, expected_counts: &[(&str, usize)]) {
@@ -27,6 +28,12 @@ mod test {
     #[serial]
     async fn snapshot_basic_test() {
         TestBase::run_snapshot_test("mssql_to_mssql/snapshot/basic_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_order_key_test() -> anyhow::Result<()> {
+        run_order_key_test(DbType::Mssql).await
     }
 
     #[tokio::test]
@@ -55,7 +62,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    #[ignore = "SQL Server cannot update an identity column when MERGE matches another unique key"]
     async fn snapshot_on_duplicate_replace_test() {
         TestBase::run_snapshot_test("mssql_to_mssql/snapshot/on_duplicate_replace_test").await;
     }

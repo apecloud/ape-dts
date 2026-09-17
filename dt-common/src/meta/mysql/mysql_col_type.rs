@@ -101,6 +101,49 @@ pub enum MysqlColType {
 }
 
 impl MysqlColType {
+    pub fn order_key_weight(&self) -> Option<u32> {
+        Some(match self {
+            Self::TinyInt { .. }
+            | Self::SmallInt { .. }
+            | Self::MediumInt { .. }
+            | Self::Int { .. }
+            | Self::BigInt { .. } => 1,
+            Self::Time { .. }
+            | Self::Date { .. }
+            | Self::DateTime { .. }
+            | Self::Timestamp { .. }
+            | Self::Year => 2,
+            Self::Decimal { .. } => 3,
+            Self::Bit => 4,
+            Self::Binary { .. }
+            | Self::VarBinary { .. }
+            | Self::TinyBlob
+            | Self::MediumBlob
+            | Self::LongBlob
+            | Self::Blob => 6,
+            Self::Char { .. }
+            | Self::Varchar { .. }
+            | Self::TinyText { .. }
+            | Self::MediumText { .. }
+            | Self::Text { .. }
+            | Self::LongText { .. } => 8,
+            Self::Float | Self::Double => 12,
+            // ENUM/SET order by ordinal/bitmask, but the cursor is bound as a string.
+            Self::Enum { .. }
+            | Self::Set { .. }
+            | Self::Unknown
+            | Self::Json
+            | Self::Geometry
+            | Self::Point
+            | Self::LineString
+            | Self::Polygon
+            | Self::MultiPoint
+            | Self::MultiLineString
+            | Self::MultiPolygon
+            | Self::GeometryCollection => return None,
+        })
+    }
+
     pub fn is_integer(&self) -> bool {
         matches!(
             self,

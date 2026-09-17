@@ -3,7 +3,8 @@ mod test {
     use anyhow::Context;
     use dt_common::meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
-        mssql::mssql_col_type::MssqlColType,
+        mssql::mssql_col_type::MssqlColType, rdb_meta_manager::RDB_PRIMARY_KEY,
+        rdb_tb_meta::SortDirection,
     };
     use serial_test::serial;
 
@@ -83,7 +84,7 @@ mod test {
             Some(&"sysname".to_string())
         );
         assert_eq!(
-            meta.basic.key_map.get("primary"),
+            meta.basic.key_map.get(RDB_PRIMARY_KEY),
             Some(&vec!["tenant_id".to_string(), "id".to_string()])
         );
         assert_eq!(
@@ -91,6 +92,14 @@ mod test {
             Some(&vec!["optional_name".to_string()])
         );
         assert_eq!(meta.basic.order_cols, ["tenant_id", "id"]);
+        assert_eq!(
+            meta.basic.order_col_attrs.get("tenant_id"),
+            Some(&SortDirection::Asc)
+        );
+        assert_eq!(
+            meta.basic.order_col_attrs.get("id"),
+            Some(&SortDirection::Asc)
+        );
         assert_eq!(meta.basic.partition_col, "tenant_id");
         assert_eq!(meta.basic.id_cols, ["tenant_id", "id"]);
         assert_eq!(meta.identity_col.as_deref(), Some("id"));

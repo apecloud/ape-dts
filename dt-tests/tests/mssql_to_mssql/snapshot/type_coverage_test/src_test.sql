@@ -1,3 +1,5 @@
+USE [ape_dts];
+GO
 INSERT INTO [ape_dts].type_coverage.all_supported_types VALUES (
     1, 1, 255, -32768, -2147483648, -9223372036854775808,
     -123.25, 1.23456789012345E100, -214748.3648, 123456789012.3456,
@@ -42,4 +44,43 @@ INSERT INTO [ape_dts].type_coverage.all_supported_types VALUES (
     '2024-02-29T12:05:06.1234567+08:00',
     N'{"id":4,"string":"中文","nested":{"ok":true},"array":[1,2,3]}'
 );
+GO
+INSERT INTO [ape_dts].type_coverage.driver_unsupported_types VALUES
+(
+    1,
+    geometry::STGeomFromText(N'POINT (1.25 -2.5 3.5 4.5)', 4326),
+    geography::STGeomFromText(N'POINT (-122.360 47.656 3.5 4.5)', 4326),
+    hierarchyid::Parse(N'/1/2/')
+),
+(
+    2,
+    geometry::STGeomFromText(N'LINESTRING (0 0, 3 4, -5 6)', 0),
+    geography::STGeomFromText(N'LINESTRING (-122.360 47.656, -122.343 47.656)', 4326),
+    hierarchyid::Parse(N'/1/2.5/3/')
+),
+(3, NULL, NULL, NULL);
+GO
+INSERT INTO [ape_dts].type_coverage.alias_udt_types VALUES
+    (1, N'alias Unicode 中文'),
+    (2, N''),
+    (3, NULL);
+GO
+INSERT INTO [ape_dts].type_coverage.custom_clr_udt_types VALUES
+(
+    1,
+    dbo.BigVariantFromString(N'BigVariant Unicode 中文'),
+    dbo.BigVariantFromVariant(CONVERT(sql_variant, CONVERT(bigint, -9223372036854775808))),
+    dbo.BigVariantFromDateTime2(CONVERT(datetime2(7), '2024-02-29T12:34:56.1234567')),
+    dbo.BigVariantFromBinary(0x000102030405FEFF),
+    dbo.BigVariantFromXml(CONVERT(xml, N'<root attr="value"><child>中文</child></root>'))
+),
+(
+    2,
+    dbo.BigVariantFromString(N''),
+    dbo.BigVariantFromVariant(CONVERT(sql_variant, CONVERT(decimal(20, 6), '-12345678901234.123456'))),
+    dbo.BigVariantFromDateTime2(CONVERT(datetime2(7), '0001-01-01T00:00:00')),
+    dbo.BigVariantFromBinary(0x),
+    dbo.BigVariantFromXml(CONVERT(xml, N'<empty />'))
+),
+(3, NULL, NULL, NULL, NULL, NULL);
 GO

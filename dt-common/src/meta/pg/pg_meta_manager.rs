@@ -6,13 +6,15 @@ use sqlx::{Pool, Postgres, Row};
 
 use super::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, type_registry::TypeRegistry};
 use crate::meta::{
-    foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager, rdb_tb_meta::RdbTbMeta,
+    foreign_key::ForeignKey,
+    rdb_meta_manager::RdbMetaManager,
+    rdb_tb_meta::{RdbTbMeta, SortDirection},
     row_data::RowData,
 };
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, DtOptionExt, DtResultExt, ErrorObject},
-    meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY_FLAG},
+    meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY},
 };
 
 #[derive(Clone)]
@@ -99,39 +101,27 @@ impl PgMetaManager {
             let oid = Self::get_oid(&self.conn_pool, schema, tb).await?;
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
-            let mut key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            // unique indexes (e.g. CREATE UNIQUE INDEX) are not in table_constraints;
-            let unique_index_keys =
-                Self::parse_unique_index_keys(&self.conn_pool, schema, tb).await?;
-            for (k, v) in unique_index_keys {
-                key_map.entry(k).or_insert(v);
-            }
-            let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+            let (key_map, key_col_attrs) = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             // disable get_foreign_keys since we don't support foreign key check
-            let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
             // let (foreign_keys, ref_by_foreign_keys) =
             //     Self::get_foreign_keys(&self.conn_pool, schema, tb).await?;
 
             let basic = RdbTbMeta {
-                db: String::new(),
                 schema: schema.to_string(),
                 tb: tb.to_string(),
                 cols,
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
-                order_cols,
-                partition_col,
-                id_cols,
-                foreign_keys,
-                ref_by_foreign_keys,
+                ..Default::default()
             };
-            let tb_meta = PgTbMeta {
+            let mut tb_meta = PgTbMeta {
                 oid,
                 col_type_map,
                 basic,
             };
+            let key_scores = Self::get_key_scores(&tb_meta)?;
+            RdbMetaManager::set_order_cols(&mut tb_meta.basic, &key_scores, key_col_attrs)?;
             self.oid_to_tb_meta.insert(oid, tb_meta.clone());
             self.name_to_tb_meta.insert(full_name.clone(), tb_meta);
         }
@@ -250,87 +240,94 @@ impl PgMetaManager {
         Ok((cols, col_origin_type_map, col_type_map, nullable_cols))
     }
 
+    pub fn get_key_scores(tb_meta: &PgTbMeta) -> anyhow::Result<HashMap<String, u32>> {
+        let mut scores = HashMap::new();
+        for (key, cols) in &tb_meta.basic.key_map {
+            if cols.is_empty() {
+                continue;
+            }
+            let mut score = Some(0);
+            for col in cols {
+                let weight = tb_meta.get_col_type(col)?.order_key_weight();
+                score = score.zip(weight).map(|(total, weight)| total + weight);
+            }
+            if let Some(score) = score {
+                scores.insert(key.clone(), score);
+            }
+        }
+        Ok(scores)
+    }
+
+    // Example (exercised by snapshot/order_key_test):
+    // CREATE TABLE order_key_src.parse_keys_example (
+    //     id int NOT NULL, value int NOT NULL,
+    //     CONSTRAINT some_pk_name PRIMARY KEY (id, value),
+    //     CONSTRAINT some_uk_name UNIQUE (value)
+    // );
+    // CREATE UNIQUE INDEX uk_example ON order_key_src.parse_keys_example (value DESC, id ASC);
+    // CREATE INDEX non_unique_key ON order_key_src.parse_keys_example (id);
+    // The catalog query below returns these rows (shown grouped by key):
+    // key_name     | is_primary | col_name | is_descending
+    // some_pk_name | true       | id       | false
+    // some_pk_name | true       | value    | false
+    // some_uk_name | false      | value    | false
+    // uk_example   | false      | value    | true
+    // uk_example   | false      | id       | false
+    // key_map = {RDB_PRIMARY_KEY: [id, value], some_uk_name: [value], uk_example: [value, id]}
+    // key_col_attrs = {RDB_PRIMARY_KEY: {id: Asc, value: Asc},
+    //                  some_uk_name: {value: Asc}, uk_example: {value: Desc, id: Asc}}
+    // Constraint names and standalone unique indexes are both retained. Composite
+    // columns follow indkey ordinality; indoption's low bit supplies DESC.
+    // Non-unique, partial, expression and invalid/not-ready indexes are excluded;
+    // INCLUDE columns do not become key columns (covered by catalog_key in the test).
     async fn parse_keys(
         conn_pool: &Pool<Postgres>,
         schema: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
-        let sql = format!(
-            "SELECT kcu.column_name as col_name, 
-                kcu.constraint_name as constraint_name,
-                tc.constraint_type as constraint_type
-            FROM 
-                information_schema.table_constraints AS tc
-            JOIN 
-                information_schema.key_column_usage AS kcu
-            ON 
-                tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-                AND tc.table_name = kcu.table_name
-            WHERE 
-                tc.table_schema = '{}' 
-                AND tc.table_name = '{}'
-                AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
-            ORDER BY 
-                kcu.ordinal_position;",
-            schema, tb
-        );
-
-        let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
-        let mut rows = sqlx::query(&sql).fetch(conn_pool);
-        while let Some(row) = rows.try_next().await? {
-            let col_name: String = row.try_get("col_name")?;
-            let constraint_type: String = row.try_get("constraint_type")?;
-            let mut key_name: String = row.try_get("constraint_name")?;
-            if constraint_type == "PRIMARY KEY" {
-                key_name = RDB_PRIMARY_KEY_FLAG.to_string();
-            }
-
-            // key_map
-            if let Some(key_cols) = key_map.get_mut(&key_name) {
-                key_cols.push(col_name);
-            } else {
-                key_map.insert(key_name, vec![col_name]);
-            }
-        }
-        Ok(key_map)
-    }
-
-    async fn parse_unique_index_keys(
-        conn_pool: &Pool<Postgres>,
-        schema: &str,
-        tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
-        let sql = format!(
-            r#"
-            SELECT
-                i.relname AS index_name,
-                a.attname AS col_name,
-                k.ord AS ord
+    ) -> anyhow::Result<(
+        HashMap<String, Vec<String>>,
+        HashMap<String, HashMap<String, SortDirection>>,
+    )> {
+        // A constraint and its backing index share one key. INCLUDE columns are
+        // not part of uniqueness; partial/expression indexes cannot identify every row.
+        let sql = r#"
+            SELECT COALESCE(c.conname, i.relname) AS key_name,
+                   ix.indisprimary AS is_primary,
+                   a.attname AS col_name,
+                   (ix.indoption[(k.ord - 1)::int] & 1) <> 0 AS is_descending
             FROM pg_class t
             JOIN pg_namespace n ON n.oid = t.relnamespace
             JOIN pg_index ix ON ix.indrelid = t.oid
             JOIN pg_class i ON i.oid = ix.indexrelid
-            LEFT JOIN pg_constraint c
-                   ON c.conindid = ix.indexrelid
-                  AND c.contype IN ('p','u')
+            LEFT JOIN pg_constraint c ON c.conindid = ix.indexrelid
+                                    AND c.contype IN ('p', 'u')
             CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-                AND a.attnum > 0 AND NOT a.attisdropped
-            WHERE n.nspname = '{}' AND t.relname = '{}'
-              AND ix.indisunique
-              AND c.oid IS NULL
-            ORDER BY i.relname, k.ord"#,
-            schema, tb
-        );
-        let mut rows = sqlx::query(&sql).fetch(conn_pool);
+                               AND NOT a.attisdropped
+            WHERE n.nspname = $1 AND t.relname = $2
+              AND ix.indisunique AND ix.indisvalid AND ix.indisready
+              AND ix.indpred IS NULL AND ix.indexprs IS NULL
+              AND k.ord <= ix.indnkeyatts
+            ORDER BY i.oid, k.ord"#;
+        let mut rows = sqlx::query(sql).bind(schema).bind(tb).fetch(conn_pool);
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut key_col_attrs: HashMap<String, HashMap<String, SortDirection>> = HashMap::new();
         while let Some(row) = rows.try_next().await? {
-            let index_name: String = row.try_get("index_name")?;
-            let col_name: String = row.try_get("col_name")?;
-            key_map.entry(index_name).or_default().push(col_name);
+            let key: String = if row.try_get("is_primary")? {
+                RDB_PRIMARY_KEY.to_string()
+            } else {
+                row.try_get("key_name")?
+            };
+            let col: String = row.try_get("col_name")?;
+            let direction = if row.try_get("is_descending")? {
+                SortDirection::Desc
+            } else {
+                SortDirection::Asc
+            };
+            key_map.entry(key.clone()).or_default().push(col.clone());
+            key_col_attrs.entry(key).or_default().insert(col, direction);
         }
-        Ok(key_map)
+        Ok((key_map, key_col_attrs))
     }
 
     async fn get_oid(conn_pool: &Pool<Postgres>, schema: &str, tb: &str) -> anyhow::Result<i32> {
