@@ -98,8 +98,18 @@ impl Parallelizer for RedisParallelizer {
             }
 
             // find the dst node for entry by slot
-            let node = *self.slot_node_map.get(&slots[0]).unwrap();
-            let sinker_index = *self.node_sinker_index_map.get(node).unwrap();
+            let slot = slots[0];
+            let Some(&node) = self.slot_node_map.get(&slot) else {
+                bail!(Error::SinkerError(format!("Redis cluster routing failed: slot {} has no node in the in-memory slot_node_map", slot)));
+            };
+            let Some(&sinker_index) = self.node_sinker_index_map.get(node) else {
+                bail!(Error::SinkerError(format!(
+                    "Redis cluster topology mappings are inconsistent: in-memory slot_node_map \
+                     maps slot {} to node {}, but this node has no sinker. the target cluster topology may have changed \
+                     between sinker and slot routing initialization",
+                    slot, node
+                )));
+            };
             node_data_items[sinker_index].push(dt_item);
         }
 
