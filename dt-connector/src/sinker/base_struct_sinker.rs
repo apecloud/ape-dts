@@ -1,12 +1,12 @@
 use std::cmp;
 
 use anyhow::bail;
-use sqlx::{query, MySql, Pool, Postgres};
+use sqlx::{mysql::MySqlDatabaseError, query, MySql, Pool, Postgres};
 use tokio::time::Instant;
 
 use crate::sinker::base_sinker::BaseSinker;
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum, error::Error, log_error, log_info,
+    config::config_enums::ConflictPolicyEnum, error::Error, log_error, log_info, log_warn,
     meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
@@ -42,10 +42,20 @@ impl BaseStructSinker {
                     }
 
                     Err(error) => {
-                        log_error!("ddl failed, error: {}", error);
-                        match conflict_policy {
-                            ConflictPolicyEnum::Interrupt => bail! {error},
-                            ConflictPolicyEnum::Ignore => {}
+                        // Struct sync is intentionally re-runnable: a table is created with
+                        // CREATE TABLE IF NOT EXISTS, so a re-run must also tolerate indexes and
+                        // constraints that already exist (e.g. MySQL 1061 / 1826) instead of
+                        // failing the whole task. Structural equivalence is verified separately
+                        // by the struct checker, so tolerating "already exists" here does not
+                        // mask a real schema mismatch.
+                        if is_already_exists_error(&error) {
+                            log_warn!("ddl skipped: object already exists, error: {}", error);
+                        } else {
+                            log_error!("ddl failed, error: {}", error);
+                            match conflict_policy {
+                                ConflictPolicyEnum::Interrupt => bail! {error},
+                                ConflictPolicyEnum::Ignore => {}
+                            }
                         }
                     }
                 }
@@ -83,4 +93,24 @@ impl BaseStructSinker {
             },
         }
     }
+}
+
+/// Returns true when the provider rejected a DDL because the object it creates already
+/// exists. Structure sync is re-runnable, so this condition is benign and must not fail
+/// the task. Checked on the raw MySQL error number because release-2.0.26.1 does not
+/// carry the enum error-code classification that main does.
+fn is_already_exists_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .map(|sqlx_error| match sqlx_error {
+            sqlx::Error::Database(database_error) => {
+                match database_error.try_downcast_ref::<MySqlDatabaseError>() {
+                    Some(mysql_error) => matches!(mysql_error.number(), 1050 | 1061 | 1826),
+                    None => false,
+                }
+            }
+            _ => false,
+        })
+        .unwrap_or(false)
 }
