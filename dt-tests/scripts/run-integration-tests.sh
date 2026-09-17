@@ -95,6 +95,8 @@ declare -a ALL_SUITES=(
   "pg_to_pg_lua"
   # "pg_to_starrocks"       # disabled: temporarily excluded from default local matrix
   "mongo_to_mongo"
+  "mongo_to_mongo_tls"
+  "tls"
   "mongo_to_mongo_precheck"
   "redis_to_redis_2_8"
   "redis_to_redis_4_0"
@@ -103,6 +105,7 @@ declare -a ALL_SUITES=(
   "redis_to_redis_6_2"
   "redis_to_redis_7_0"
   "redis_to_redis_8_0"
+  "redis_to_redis_tls"
   "redis_to_redis_cross_version"
   "redis_to_redis_graph"
   "redis_to_redis_rebloom"
@@ -143,6 +146,7 @@ TEST_FAIL_FAST=1
 declare -a REQUESTED_SUITES=()
 declare -a EXTRA_TEST_ARGS=()
 declare -a ARM_UNSUPPORTED_SUITES=(
+  "tls"
   "mock_test_mysql_5_7"
   "mssql_to_mssql"
   "redis_to_redis_2_8"
@@ -341,6 +345,29 @@ suite_services() {
     mock_test_pg_13_3_4) echo "postgres-src-13-3-4 postgres-dst-13-3-4" ;;
     mock_test_pg_17_3_4) echo "postgres-src-17-3-4 postgres-dst-17-3-4" ;;
     mssql_to_mssql) echo "mssql-src mssql-dst" ;;
+    tls) echo "mysql-tls-src mysql-tls-dst mysql-tls-cdc-src mysql-tls-cdc-dst postgres-tls-src postgres-tls-dst mssql-tls-src mssql-tls-dst" ;;
+    mongo_to_mongo_tls)
+      local services=(
+        mongo-tls-src mongo-tls-dst
+        mongo-tls-sharding-src-config mongo-tls-sharding-src-shard mongo-tls-sharding-src-init
+        mongo-tls-sharding-src-mongos mongo-tls-sharding-src-add-shard-init
+        mongo-tls-sharding-dst-config mongo-tls-sharding-dst-shard mongo-tls-sharding-dst-init
+        mongo-tls-sharding-dst-mongos mongo-tls-sharding-dst-add-shard-init
+      )
+      echo "${services[*]}"
+      ;;
+    redis_to_redis_tls)
+      local services=(
+        redis-tls-source-cluster-node1 redis-tls-source-cluster-node2 redis-tls-source-cluster-node3
+        redis-tls-source-cluster-init
+        redis-tls-target-cluster-node1 redis-tls-target-cluster-node2 redis-tls-target-cluster-node3
+        redis-tls-target-cluster-init
+        redis-tls-source-cluster-7-0-node1 redis-tls-source-cluster-7-0-node2 redis-tls-source-cluster-7-0-node3
+        redis-tls-source-cluster-7-0-init
+        redis-tls-source-7-0 redis-tls-target-7-0 redis-tls-source-8-0 redis-tls-target-8-0
+      )
+      echo "${services[*]}"
+      ;;
     mysql_to_clickhouse) echo "mysql-src clickhouse" ;;
     mysql_to_doris) echo "mysql-src doris-2-1-0" ;;
     mysql_to_kafka_to_mysql) echo "mysql-src mysql-dst kafka" ;;
@@ -396,6 +423,9 @@ suite_wait_timeout_secs() {
   case "${suite}" in
     mongo_to_mongo | mongo_to_mongo_precheck) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
     mssql_to_mssql) echo "${MSSQL_WAIT_TIMEOUT_SECS:-120}" ;;
+    tls) echo "${MSSQL_WAIT_TIMEOUT_SECS:-120}" ;;
+    mongo_to_mongo_tls) echo "${MONGO_TLS_WAIT_TIMEOUT_SECS:-120}" ;;
+    redis_to_redis_tls) echo "${REDIS_TLS_CLUSTER_WAIT_TIMEOUT_SECS:-90}" ;;
     *) echo "${WAIT_TIMEOUT_SECS}" ;;
   esac
 }
@@ -428,6 +458,9 @@ suite_nextest_filter() {
     mock_test_pg_13_3_4) echo "test(/^mock_test::pg_to_pg::from_13_3_4_to_13_3_4::/)" ;;
     mock_test_pg_17_3_4) echo "test(/^mock_test::pg_to_pg::from_17_3_4_to_17_3_4::/)" ;;
     mssql_to_mssql) echo "test(/^mssql_to_mssql::/)" ;;
+    tls) echo "test(/^tls::(mysql|pg|mssql)::/)" ;;
+    mongo_to_mongo_tls) echo "test(/^tls::mongo(_shard)?::/)" ;;
+    redis_to_redis_tls) echo "test(/^tls::redis(_cluster)?_[0-9]+_[0-9]+::/)" ;;
     mysql_to_clickhouse) echo "test(/^mysql_to_clickhouse::/)" ;;
     mysql_to_doris) echo "test(/^mysql_to_doris::/)" ;;
     mysql_to_kafka_to_mysql) echo "test(/^mysql_to_kafka_to_mysql::/)" ;;

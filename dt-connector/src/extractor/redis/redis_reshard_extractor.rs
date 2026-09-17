@@ -11,7 +11,6 @@ use dt_common::{
     utils::redis_util::RedisUtil,
 };
 use redis::{Connection, ConnectionLike};
-use url::Url;
 
 use crate::{
     extractor::base_extractor::{BaseExtractor, ExtractState},
@@ -233,10 +232,7 @@ impl RedisReshardExtractor {
     }
 
     async fn get_node_conn(&self, node: &ClusterNode) -> anyhow::Result<Connection> {
-        let url_info = Url::parse(&self.url)?;
-        let username = url_info.username();
-        let password = url_info.password().unwrap_or("").to_string();
-        let url = format!("redis://{}:{}@{}", username, password, node.address);
+        let url = RedisUtil::replace_url_address(&self.url, &node.host, node.port.parse()?)?;
         RedisUtil::create_redis_conn(&url, &self.connection_auth).await
     }
 }

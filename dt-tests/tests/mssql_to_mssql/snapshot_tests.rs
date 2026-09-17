@@ -31,12 +31,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_ssl_test() {
-        TestBase::run_snapshot_test("mssql_to_mssql/snapshot/ssl_test").await;
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn snapshot_type_coverage_test() {
         TestBase::run_snapshot_test("mssql_to_mssql/snapshot/type_coverage_test").await;
     }

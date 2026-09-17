@@ -91,7 +91,7 @@ impl Sinker for PgSinker {
             conn_options = conn_options.tcp_keepalive(tcp_keepalive);
             let mut pool_options = PgPoolOptions::new().max_connections(1);
             if let Some(ssl) = self.connection_auth.ssl_config() {
-                conn_options = ssl.apply_pg(conn_options);
+                conn_options = ssl.apply_pg(conn_options)?;
             }
 
             let sql = format!("SET search_path = '{}';", schema);

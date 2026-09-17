@@ -30,6 +30,7 @@ concurrent-queue = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
+futures-rustls = { workspace = true }
 uuid = { workspace = true }
 rdkafka = { workspace = true }
 kafka = { workspace = true }
@@ -37,6 +38,7 @@ url = { workspace = true }
 log = { workspace = true }
 log4rs = { workspace = true }
 redis = { workspace = true }
+rustls = { workspace = true }
 async-std = { workspace = true }
 chrono =  { workspace = true }
 apache-avro = {workspace = true}
