@@ -8,62 +8,75 @@ Run tests with [ape_dts](/docs/en/tutorial/mysql_to_mysql.md) and [debezium](htt
 
 ## Test Environment
 
-The source database, target database, and data migration task are located on 3 Baidu BCC machines within the same network, each with a specification of 8c16g.
+The source database, target database, and data migration task run on three separate Alibaba Cloud ECS instances within the same network.
 
 ## MySQL Specifications
 
 | | Source | Target |
-| :-------- | :-------- | :-------- | 
-| Version | mysql:8.2.0| mysql:8.2.0 |
+| :-------- | :-------- | :-------- |
+| Version | mysql:8.4.11| mysql:8.4.11 |
 | Specs | 8c16g| 8c16g |
 
 ## Snapshot migration
 
-Generate 10 tables through sysbench oltp_read_write, each with 5,000,000 records.
-
-```
-sysbench oltp_read_write --mysql-host=192.168.80.3 --mysql-port=3307 --mysql-user=root --mysql-password=123456 --mysql-db=sbtest --tables=10 --table-size=5000000 --threads=10 prepare
-```
+Use sysbench oltp_read_write to generate 8 tables, each with 4,000,000 rows.
 
 ### Results
-| Method | Node Specs | RPS(rows per second) | Source MySQL Load (CPU/Memory) | Target MySQL Load (CPU/Memory) |
-| :-------- | :-------- | :-------- | :-------- | :-------- | 
-| ape_dts | 1c2g | 71428 | 8.2% / 5.2% | 211% / 5.1% |
-| ape_dts | 2c4g | 99403 | 14.0% / 5.2% | 359% / 5.1% |
-| ape_dts | 4c8g | 126582 | 13.8% / 5.2% | 552% / 5.1% |
-| debezium | 4c8g |	4051 | 21.5% / 5.2% | 51.2% / 5.1% |
 
-- According to [debezium official](https://debezium.io/blog/2023/12/20/JDBC-sink-connector-batch-support/): RPS varies between 2000 and 6000 depending on batch.size and the storage format of data in Kafka.
+| Node Specs | ape-dts 2.0.26.1 (Rows/s) | ape-dts 2.0.25 (Rows/s) | ape-dts 2.0.23 (Rows/s) |
+| :--- | :--- | :--- | :--- |
+| 1c2g | 109067 | 74576 | 71428 |
+| 2c4g | 131783 | 129639 | 99403 |
+| 4c8g | 133283 | 132781 | 126582 |
+
+New test resource usage (CPU / RSS MiB) and elapsed time:
+
+| Node Specs | Version | Elapsed (s) | Tool CPU / RSS (MiB) | Source MySQL CPU / RSS (MiB) | Target MySQL CPU / RSS (MiB) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 1c2g | 2.0.26.1 | 293.40 | 80.58% / 600 | 7.28% / 8725 | 112.59% / 14235 |
+| 1c2g | 2.0.25 | 429.09 | 96.86% / 1005 | 5.15% / 8635 | 69.43% / 12672 |
+| 2c4g | 2.0.26.1 | 242.82 | 102.80% / 1768 | 9.18% / 8636 | 156.01% / 14291 |
+| 2c4g | 2.0.25 | 246.84 | 158.88% / 1212 | 9.29% / 8772 | 149.88% / 12486 |
+| 4c8g | 2.0.26.1 | 240.09 | 96.30% / 1998 | 9.06% / 8634 | 172.36% / 14254 |
+| 4c8g | 2.0.25 | 241.00 | 183.50% / 1596 | 8.83% / 8633 | 184.19% / 13775 |
+
+Historical resource usage (CPU / memory percentages, preserving the original units):
+
+| Node Specs | ape-dts Version | Source MySQL CPU / Memory | Target MySQL CPU / Memory |
+| :--- | :--- | :--- | :--- |
+| 1c2g | 2.0.23 | 8.2% / 5.2% | 211% / 5.1% |
+| 2c4g | 2.0.23 | 14.0% / 5.2% | 359% / 5.1% |
+| 4c8g | 2.0.23 | 13.8% / 5.2% | 552% / 5.1% |
 
 ## CDC synchronization
-### Case 1: Updates on 10 tables
 
-Generate binlogs on 10 tables through sysbench oltp_update_index, about 3,200,000 records.
+### Test: 8 tables with 1 million baseline rows each and 4 million UPDATEs
 
-```
-sysbench oltp_update_index --mysql-host=192.168.80.3 --mysql-port=3307 --mysql-user=root --mysql-password=123456 --mysql-db=sbtest --tables=10 --table-size=5000000 --threads=100 --time=1200 --report-interval=10 run
-```
+Use sysbench oltp_update_index with 8 tables of 1 million baseline rows each and 4 million UPDATEs in total.
 
 #### Results
-| Method | Node Specs | RPS(rows per second) | Source MySQL Load (CPU/Memory) | Target MySQL Load (CPU/Memory) |
-| :-------- | :-------- | :-------- | :-------- | :-------- |
-| ape_dts | 1c2g | 11902 | 19.0% / 5.2% | 479% / 5.1% |
-| ape_dts | 2c4g | 14240 | 18.6% / 5.2% | 623% / 5.1% |
-| ape_dts | 4c8g | 19450 | 19.2% / 5.2% | 689% / 5.1% |
-| debezium | 4c8g | 3175 | 17.9% / 5.2% | 118% / 5.1% |
 
-### Case 2: Updates on 1 table
+| Node Specs | ape-dts 2.0.26.1 (UPDATE/s) | ape-dts 2.0.25 (UPDATE/s) | ape-dts 2.0.23 (provisional, UPDATE/s) |
+| :--- | :--- | :--- | :--- |
+| 1c2g | 23477 | 20365 | 11902 |
+| 2c4g | 51171 | 41161 | 14240 |
+| 4c8g | 52538 | 48681 | 19450 |
 
-Generate binlogs on 1 table through sysbench oltp_update_index, about 3,200,000 records.
+New test resource usage (CPU / RSS MiB) and elapsed time:
 
-```
-sysbench oltp_update_index --mysql-host=192.168.80.3 --mysql-port=3307 --mysql-user=root --mysql-password=123456 --mysql-db=sbtest --tables=10 --table-size=5000000 --threads=100 --time=1200 --report-interval=1 run
-```
+| Node Specs | Version | Elapsed (s) | Tool CPU / RSS (MiB) | Source MySQL CPU / RSS (MiB) | Target MySQL CPU / RSS (MiB) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 1c2g | 2.0.26.1 | 170.38 | 91.76% / 568 | 2.71% / 1989 | 69.38% / 6915 |
+| 1c2g | 2.0.25 | 196.41 | 89.56% / 287 | 2.38% / 1971 | 55.21% / 5049 |
+| 2c4g | 2.0.26.1 | 78.17 | 141.33% / 988 | 5.73% / 1947 | 191.92% / 5627 |
+| 2c4g | 2.0.25 | 97.18 | 140.01% / 470 | 4.57% / 1925 | 117.99% / 5775 |
+| 4c8g | 2.0.26.1 | 76.14 | 154.92% / 589 | 5.63% / 2061 | 193.22% / 6058 |
+| 4c8g | 2.0.25 | 82.17 | 161.90% / 795 | 5.24% / 1890 | 131.25% / 5386 |
 
-#### Results
-| Method | Node Specs | RPS(rows per second) | Source MySQL Load (CPU/Memory) | Target MySQL Load (CPU/Memory) |
-| :-------- | :-------- | :-------- | :-------- | :-------- |
-| ape_dts | 1c2g | 15002 | 18.8% / 5.2% | 467% / 6.5% | 
-| ape_dts | 2c4g | 24692 | 18.1% / 5.2% | 687% / 6.5% | 
-| ape_dts | 4c8g | 26287 | 18.2% / 5.2% | 685% / 6.5% |
-| debezium | 4c8g | 2951 | 20.4% / 5.2% | 98% / 6.5% |
+Historical resource usage (CPU / memory percentages, preserving the original units; not directly comparable to RSS MiB):
+
+| Node Specs | ape-dts Version | Source MySQL CPU / Memory | Target MySQL CPU / Memory |
+| :--- | :--- | :--- | :--- |
+| 1c2g | 2.0.23 | 19.0% / 5.2% | 479% / 5.1% |
+| 2c4g | 2.0.23 | 18.6% / 5.2% | 623% / 5.1% |
+| 4c8g | 2.0.23 | 19.2% / 5.2% | 689% / 5.1% |
