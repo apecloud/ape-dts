@@ -99,18 +99,21 @@ impl Parallelizer for RedisParallelizer {
             }
 
             // find the dst node for entry by slot
-            let node = self.slot_node_map.get(&slots[0]).copied().or_dt_error(
-                DtError::InvariantViolated("parallelizer invariant violated".to_string()),
-            )?;
-            let sinker_index = self.node_sinker_index_map.get(node).copied().or_dt_error(
-                DtError::InvariantViolated("parallelizer invariant violated".to_string()),
-            )?;
-            node_data_items
-                .get_mut(sinker_index)
-                .or_dt_error(DtError::InvariantViolated(
-                    "parallelizer invariant violated".to_string(),
-                ))?
-                .push(dt_item);
+            let slot = slots[0];
+            let &node = self
+                .slot_node_map
+                .get(&slot)
+                .or_dt_error(DtError::Unclassified(format!(
+                "Redis cluster routing failed: slot {} has no node in the in-memory slot_node_map",
+                slot
+            )))?;
+            let &sinker_index = self.node_sinker_index_map.get(node).or_dt_error(DtError::Unclassified(format!(
+                "Redis cluster topology mappings are inconsistent: in-memory slot_node_map \
+                 maps slot {} to node {}, but this node has no sinker. the target cluster topology may have changed \
+                 between sinker and slot routing initialization",
+                slot, node
+            )))?;
+            node_data_items[sinker_index].push(dt_item);
         }
 
         let workers_used = node_data_items

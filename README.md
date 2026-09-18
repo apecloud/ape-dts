@@ -115,25 +115,25 @@ Refer to [test docs](./dt-tests/README.md) for details.
 
 # Benchmark
 
+`ape-dts: 2.0.26.1; Environment: Alibaba Cloud, same VPC; MySQL: 8.4.11 8c16g; Full load: 8 tables × 4 million rows; CDC: 8 tables × 1 million baseline rows, 4 million UPDATEs`
+
 - MySQL -> MySQL, Snapshot
 
-| Method   | Node Specs | RPS(rows per second) | Source MySQL Load (CPU/Memory) | Target MySQL Load (CPU/Memory) |
-| :------- | :--------- | :------------------- | :----------------------------- | :----------------------------- |
-| ape_dts  | 1c2g       | 71428                | 8.2% / 5.2%                    | 211% / 5.1%                    |
-| ape_dts  | 2c4g       | 99403                | 14.0% / 5.2%                   | 359% / 5.1%                    |
-| ape_dts  | 4c8g       | 126582               | 13.8% / 5.2%                   | 552% / 5.1%                    |
-| debezium | 4c8g       | 4051                 | 21.5% / 5.2%                   | 51.2% / 5.1%                   |
+| Node Specs | Rows/s | Source MySQL CPU / RSS (MiB) | Target MySQL CPU / RSS (MiB) |
+| :--------- | :----- | :--------------------------- | :--------------------------- |
+| 1c2g       | 109067 | 7.28% / 8725                 | 112.59% / 14235              |
+| 2c4g       | 131783 | 9.18% / 8636                 | 156.01% / 14291              |
+| 4c8g       | 133283 | 9.06% / 8634                 | 172.36% / 14254              |
 
 - MySQL -> MySQL, CDC
 
-| Method   | Node Specs | RPS(rows per second) | Source MySQL Load (CPU/Memory) | Target MySQL Load (CPU/Memory) |
-| :------- | :--------- | :------------------- | :----------------------------- | :----------------------------- |
-| ape_dts  | 1c2g       | 15002                | 18.8% / 5.2%                   | 467% / 6.5%                    |
-| ape_dts  | 2c4g       | 24692                | 18.1% / 5.2%                   | 687% / 6.5%                    |
-| ape_dts  | 4c8g       | 26287                | 18.2% / 5.2%                   | 685% / 6.5%                    |
-| debezium | 4c8g       | 2951                 | 20.4% / 5.2%                   | 98% / 6.5%                     |
+| Node Specs | UPDATE/s | Source MySQL CPU / RSS (MiB) | Target MySQL CPU / RSS (MiB) |
+| :--------- | :------- | :--------------------------- | :--------------------------- |
+| 1c2g       | 23477    | 2.71% / 1989                 | 69.38% / 6915                |
+| 2c4g       | 51171    | 5.73% / 1947                 | 191.92% / 5627               |
+| 4c8g       | 52538    | 5.63% / 2061                 | 193.22% / 6058               |
 
-- more benchmark [details](./docs/en/benchmark.md)
+- More benchmark [details](./docs/en/benchmark.md)
 
 # Contributing
 
