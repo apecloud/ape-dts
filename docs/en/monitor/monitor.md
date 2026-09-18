@@ -20,13 +20,16 @@ This type of counter is an array of sub-counters. During task execution, wheneve
 
 # No window counter
 
-A simple counter to record accumulated data, such as the number of migrated MySQL records.
+Records values throughout the task run without expiration. Counts retain integer precision; utilization and durations retain fractional values.
 
 ## Aggregation algorithms
 
 | Aggregation | Description | Example |
 | :-------- | :-------- | :-------- |
 | latest | Current value | Number of synchronized data entries by the task |
+| sum | Sum of all valid samples | Total batch duration since task start |
+| avg | Sum divided by sample count | Average batch duration since task start |
+| min / max | Minimum / maximum valid sample | Shortest / longest batch duration |
 
 
 # Counter details
@@ -198,6 +201,44 @@ By comparing these two metric groups, you can observe the actual effect of filte
 2024-02-29 01:25:09.554423 | pipeline | sinked_count | latest=13
 ```
 
+The three new metric groups and the separate valid batch count are flushed with
+the existing counters under the same pipeline ID:
+
+```text
+pipeline | f49dc9ee7d863b59 | buffer_size | sum=180 | avg=3 | max=4
+pipeline | f49dc9ee7d863b59 | sinker_workers_per_drain | sum=66 | avg=1 | max=2
+pipeline | f49dc9ee7d863b59 | sinked_records | latest=141
+pipeline | f49dc9ee7d863b59 | pipeline_sink_parallel_utilization | avg=0.625 | min=0.25 | max=1
+pipeline | f49dc9ee7d863b59 | pipeline_sink_duration_seconds | sum=0.5 | avg=0.25 | min=0.1 | max=0.4
+pipeline | f49dc9ee7d863b59 | pipeline_sink_operations_total | latest=2
+pipeline | f49dc9ee7d863b59 | partitioner_duration_seconds | sum=0.0012 | avg=0.0004 | min=0.0001 | max=0.0009
+```
+
+Timestamps are omitted above. Utilization is a ratio from `0` to `1`; durations use
+seconds and preserve fractional values. `pipeline_sink_operations_total` reports all valid pipeline sink operations
+processed by that pipeline during the current task run. These four new groups
+accumulate statistics independently of `counter_time_window_secs` and
+`counter_max_sub_count`. Each pipeline stores only sums, counts, and extrema.
+All four groups use the common no-window counters and aggregation rules.
+`pipeline_sink_operations_total` increments once per valid pipeline sink operation; its log field is `latest`.
+
+One batch is one complete sink dispatch by the parallelizer. Once all partitions
+succeed, it records one utilization sample, one duration sample, and one batch.
+The pipeline monitor retains its own cumulative values; flushing only reads and
+reports them. Partitioner duration is sampled per partitioning call and uses its
+own call count when calculating the average.
+
+Snapshot tasks also report aggregates in the existing `pipeline | global` group.
+Averages use sums and sample counts; extrema cover all valid samples. Each task has
+one pipeline whose monitor remains registered until the final flush completes.
+Task JSON and Prometheus read its cumulative counters, so finishing individual
+tables does not reset these values. CDC keeps its existing behavior of logging
+individual pipeline IDs.
+
+Enabled groups with no samples emit zeros; disabled groups are omitted. Statistics
+reset for a new task run and are not restored from checkpoints. Batch metrics cover
+Snapshot and CDC; partitioner metrics currently cover only Snapshot chunk partitioning.
+
 ### counter Description
 
 | Counter | Counter Type | Description |
@@ -205,6 +246,10 @@ By comparing these two metric groups, you can observe the actual effect of filte
 | record_size | time window | Size of a single entry, in bytes |
 | buffer_size | time window | Number of entries cached in pipeline |
 | sinked_count | no window | Total Number of entries handled by task |
+| pipeline_sink_operations_total | no window | Total completed valid pipeline sink operations |
+| pipeline_sink_parallel_utilization | no window | Per-batch utilization: avg, min, max |
+| pipeline_sink_duration_seconds | no window | Batch duration in seconds: sum, avg, min, max |
+| partitioner_duration_seconds | no window | Partition duration in seconds: sum, avg, min, max |
 
 <br/>
 

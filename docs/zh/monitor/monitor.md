@@ -25,13 +25,16 @@ counter 用于记录任务状态，并会按照 `[pipeline] checkpoint_interval_
 
 # 无窗口 counter
 
-该类 counter 就是一个简单的计数器，用于记录累计数据，如：当前任务总共已同步数据条数。
+该类 counter 记录本次任务运行的累计数据，不会过期。计数保持整数精度，利用率和耗时保留小数。
 
 ## 聚合算法
 
 | 聚合算法 | 说明   | 示例                     |
 | :------- | :----- | :----------------------- |
 | latest   | 当前值 | 任务累计已同步的数据条数 |
+| sum | 全部有效样本之和 | 任务累计 batch 耗时 |
+| avg | 样本之和 / 样本数 | 任务累计 batch 平均耗时 |
+| min / max | 全部有效样本的最小值 / 最大值 | 最短 / 最长 batch 耗时 |
 
 
 # counter 详情
@@ -201,6 +204,37 @@ extractor_pushed_bps_min 900
 2024-02-29 01:25:09.554423 | pipeline | sinked_count | latest=13
 ```
 
+三类新指标和独立的有效 pipeline sink operation 数量随所属 pipeline 一起 flush，使用相同的 ID：
+
+```text
+pipeline | f49dc9ee7d863b59 | buffer_size | sum=180 | avg=3 | max=4
+pipeline | f49dc9ee7d863b59 | sinker_workers_per_drain | sum=66 | avg=1 | max=2
+pipeline | f49dc9ee7d863b59 | sinked_records | latest=141
+pipeline | f49dc9ee7d863b59 | pipeline_sink_parallel_utilization | avg=0.625 | min=0.25 | max=1
+pipeline | f49dc9ee7d863b59 | pipeline_sink_duration_seconds | sum=0.5 | avg=0.25 | min=0.1 | max=0.4
+pipeline | f49dc9ee7d863b59 | pipeline_sink_operations_total | latest=2
+pipeline | f49dc9ee7d863b59 | partitioner_duration_seconds | sum=0.0012 | avg=0.0004 | min=0.0001 | max=0.0009
+```
+
+以上示例省略了时间戳。利用率单位为 `0..1`，两类耗时单位为秒，保留小数；
+`pipeline_sink_operations_total` 的 `latest` 表示该 pipeline 在本次运行以来的有效 pipeline sink operation 总数。
+这四组新数据均为累计统计，不受 `counter_time_window_secs` / `counter_max_sub_count` 影响。
+每个 pipeline 只保存累计 sum/count 和极值，不保留历史样本队列。
+四组指标均使用通用无窗口 counter 及其聚合规则；`pipeline_sink_operations_total` 每个有效 pipeline sink operation 增加 1。
+
+一个 batch 对应 parallelizer 的一次完整 sink 调度，所有 partition 成功完成后只记录一次
+利用率、总耗时和 batch 数量。pipeline monitor 保存本 pipeline 的累计值，flush 只读取和输出。
+partitioner 耗时按每次 partition 调用独立统计，因此其平均值使用自己的调用次数。
+
+Snapshot 任务还会在原有 `pipeline | global` 分组中输出汇总，平均值使用 sum/count，
+min/max 取所有有效样本的极值。每个任务只有一个 pipeline，其 monitor 在最后一次 flush
+完成后才注销。`task.log` 和 Prometheus 读取该 monitor 的累计 counter，表完成不会重置这些值。
+CDC 沿用原有行为，仅输出各 pipeline ID 的日志。
+
+已启用但无样本的类别输出零，未启用的类别不输出。新任务实例重新开始统计，
+不从 checkpoint 恢复指标值。batch 指标支持 Snapshot 和 CDC，
+partitioner 指标目前仅采集 Snapshot 的 chunk partition。
+
 ### counter 说明
 
 | counter      | 窗口类型 | 说明                      |
@@ -208,6 +242,10 @@ extractor_pushed_bps_min 900
 | record_size  | 时间窗口 | 单条记录大小，单位：字节  |
 | buffer_size  | 时间窗口 | pipeline 中缓存的记录条数 |
 | sinked_count | 无窗口   | 任务处理的记录总数        |
+| pipeline_sink_operations_total | 无窗口 | 已完成的有效 pipeline sink operation 总数 |
+| pipeline_sink_parallel_utilization | 无窗口 | 每次 pipeline sink operation 利用率的 avg、min、max |
+| pipeline_sink_duration_seconds | 无窗口 | pipeline sink operation 秒数的 sum、avg、min、max |
+| partitioner_duration_seconds | 无窗口 | partition 秒数的 sum、avg、min、max |
 
 <br/>
 

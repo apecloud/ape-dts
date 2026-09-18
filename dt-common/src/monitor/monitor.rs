@@ -1,11 +1,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 
 use super::counter::Counter;
 use super::counter_type::{CounterType, WindowType};
+use super::sinker_worker_metrics::{SinkerWorkerMetrics, SinkerWorkerMetricsSnapshot};
+use super::task_metrics::TaskMetricValue;
 use super::time_window_counter::TimeWindowCounter;
 use super::FlushableMonitor;
 use crate::log_monitor;
@@ -20,6 +25,7 @@ pub struct Monitor {
     pub time_window_secs: u64,
     pub max_sub_count: u64,
     pub count_window: u64,
+    sinker_worker_metrics: OnceLock<Arc<SinkerWorkerMetrics>>,
     tombstone: AtomicBool,
 }
 
@@ -46,12 +52,93 @@ impl Monitor {
             time_window_secs,
             max_sub_count,
             count_window,
+            sinker_worker_metrics: OnceLock::new(),
             tombstone: AtomicBool::new(false),
         }
     }
 
+    /// Lazily allocated for pipeline monitors; shared by their worker wrappers.
+    pub fn sinker_worker_metrics(&self) -> Arc<SinkerWorkerMetrics> {
+        self.sinker_worker_metrics.get_or_init(Arc::default).clone()
+    }
+
+    pub(crate) fn sinker_worker_snapshot(&self) -> SinkerWorkerMetricsSnapshot {
+        self.sinker_worker_metrics
+            .get()
+            .map(|metrics| metrics.snapshot())
+            .unwrap_or_default()
+    }
+
     pub fn clear_tombstone(&self) {
         self.tombstone.store(false, Ordering::Release);
+    }
+
+    pub fn init_counter(&self, counter_type: CounterType) {
+        assert!(matches!(
+            counter_type.get_window_type(),
+            WindowType::NoWindow
+        ));
+        self.no_window_counters
+            .entry(counter_type.clone())
+            .or_insert_with(|| Counter::new(counter_type.initial_value(), 0));
+    }
+
+    pub(crate) fn merge_no_window_counters(&self, totals: &mut HashMap<CounterType, Counter>) {
+        for entry in self.no_window_counters.iter() {
+            totals
+                .entry(entry.key().clone())
+                .and_modify(|counter| counter.merge(entry.value()))
+                .or_insert_with(|| entry.value().clone());
+        }
+    }
+
+    /// Synchronous recording also supports RAII timers that finish in Drop.
+    pub fn add_no_window_counter(
+        &self,
+        counter_type: CounterType,
+        value: impl Into<TaskMetricValue>,
+        count: u64,
+    ) {
+        assert!(matches!(
+            counter_type.get_window_type(),
+            WindowType::NoWindow
+        ));
+        self.no_window_counters
+            .entry(counter_type.clone())
+            .or_insert_with(|| Counter::new(counter_type.initial_value(), 0))
+            .add(value, count);
+    }
+
+    /// Measure one synchronous call in seconds, including errors and unwinding.
+    pub fn measure_counter<T>(
+        &self,
+        counter_type: CounterType,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        assert!(matches!(
+            counter_type.get_window_type(),
+            WindowType::NoWindow
+        ));
+        struct Timer<'a> {
+            monitor: &'a Monitor,
+            counter_type: CounterType,
+            started: tokio::time::Instant,
+        }
+        impl Drop for Timer<'_> {
+            fn drop(&mut self) {
+                self.monitor.add_no_window_counter(
+                    self.counter_type.clone(),
+                    self.started.elapsed().as_secs_f64(),
+                    1,
+                );
+            }
+        }
+        let _timer = Timer {
+            monitor: self,
+            counter_type,
+            started: tokio::time::Instant::now(),
+        };
+        operation()
     }
 
     pub fn mark_tombstone(&self) {
@@ -132,16 +219,10 @@ impl Monitor {
             .collect::<Vec<_>>();
         for counter_type in no_window_counter_types {
             if let Some(counter) = self.no_window_counters.get(&counter_type) {
-                let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
-                for aggregate_type in counter_type.get_aggregate_types() {
-                    let aggregate_value = match aggregate_type {
-                        AggregateType::Latest => counter.value,
-                        AggregateType::AvgByCount => counter.avg_by_count(),
-                        _ => continue,
-                    };
-                    log = format!("{} | {}={}", log, aggregate_type, aggregate_value);
-                }
-                log_monitor!("{}", log);
+                log_monitor!(
+                    "{}",
+                    counter.log_line(&self.name, &self.description, &counter_type)
+                );
             }
         }
     }
@@ -149,7 +230,7 @@ impl Monitor {
     pub(crate) async fn add_batch_counter(
         &self,
         counter_type: CounterType,
-        value: u64,
+        value: impl Into<TaskMetricValue> + Send,
         count: u64,
     ) -> &Self {
         if count == 0 {
@@ -158,11 +239,20 @@ impl Monitor {
         self.add_counter_internal(counter_type, value, count).await
     }
 
-    pub(crate) async fn add_counter(&self, counter_type: CounterType, value: u64) -> &Self {
+    pub(crate) async fn add_counter(
+        &self,
+        counter_type: CounterType,
+        value: impl Into<TaskMetricValue> + Send,
+    ) -> &Self {
         self.add_counter_internal(counter_type, value, 1).await
     }
 
-    pub(crate) fn set_counter(&self, counter_type: CounterType, value: u64) -> &Self {
+    pub(crate) fn set_counter(
+        &self,
+        counter_type: CounterType,
+        value: impl Into<TaskMetricValue> + Send,
+    ) -> &Self {
+        let value = value.into();
         if let WindowType::NoWindow = counter_type.get_window_type() {
             self.no_window_counters
                 .entry(counter_type)
@@ -183,16 +273,12 @@ impl Monitor {
     async fn add_counter_internal(
         &self,
         counter_type: CounterType,
-        value: u64,
+        value: impl Into<TaskMetricValue> + Send,
         count: u64,
     ) -> &Self {
+        let value = value.into();
         match counter_type.get_window_type() {
-            WindowType::NoWindow => {
-                self.no_window_counters
-                    .entry(counter_type)
-                    .or_insert_with(|| Counter::new(0, 0))
-                    .add(value, count);
-            }
+            WindowType::NoWindow => self.add_no_window_counter(counter_type, value, count),
 
             WindowType::TimeWindow => {
                 let counter = self
@@ -205,7 +291,14 @@ impl Monitor {
                         ))
                     })
                     .clone();
-                counter.add(value, count).await;
+                counter
+                    .add(
+                        value
+                            .as_u64()
+                            .expect("time-window samples must be integers"),
+                        count,
+                    )
+                    .await;
             }
         }
         self
@@ -239,5 +332,67 @@ impl Monitor {
             }
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn duration_counter_keeps_fractional_samples_without_expiration() {
+        let monitor = Monitor::new("pipeline", "test", 1, 1, 1);
+        monitor.init_counter(CounterType::PartitionerDurationSeconds);
+        for micros in [100, 200, 900, 0] {
+            monitor
+                .add_counter(
+                    CounterType::PartitionerDurationSeconds,
+                    Duration::from_micros(micros).as_secs_f64(),
+                )
+                .await;
+        }
+        {
+            let counter = monitor
+                .no_window_counters
+                .get(&CounterType::PartitionerDurationSeconds)
+                .unwrap();
+            assert_eq!(counter.count, 4);
+            assert!((counter.value.as_f64() - 0.0012).abs() < 1e-12);
+            assert_eq!(counter.min.as_f64(), 0.0);
+            assert_eq!(counter.max.as_f64(), 0.0009);
+            assert!((counter.avg_by_count().as_f64() - 0.0003).abs() < 1e-12);
+        }
+        tokio::time::advance(Duration::from_secs(86400)).await;
+        for _ in 0..2000 {
+            monitor
+                .add_counter(CounterType::PartitionerDurationSeconds, 0.0001)
+                .await;
+        }
+        let counter = monitor
+            .no_window_counters
+            .get(&CounterType::PartitionerDurationSeconds)
+            .unwrap();
+        assert_eq!(counter.count, 2004);
+        assert!((counter.value.as_f64() - 0.2012).abs() < 1e-12);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn generic_timer_preserves_results_and_records_errors_and_unwinding() {
+        let monitor = Monitor::new("pipeline", "test", 1, 1, 1);
+        let counter_type = CounterType::PartitionerDurationSeconds;
+        assert_eq!(monitor.measure_counter(counter_type.clone(), || 42), 42);
+        assert_eq!(
+            monitor.measure_counter(counter_type.clone(), || Err::<(), _>("partition failed")),
+            Err("partition failed")
+        );
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || monitor.measure_counter(counter_type.clone(), || panic!("partition panic"))
+        ))
+        .is_err());
+        let counter = monitor.no_window_counters.get(&counter_type).unwrap();
+        assert_eq!(counter.count, 3);
+        assert_eq!(counter.value, TaskMetricValue::Float(0.0));
     }
 }

@@ -1,18 +1,27 @@
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use tokio::time::Instant;
+
+use super::pipeline_sink_metrics::PipelineSinkMetricsState;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SinkerWorkerMetricsSnapshot {
     pub configured: u64,
     pub busy: u64,
 }
 
+/// One pipeline's sinker pool. Completed samples live in its Monitor counters.
 #[derive(Debug, Default)]
 pub struct SinkerWorkerMetrics {
     configured: AtomicU64,
     busy: AtomicU64,
+    pub(super) pipeline_sink: Mutex<Option<PipelineSinkMetricsState>>,
 }
 
 #[derive(Debug)]
@@ -23,6 +32,7 @@ pub struct SinkerWorkerRecorder {
 #[derive(Debug)]
 pub struct SinkerWorkerBusyGuard<'a> {
     recorder: &'a SinkerWorkerRecorder,
+    started_at: Option<Instant>,
 }
 
 impl SinkerWorkerMetrics {
@@ -39,17 +49,37 @@ impl SinkerWorkerMetrics {
             busy: self.busy.load(Ordering::Relaxed),
         }
     }
+
+    pub(super) fn record_work(&self, elapsed: Duration) {
+        if let Some(state) = self.pipeline_sink.lock().unwrap().as_mut() {
+            state.record_work(elapsed);
+        }
+    }
 }
 
 impl SinkerWorkerRecorder {
     pub fn enter(&self) -> SinkerWorkerBusyGuard<'_> {
         self.metrics.busy.fetch_add(1, Ordering::Relaxed);
-        SinkerWorkerBusyGuard { recorder: self }
+        SinkerWorkerBusyGuard {
+            recorder: self,
+            started_at: None,
+        }
+    }
+
+    pub fn enter_with_timer(&self, non_empty: bool) -> SinkerWorkerBusyGuard<'_> {
+        let mut guard = self.enter();
+        if non_empty && self.metrics.pipeline_sink.lock().unwrap().is_some() {
+            guard.started_at = Some(Instant::now());
+        }
+        guard
     }
 }
 
 impl Drop for SinkerWorkerBusyGuard<'_> {
     fn drop(&mut self) {
+        if let Some(started) = self.started_at {
+            self.recorder.metrics.record_work(started.elapsed());
+        }
         let previous = self.recorder.metrics.busy.fetch_sub(1, Ordering::Relaxed);
         debug_assert!(previous > 0, "sinker worker count underflow");
     }
@@ -79,9 +109,9 @@ mod tests {
         assert_eq!(metrics.snapshot().busy, 0);
     }
 
-    #[test]
+    #[tokio::test(flavor = "current_thread")]
     #[ignore = "manual release-mode hot-path measurement"]
-    fn measures_tracker_hot_path_cost() {
+    async fn measures_tracker_hot_path_cost() {
         const ITERATIONS: u32 = 1_000_000;
 
         let metrics = Arc::new(SinkerWorkerMetrics::default());
@@ -94,6 +124,23 @@ mod tests {
         let nanoseconds_per_operation = elapsed.as_nanos() as f64 / f64::from(ITERATIONS);
 
         eprintln!("sinker worker tracker: {nanoseconds_per_operation:.2} ns/enter+drop");
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            black_box(worker.enter_with_timer(true));
+        }
+        let idle_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
+        let batch = crate::monitor::pipeline_sink_metrics::PipelineSinkMetricsGuard::new(
+            metrics.clone(),
+            1,
+            ITERATIONS as usize,
+        );
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            black_box(worker.enter_with_timer(true));
+        }
+        let active_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
+        eprintln!("sink guard: idle={idle_ns:.2} ns/call, active={active_ns:.2} ns/call");
+        assert!(batch.finish().is_some());
         assert_eq!(metrics.snapshot().busy, 0);
     }
 }

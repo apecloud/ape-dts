@@ -37,11 +37,22 @@ impl Parallelizer for SnapshotParallelizer {
         };
 
         let effective_parallelism = self.parallel_size.min(sinkers.len());
-        let sub_datas = ChunkPartitioner::partition_dml(
-            data,
-            effective_parallelism,
-            &self.chunk_partitioner_rebalance,
-        )?;
+        let monitor = self.base_parallelizer.monitor.partitioner_monitor();
+        let partition = || {
+            ChunkPartitioner::partition_dml(
+                data,
+                effective_parallelism,
+                &self.chunk_partitioner_rebalance,
+            )
+        };
+        // Finish partition timing before dispatching or waiting for any sinker.
+        let sub_datas = match monitor {
+            Some(monitor) => monitor.measure_counter(
+                dt_common::monitor::counter_type::CounterType::PartitionerDurationSeconds,
+                partition,
+            ),
+            None => partition(),
+        }?;
         self.base_parallelizer
             .sink_dml(sub_datas, sinkers, self.parallel_size, true)
             .await?;
