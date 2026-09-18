@@ -395,7 +395,7 @@ impl<C: Checker> DataChecker<C> {
         dst_val: &ColValue,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<bool> {
-        if src_val.is_same_value(dst_val) {
+        if src_val.is_same_raw_value(dst_val) {
             return Ok(true);
         }
 
