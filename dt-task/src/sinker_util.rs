@@ -152,7 +152,7 @@ impl SinkerUtil {
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
                     _ => {
-                        bail!(DtError::MissingDestinationClient());
+                        bail!(DtError::MissingDestinationClient);
                     }
                 };
                 let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
