@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### General and Platform
+
+- add cumulative pipeline sink utilization, duration, and operation counts, plus Snapshot chunk partitioner duration metrics ([#591](https://github.com/apecloud/ape-dts/issues/591))
+
 #### Redis
 
 - support RDB type byte 26 (`RDB_TYPE_STREAM_LISTPACKS_4`), including the trailing IDMP (Idempotent Message Producer) section, when extracting streams from an RDB snapshot
@@ -19,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### General and Platform
 
+- preserve monitor samples across repeated initialization and correct global averages, extrema, aligned per-second rates, and task sinker throughput aggregation
 - exit with a non-zero status code when the task panics, instead of leaving the process hanging
 
 #### Redis

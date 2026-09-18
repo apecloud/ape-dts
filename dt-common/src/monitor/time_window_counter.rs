@@ -1,4 +1,8 @@
-use std::{cmp, collections::LinkedList};
+use std::{
+    collections::{BTreeMap, LinkedList},
+    sync::Arc,
+    time::Instant,
+};
 
 use tokio::sync::RwLock;
 
@@ -87,76 +91,24 @@ impl TimeWindowCounter {
     #[inline(always)]
     pub async fn statistics_in_window(&self, time_window_secs: u64) -> WindowCounterStatistics {
         let counters = self.counters.read().await;
-        if counters.is_empty() {
-            return WindowCounterStatistics::default();
-        }
-
-        let mut statistics = WindowCounterStatistics {
-            min: u64::MAX,
-            min_by_sec: u64::MAX,
-            ..Default::default()
-        };
-
-        let mut sum_in_current_sec = 0;
-        let mut current_elapsed_secs = None;
-        let mut sec_sums = LimitedQueue::new(1000);
-
+        let now = Instant::now();
+        let mut statistics = WindowStatisticsBuilder::default();
         for counter in counters.iter() {
-            if counter.timestamp.elapsed().as_secs() >= time_window_secs {
-                continue;
-            }
+            statistics.add(counter, time_window_secs, now);
+        }
+        statistics.finish()
+    }
 
-            statistics.sum += counter.value;
-            statistics.count += counter.count;
-            statistics.max = cmp::max(statistics.max, counter.value);
-            statistics.min = cmp::min(statistics.min, counter.value);
-
-            let counter_elapsed_secs = counter.timestamp.elapsed().as_secs();
-
-            match current_elapsed_secs {
-                None => {
-                    // first counter
-                    current_elapsed_secs = Some(counter_elapsed_secs);
-                    sum_in_current_sec = counter.value;
-                }
-                Some(elapsed_secs) if elapsed_secs == counter_elapsed_secs => {
-                    // sum when in same second
-                    sum_in_current_sec += counter.value;
-                }
-                Some(_) => {
-                    // new second
-                    sec_sums.push(sum_in_current_sec);
-                    current_elapsed_secs = Some(counter_elapsed_secs);
-                    sum_in_current_sec = counter.value;
-                }
+    /// Align all component samples to one sampling instant before aggregation.
+    pub async fn statistics_across(windows: &[Arc<Self>], now: Instant) -> WindowCounterStatistics {
+        let mut statistics = WindowStatisticsBuilder::default();
+        for window in windows {
+            let counters = window.counters.read().await;
+            for counter in counters.iter() {
+                statistics.add(counter, window.time_window_secs, now);
             }
         }
-
-        // the last second
-        if current_elapsed_secs.is_some() {
-            sec_sums.push(sum_in_current_sec);
-        }
-        for &sec_sum in sec_sums.iter() {
-            statistics.max_by_sec = cmp::max(statistics.max_by_sec, sec_sum);
-            statistics.min_by_sec = cmp::min(statistics.min_by_sec, sec_sum);
-        }
-
-        if statistics.count > 0 {
-            statistics.avg_by_count = statistics.sum / statistics.count;
-            if !sec_sums.is_empty() {
-                let sec_sum_total: u64 = sec_sums.iter().sum();
-                statistics.avg_by_sec = sec_sum_total / sec_sums.len() as u64;
-            }
-        }
-
-        if statistics.min == u64::MAX {
-            statistics.min = 0;
-        }
-        if statistics.min_by_sec == u64::MAX {
-            statistics.min_by_sec = 0;
-        }
-
-        statistics
+        statistics.finish()
     }
 
     #[inline(always)]
@@ -170,5 +122,45 @@ impl TimeWindowCounter {
         counters
             .iter()
             .any(|counter| counter.timestamp.elapsed().as_secs() < time_window_secs)
+    }
+}
+
+#[derive(Default)]
+struct WindowStatisticsBuilder {
+    statistics: WindowCounterStatistics,
+    seconds: BTreeMap<u64, u64>,
+}
+
+impl WindowStatisticsBuilder {
+    fn add(&mut self, counter: &Counter, time_window_secs: u64, now: Instant) {
+        let Some(age) = now.checked_duration_since(counter.timestamp) else {
+            return;
+        };
+        if counter.count == 0 || age.as_secs() >= time_window_secs {
+            return;
+        }
+        let value = counter
+            .value
+            .as_u64()
+            .expect("time-window samples must be integers");
+        if self.statistics.count == 0 {
+            self.statistics.min = value;
+        } else {
+            self.statistics.min = self.statistics.min.min(value);
+        }
+        self.statistics.max = self.statistics.max.max(value);
+        self.statistics.sum += value;
+        self.statistics.count += counter.count;
+        *self.seconds.entry(age.as_secs()).or_default() += value;
+    }
+
+    fn finish(mut self) -> WindowCounterStatistics {
+        if let Some(average) = self.statistics.sum.checked_div(self.statistics.count) {
+            self.statistics.avg_by_count = average;
+            self.statistics.avg_by_sec = self.statistics.sum / self.seconds.len() as u64;
+            self.statistics.min_by_sec = *self.seconds.values().min().unwrap();
+            self.statistics.max_by_sec = *self.seconds.values().max().unwrap();
+        }
+        self.statistics
     }
 }
