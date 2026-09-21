@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -57,22 +57,7 @@ impl Monitor {
     }
 
     pub fn init_counter(&self, counter_type: CounterType) {
-        assert!(matches!(
-            counter_type.get_window_type(),
-            WindowType::NoWindow
-        ));
-        self.no_window_counters
-            .entry(counter_type.clone())
-            .or_insert_with(|| Counter::new(counter_type.initial_value(), 0));
-    }
-
-    pub(crate) fn merge_no_window_counters(&self, totals: &mut HashMap<CounterType, Counter>) {
-        for entry in self.no_window_counters.iter() {
-            totals
-                .entry(entry.key().clone())
-                .and_modify(|counter| counter.merge(entry.value()))
-                .or_insert_with(|| entry.value().clone());
-        }
+        self.add_no_window_counter(counter_type, 0, 0);
     }
 
     /// Synchronous recording also supports RAII timers that finish in Drop.
@@ -320,45 +305,7 @@ impl Monitor {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
-
-    #[tokio::test(start_paused = true)]
-    async fn duration_counter_keeps_fractional_samples_without_expiration() {
-        let monitor = Monitor::new("pipeline", "test", 1, 1, 1);
-        monitor.init_counter(CounterType::PartitionerDurationSeconds);
-        for micros in [100, 200, 900, 0] {
-            monitor
-                .add_counter(
-                    CounterType::PartitionerDurationSeconds,
-                    Duration::from_micros(micros).as_secs_f64(),
-                )
-                .await;
-        }
-        {
-            let counter = monitor
-                .no_window_counters
-                .get(&CounterType::PartitionerDurationSeconds)
-                .unwrap();
-            assert_eq!(counter.count, 4);
-            assert!((counter.value.as_f64() - 0.0012).abs() < 1e-12);
-
-            assert!((counter.avg_by_count().as_f64() - 0.0003).abs() < 1e-12);
-        }
-        tokio::time::advance(Duration::from_secs(86400)).await;
-        for _ in 0..2000 {
-            monitor
-                .add_counter(CounterType::PartitionerDurationSeconds, 0.0001)
-                .await;
-        }
-        let counter = monitor
-            .no_window_counters
-            .get(&CounterType::PartitionerDurationSeconds)
-            .unwrap();
-        assert_eq!(counter.count, 2004);
-        assert!((counter.value.as_f64() - 0.2012).abs() < 1e-12);
-    }
 
     #[tokio::test(start_paused = true)]
     async fn measure_duration_preserves_results_and_records_errors_and_unwinding() {

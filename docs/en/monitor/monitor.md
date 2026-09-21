@@ -29,7 +29,6 @@ Records values throughout the task run without expiration. Counts retain integer
 | latest | Current value | Number of synchronized data entries by the task |
 | sum | Sum of all valid samples | Total batch duration since task start |
 | avg | Sum divided by sample count | Average batch duration since task start |
-| min / max | Minimum / maximum valid sample | Shortest / longest batch duration |
 
 
 # Counter details

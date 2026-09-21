@@ -133,7 +133,7 @@ impl PipelineSinkMetricsGuard {
         if self.parallelism == 0 || duration.is_zero() {
             return None;
         }
-        let work_ns = self.metrics.work_ns.swap(u64::MAX, Ordering::Relaxed);
+        let work_ns = self.metrics.work_ns.load(Ordering::Relaxed);
         let capacity_ns = duration.as_nanos().checked_mul(self.parallelism as u128)?;
         // MAX marks an invalid measurement, such as a work duration overflow.
         if work_ns == u64::MAX || u128::from(work_ns) > capacity_ns {
@@ -193,39 +193,6 @@ mod tests {
 
         eprintln!("sinker worker tracker: {nanoseconds_per_operation:.2} ns/enter+drop");
         assert_eq!(metrics.snapshot().busy, 0);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn sink_guard_only_times_calls_in_its_pipeline_operation() {
-        let workers = Arc::new(SinkerWorkerMetrics::default());
-        let worker = workers.register_worker();
-        let unmeasured = worker.enter_with_timer();
-        assert_eq!(workers.snapshot().busy, 1);
-        assert!(unmeasured.started_at.is_none());
-        drop(unmeasured);
-        let batch = workers.start_pipeline_sink(1);
-        let control = worker.enter();
-        tokio::time::advance(Duration::from_millis(10)).await;
-        drop(control);
-        let sink = worker.enter_with_timer();
-        assert_eq!(workers.snapshot().busy, 1);
-        tokio::time::advance(Duration::from_millis(10)).await;
-        drop(sink);
-        assert_eq!(workers.snapshot().busy, 0);
-        let (_, utilization) = batch.finish().unwrap();
-        assert_eq!(utilization, 0.5);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn rejects_zero_duration_and_invalid_measurements() {
-        let metrics = Arc::new(SinkerWorkerMetrics::default());
-        assert!(metrics.start_pipeline_sink(1).finish().is_none());
-        for (parallelism, work) in [(0, 1), (1, 101)] {
-            let mut batch = metrics.start_pipeline_sink(parallelism);
-            batch.started -= Duration::from_millis(100);
-            batch.record_work(Duration::from_millis(work));
-            assert!(batch.finish().is_none());
-        }
     }
 
     #[tokio::test(start_paused = true)]

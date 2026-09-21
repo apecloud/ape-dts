@@ -34,7 +34,6 @@ counter 用于记录任务状态，并会按照 `[pipeline] checkpoint_interval_
 | latest   | 当前值 | 任务累计已同步的数据条数 |
 | sum | 全部有效样本之和 | 任务累计 batch 耗时 |
 | avg | 样本之和 / 样本数 | 任务累计 batch 平均耗时 |
-| min / max | 全部有效样本的最小值 / 最大值 | 最短 / 最长 batch 耗时 |
 
 
 # counter 详情

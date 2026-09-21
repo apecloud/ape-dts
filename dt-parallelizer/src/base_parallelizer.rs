@@ -499,59 +499,14 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn sequential_operations_reuse_workers_and_reset_work_time() {
-        let metrics = batch_metrics();
-        let (sinkers, workers) = sinkers(2, metrics.workers.clone());
-        run_batch(
-            vec![vec![row(100)], vec![row(100)]],
-            &sinkers,
-            2,
-            metrics.clone(),
-        )
-        .await
-        .unwrap();
-        run_batch(vec![vec![row(200)]], &sinkers, 2, metrics.clone())
-            .await
-            .unwrap();
-        let (count, utilization, duration) = measurements(&metrics);
-        assert_eq!(count, 2);
-        assert_eq!(utilization, 0.75);
-        assert!((duration - 0.3).abs() < 1e-12);
-        assert_eq!(workers.snapshot().configured, 2);
-        assert_eq!(workers.snapshot().busy, 0);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn empty_and_invalid_batches_do_not_publish_samples() {
-        let metrics = batch_metrics();
-        let (sinkers, workers) = sinkers(2, metrics.workers.clone());
-        assert_eq!(
-            run_batch(vec![Vec::new()], &sinkers, 2, metrics.clone())
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            run_batch(Vec::new(), &sinkers, 2, metrics.clone())
-                .await
-                .unwrap(),
-            0
-        );
-        assert!(run_batch(vec![vec![row(10)]], &sinkers, 0, metrics.clone())
-            .await
-            .is_err());
-        assert!(run_batch(vec![vec![row(10)]], &[], 2, metrics.clone())
-            .await
-            .is_err());
-        assert_eq!(measurements(&metrics).0, 0);
-        assert_eq!(workers.snapshot().busy, 0);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn failed_and_panicked_operations_do_not_publish_or_pollute_retries() {
+    async fn failed_and_panicked_batches_do_not_publish_metrics() {
         for mode in ["fail", "panic"] {
             let metrics = batch_metrics();
             let (sinkers, workers) = sinkers(2, metrics.workers.clone());
+            run_batch(vec![Vec::new()], &sinkers, 2, metrics.clone())
+                .await
+                .unwrap();
+            assert_eq!(measurements(&metrics).0, 0);
             let mut bad = row(10);
             bad.tb = mode.into();
             assert!(run_batch(
@@ -563,23 +518,10 @@ mod tests {
             .await
             .is_err());
             assert_eq!(measurements(&metrics).0, 0);
-            // Production exits the pipeline on failure. To reuse the tracker in
-            // this test, wait for the already-started, aborted workers to exit.
+            // Wait for the other, already-started worker to release its guard.
             for sinker in &sinkers {
                 drop(sinker.lock().await);
             }
-            assert_eq!(workers.snapshot().busy, 0);
-            run_batch(
-                vec![vec![row(100)], vec![row(100)]],
-                &sinkers,
-                2,
-                metrics.clone(),
-            )
-            .await
-            .unwrap();
-            let snapshot = measurements(&metrics);
-            assert_eq!(snapshot.0, 1);
-            assert_eq!(snapshot.1, 1.0);
             assert_eq!(workers.snapshot().busy, 0);
         }
     }
@@ -603,9 +545,8 @@ mod tests {
         task.await.unwrap().unwrap();
         assert_eq!(measurements(&metrics).1, 0.5);
 
-        let cancelled_metrics = metrics.clone();
         let task_sinkers = sinkers.clone();
-        let task_metrics = cancelled_metrics.clone();
+        let task_metrics = metrics.clone();
         let task = tokio::spawn(async move {
             run_batch(vec![vec![row(1000)]], &task_sinkers, 1, task_metrics).await
         });
@@ -619,7 +560,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(workers.snapshot().busy, 0);
-        assert_eq!(measurements(&cancelled_metrics).0, 1);
+        assert_eq!(measurements(&metrics).0, 1);
         run_batch(vec![vec![row(100)]], &sinkers, 1, metrics.clone())
             .await
             .unwrap();

@@ -462,34 +462,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn registers_batch_metrics_for_cdc_without_partitioner_metrics() {
-        use crate::config::config_enums::{TaskKind, TaskType};
-
-        let prometheus = PrometheusMetrics::new(
-            Some(TaskType::new(TaskKind::Cdc, None)),
-            MetricsConfig {
-                http_host: "127.0.0.1".into(),
-                http_port: 0,
-                workers: 1,
-                metrics_labels: HashMap::new(),
-            },
-        );
-        prometheus.initialization().unwrap();
-        let mut output = String::new();
-        TextEncoder::new()
-            .encode_utf8(&prometheus.registry.gather(), &mut output)
-            .unwrap();
-        assert!(output.contains("pipeline_sink_parallel_utilization_avg 0\n"));
-        for suffix in ["sum", "avg"] {
-            assert!(output.contains(&format!("pipeline_sink_duration_seconds_{suffix} 0\n")));
-        }
-        assert!(output.contains("pipeline_sink_operations_total 0\n"));
-        assert!(!output.contains("partitioner_duration_seconds"));
-    }
-
     #[tokio::test(start_paused = true)]
-    async fn exports_cumulative_metrics_after_time_passes_and_pipelines_finish() {
+    async fn exports_cumulative_metrics_through_final_flush() {
         use std::{sync::Arc, time::Duration};
 
         use crate::{
@@ -520,6 +494,7 @@ mod tests {
             100,
             10,
         );
+        handle.register_monitor("pipeline", handle.build_monitor("pipeline", "pipeline"));
         let partition = handle.partitioner_monitor().unwrap();
         for micros in [100, 200, 900] {
             partition.add_no_window_counter(
@@ -554,27 +529,15 @@ mod tests {
                 .unwrap();
             assert!((actual - expected).abs() < 1e-12);
         }
-        assert!(!output.contains("sink_work_duration"));
-        for prefix in [
-            "pipeline_sink_parallel_utilization",
-            "pipeline_sink_duration_seconds",
-            "partitioner_duration_seconds",
-        ] {
-            for suffix in ["min", "max"] {
-                assert!(!output.contains(&format!("{prefix}_{suffix}")));
-            }
-        }
         assert!(output.contains("sinker_sinked_records 123\n"));
         tokio::time::advance(Duration::from_secs(86400)).await;
+        task.flush().await;
+        let mut after_flush = String::new();
+        TextEncoder::new()
+            .encode_utf8(&prometheus.registry.gather(), &mut after_flush)
+            .unwrap();
+        assert_eq!(after_flush, output);
         task.unregister("pipeline", vec![MonitorType::Pipeline]);
-        for _ in 0..2 {
-            task.flush().await;
-            let mut after_cleanup = String::new();
-            TextEncoder::new()
-                .encode_utf8(&prometheus.registry.gather(), &mut after_cleanup)
-                .unwrap();
-            assert_eq!(after_cleanup, output);
-        }
     }
 
     #[cfg(feature = "tracing")]

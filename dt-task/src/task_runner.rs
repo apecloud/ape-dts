@@ -494,21 +494,6 @@ impl TaskRunner {
             .await
             .stage(Stage::Bootstrap)?;
 
-        let pipeline_monitor_handle = TaskMonitorHandle::new(
-            self.task_monitor.clone(),
-            MonitorType::Pipeline,
-            task_id.clone(),
-            monitor_time_window_secs,
-            monitor_max_sub_count,
-            monitor_count_window,
-        );
-        // Register before constructing wrappers: the pool and parallelizer must
-        // retain the same pipeline monitor and worker tracker.
-        pipeline_monitor_handle.register_monitor(
-            &task_id,
-            pipeline_monitor_handle.build_monitor("pipeline", &task_id),
-        );
-
         let sinker_monitor_handle = TaskMonitorHandle::new(
             self.task_monitor.clone(),
             MonitorType::Sinker,
@@ -533,6 +518,14 @@ impl TaskRunner {
             .stage(Stage::Bootstrap)?
         };
 
+        let pipeline_monitor_handle = TaskMonitorHandle::new(
+            self.task_monitor.clone(),
+            MonitorType::Pipeline,
+            task_id.clone(),
+            monitor_time_window_secs,
+            monitor_max_sub_count,
+            monitor_count_window,
+        );
         let pipeline = self
             .create_pipeline(
                 buffer,
@@ -548,7 +541,10 @@ impl TaskRunner {
             .stage(Stage::Bootstrap)?;
         let pipeline = Arc::new(Mutex::new(pipeline));
 
-        let mut monitors = Vec::new();
+        let mut monitors = vec![(
+            MonitorType::Pipeline,
+            pipeline_monitor_handle.build_monitor("pipeline", &task_id),
+        )];
         if !is_snapshot_task {
             monitors.push((MonitorType::Extractor, extractor_monitor.clone()));
             monitors.push((MonitorType::Sinker, sinker_monitor.clone()));

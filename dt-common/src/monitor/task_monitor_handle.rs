@@ -119,23 +119,11 @@ impl TaskMonitorHandle {
     }
 
     fn pipeline_monitor(&self) -> Option<Arc<Monitor>> {
-        self.task_type()?;
-        self.ensure_pipeline_monitor();
+        // TaskRunner registers the pipeline before starting workers and keeps it
+        // registered through the final flush.
         self.task_monitor
             .as_ref()?
             .get_monitor(&self.default_task_id, &MonitorType::Pipeline)
-    }
-
-    fn ensure_pipeline_monitor(&self) {
-        if let Some(task_monitor) = &self.task_monitor {
-            task_monitor.ensure_monitor(
-                &self.default_task_id,
-                MonitorType::Pipeline,
-                self.time_window_secs,
-                self.max_sub_count,
-                self.count_window,
-            );
-        }
     }
 
     pub fn task_id_from_db_schema_tb(db: &str, schema: &str, tb: &str) -> String {

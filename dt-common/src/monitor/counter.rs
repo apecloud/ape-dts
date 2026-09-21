@@ -53,15 +53,7 @@ impl Counter {
 
     /// Merge sums and counts so averages are weighted by sample count.
     pub fn merge(&mut self, other: &Self) {
-        if other.count == 0 {
-            return;
-        }
-        if self.count == 0 {
-            *self = other.clone();
-        } else {
-            self.value += other.value;
-            self.count += other.count;
-        }
+        self.add(other.value, other.count);
     }
 
     #[inline(always)]

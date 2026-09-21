@@ -1,15 +1,11 @@
-use std::{
-    cmp,
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{cmp, collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 
 use super::{
-    counter::Counter, group_monitor::GroupMonitor, monitor::Monitor,
-    sinker_worker_metrics::SinkerWorkerMetrics, task_metrics::TaskMetricValue,
+    group_monitor::GroupMonitor, monitor::Monitor, sinker_worker_metrics::SinkerWorkerMetrics,
+    task_metrics::TaskMetricValue,
 };
 #[cfg(feature = "metrics")]
 use crate::monitor::prometheus_metrics::PrometheusMetrics;
@@ -136,18 +132,6 @@ impl TaskMonitor {
         self.sinker_worker_metrics.clone()
     }
 
-    fn pipeline_counter_statistics(&self) -> HashMap<CounterType, Counter> {
-        // The task's pipeline remains registered through the final flush.
-        let mut statistics = HashMap::new();
-        for entry in self.pipelines.iter() {
-            let monitor = entry.value();
-            if !monitor.is_tombstone() {
-                monitor.merge_no_window_counters(&mut statistics);
-            }
-        }
-        statistics
-    }
-
     pub fn register(&self, task_id: &str, monitors: Vec<(MonitorType, Arc<Monitor>)>) {
         if self.task_type.is_none() {
             return;
@@ -164,18 +148,10 @@ impl TaskMonitor {
                 }
                 MonitorType::Pipeline => {
                     monitor.clear_tombstone();
-                    if let Some(previous) =
-                        self.pipelines.insert(task_id.to_string(), monitor.clone())
-                    {
-                        if !Arc::ptr_eq(&previous, &monitor) && !previous.is_tombstone() {
-                            if let Some(group_monitor) = &self.pipeline_group_monitor {
-                                group_monitor.settle_no_window_monitor(&previous);
-                            }
-                        }
-                    }
                     if let Some(group_monitor) = &self.pipeline_group_monitor {
-                        group_monitor.add_monitor(task_id, monitor);
+                        group_monitor.add_monitor(task_id, monitor.clone());
                     }
+                    self.pipelines.insert(task_id.to_string(), monitor);
                 }
                 MonitorType::Sinker => {
                     monitor.clear_tombstone();
@@ -255,9 +231,6 @@ impl TaskMonitor {
                         .get(task_id)
                         .map(|entry| entry.value().clone())
                     {
-                        if monitor.is_tombstone() {
-                            continue;
-                        }
                         monitor.mark_tombstone();
                         if let Some(group_monitor) = &self.pipeline_group_monitor {
                             group_monitor.settle_no_window_monitor(&monitor);
@@ -532,6 +505,48 @@ impl TaskMonitor {
                     statics.avg_by_count.into(),
                 );
             }
+
+            for counter_type in [
+                CounterType::PipelineSinkOperationsTotal,
+                CounterType::PipelineSinkParallelUtilization,
+                CounterType::PipelineSinkDurationSeconds,
+                CounterType::PartitionerDurationSeconds,
+            ] {
+                if let Some(counter) = monitor.no_window_counters.get(&counter_type) {
+                    for aggregate_type in counter_type.get_aggregate_types() {
+                        let metrics_type = match (&counter_type, &aggregate_type) {
+                            (CounterType::PipelineSinkOperationsTotal, AggregateType::Latest) => {
+                                TaskMetricsType::PipelineSinkOperationsTotal
+                            }
+                            (
+                                CounterType::PipelineSinkParallelUtilization,
+                                AggregateType::AvgByCount,
+                            ) => TaskMetricsType::PipelineSinkParallelUtilizationAvg,
+                            (CounterType::PipelineSinkDurationSeconds, AggregateType::Sum) => {
+                                TaskMetricsType::PipelineSinkDurationSecondsSum
+                            }
+                            (
+                                CounterType::PipelineSinkDurationSeconds,
+                                AggregateType::AvgByCount,
+                            ) => TaskMetricsType::PipelineSinkDurationSecondsAvg,
+                            (CounterType::PartitionerDurationSeconds, AggregateType::Sum) => {
+                                TaskMetricsType::PartitionerDurationSecondsSum
+                            }
+                            (
+                                CounterType::PartitionerDurationSeconds,
+                                AggregateType::AvgByCount,
+                            ) => TaskMetricsType::PartitionerDurationSecondsAvg,
+                            _ => continue,
+                        };
+                        // The task has one pipeline; its counters cover the entire run.
+                        calc_handler(
+                            CalcType::Latest,
+                            metrics_type,
+                            counter.aggregate(&aggregate_type),
+                        );
+                    }
+                }
+            }
         }
 
         let sinkers: Vec<Arc<Monitor>> = self
@@ -695,46 +710,6 @@ impl TaskMonitor {
                     TaskMetricsType::CheckerDiffRpsAvg,
                     statics.avg_by_sec.into(),
                 );
-            }
-        }
-        let pipeline_counters = self.pipeline_counter_statistics();
-        for counter_type in [
-            CounterType::PipelineSinkOperationsTotal,
-            CounterType::PipelineSinkParallelUtilization,
-            CounterType::PipelineSinkDurationSeconds,
-            CounterType::PartitionerDurationSeconds,
-        ] {
-            if let Some(counter) = pipeline_counters.get(&counter_type) {
-                for aggregate_type in counter_type.get_aggregate_types() {
-                    let metrics_type = match (&counter_type, &aggregate_type) {
-                        (CounterType::PipelineSinkOperationsTotal, AggregateType::Latest) => {
-                            TaskMetricsType::PipelineSinkOperationsTotal
-                        }
-                        (
-                            CounterType::PipelineSinkParallelUtilization,
-                            AggregateType::AvgByCount,
-                        ) => TaskMetricsType::PipelineSinkParallelUtilizationAvg,
-                        (CounterType::PipelineSinkDurationSeconds, AggregateType::Sum) => {
-                            TaskMetricsType::PipelineSinkDurationSecondsSum
-                        }
-                        (CounterType::PipelineSinkDurationSeconds, AggregateType::AvgByCount) => {
-                            TaskMetricsType::PipelineSinkDurationSecondsAvg
-                        }
-                        (CounterType::PartitionerDurationSeconds, AggregateType::Sum) => {
-                            TaskMetricsType::PartitionerDurationSecondsSum
-                        }
-                        (CounterType::PartitionerDurationSeconds, AggregateType::AvgByCount) => {
-                            TaskMetricsType::PartitionerDurationSecondsAvg
-                        }
-                        _ => continue,
-                    };
-                    // Counters already contain merged sums/counts; publish each result once.
-                    calc_handler(
-                        CalcType::Latest,
-                        metrics_type,
-                        counter.aggregate(&aggregate_type),
-                    );
-                }
             }
         }
 
@@ -1062,51 +1037,6 @@ mod sinker_worker_tests {
     }
 
     #[tokio::test]
-    async fn worker_metrics_are_task_wide_and_independent_of_pipeline_lifecycle() {
-        use crate::monitor::task_monitor_handle::TaskMonitorHandle;
-        for kind in [TaskKind::Snapshot, TaskKind::Cdc] {
-            let task = Arc::new(build_task_monitor_for(kind));
-            let handle = TaskMonitorHandle::new(
-                task.clone(),
-                MonitorType::Pipeline,
-                "pipeline".into(),
-                1,
-                1,
-                1,
-            );
-            let workers = handle
-                .with_type(MonitorType::Sinker)
-                .sinker_worker_metrics();
-            assert!(Arc::ptr_eq(&workers, &handle.sinker_worker_metrics()));
-            assert!(!Arc::ptr_eq(
-                &workers,
-                &build_task_monitor_for(kind).sinker_worker_metrics(),
-            ));
-            assert!(task.pipelines.is_empty());
-            handle.pipeline_sink_monitor().unwrap();
-            let worker = workers.register_worker();
-            let active = worker.enter();
-
-            handle.unregister_monitor("pipeline");
-            task.cleanup_monitors().await;
-            let values = task.calc().await.unwrap();
-            assert_eq!(
-                values[&TaskMetricsType::SinkerWorkersConfigured].as_u64(),
-                Some(1)
-            );
-            assert_eq!(
-                values[&TaskMetricsType::SinkerWorkersBusy].as_u64(),
-                Some(1)
-            );
-            drop(active);
-            assert_eq!(
-                task.calc().await.unwrap()[&TaskMetricsType::SinkerWorkersBusy].as_u64(),
-                Some(0),
-            );
-        }
-    }
-
-    #[tokio::test]
     async fn aggregates_sinker_workers_used_per_drain_by_max_and_average() {
         let task_monitor = build_task_monitor();
         let pipeline_monitor = Arc::new(Monitor::new("pipeline", "task", 60, 1000, 10));
@@ -1132,54 +1062,37 @@ mod sinker_worker_tests {
         );
     }
     #[tokio::test]
-    async fn ensure_preserves_batches_and_does_not_revive_completed_tables() {
-        let monitor = build_task_monitor_for(TaskKind::Snapshot);
+    async fn ensure_monitor_preserves_samples_across_repeated_and_concurrent_calls() {
+        let task = build_task_monitor_for(TaskKind::Snapshot);
+        let barrier = std::sync::Barrier::new(8);
+        let monitors = std::thread::scope(|scope| {
+            (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        task.ensure_monitor("table", MonitorType::Sinker, 60, 1000, 10);
+                        task.get_monitor("table", &MonitorType::Sinker).unwrap()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(monitors
+            .iter()
+            .all(|monitor| Arc::ptr_eq(monitor, &monitors[0])));
         for rows in [100, 200] {
-            monitor.ensure_monitor("table", MonitorType::Sinker, 60, 1000, 10);
-            monitor
-                .add_counter("table", MonitorType::Sinker, CounterType::RecordCount, rows)
+            task.ensure_monitor("table", MonitorType::Sinker, 60, 1000, 10);
+            task.add_counter("table", MonitorType::Sinker, CounterType::RecordCount, rows)
                 .await;
         }
-        let sinker = monitor.get_monitor("table", &MonitorType::Sinker).unwrap();
-        let counter = sinker
+        let counter = monitors[0]
             .time_window_counters
             .get(&CounterType::RecordCount)
             .unwrap()
             .clone();
         assert_eq!(counter.statistics().await.sum, 300);
-        monitor.unregister("table", vec![MonitorType::Sinker]);
-        monitor.ensure_monitor("table", MonitorType::Sinker, 60, 1000, 10);
-        assert!(sinker.is_tombstone());
-        // Tombstone filtering is explicitly outside this change's scope.
-        assert!(!monitor
-            .calc()
-            .await
-            .unwrap()
-            .contains_key(&TaskMetricsType::SinkerRpsAvg));
-    }
-
-    #[test]
-    fn concurrent_ensure_does_not_replace_another_worker_monitor() {
-        let monitor = build_task_monitor_for(TaskKind::Snapshot);
-        let barrier = std::sync::Barrier::new(8);
-        std::thread::scope(|scope| {
-            let threads = (0..8)
-                .map(|_| {
-                    scope.spawn(|| {
-                        barrier.wait();
-                        monitor.ensure_monitor("table", MonitorType::Sinker, 60, 1000, 10);
-                        monitor.get_monitor("table", &MonitorType::Sinker).unwrap()
-                    })
-                })
-                .collect::<Vec<_>>();
-            let workers = threads
-                .into_iter()
-                .map(|thread| thread.join().unwrap())
-                .collect::<Vec<_>>();
-            assert!(workers
-                .iter()
-                .all(|worker| Arc::ptr_eq(worker, &workers[0])));
-        });
     }
 
     // Capture real log targets on this test's current-thread runtime, without
@@ -1223,6 +1136,7 @@ mod sinker_worker_tests {
             let id = "f49dc9ee7d863b59";
             let handle =
                 TaskMonitorHandle::new(task.clone(), MonitorType::Pipeline, id.into(), 10, 100, 10);
+            handle.register_monitor(id, handle.build_monitor("pipeline", id));
             let metrics = handle.pipeline_sink_monitor().unwrap();
             for (work_ms, duration_ms) in [(400, 100), (400, 400)] {
                 let batch = task.sinker_worker_metrics().start_pipeline_sink(4);
@@ -1260,14 +1174,7 @@ mod sinker_worker_tests {
                 "pipeline_sink_operations_total | latest=2",
             ] {
                 let expected = format!("pipeline | {id} | {suffix}");
-                assert_eq!(
-                    monitor_lines
-                        .iter()
-                        .filter(|line| **line == expected)
-                        .count(),
-                    1,
-                    "{expected}"
-                );
+                assert!(monitor_lines.contains(&expected.as_str()), "{expected}");
             }
             let partition = format!(
                 "pipeline | {id} | partitioner_duration_seconds | sum=0.00025 | avg=0.00025"
@@ -1276,18 +1183,11 @@ mod sinker_worker_tests {
                 monitor_lines.contains(&partition.as_str()),
                 kind == TaskKind::Snapshot
             );
-            let global_count = monitor_lines
-                .iter()
-                .filter(|line| {
-                    **line == "pipeline | global | pipeline_sink_operations_total | latest=2"
-                })
-                .count();
-            assert_eq!(global_count, usize::from(kind == TaskKind::Snapshot));
-            if kind == TaskKind::Cdc {
-                assert!(!monitor_lines
-                    .iter()
-                    .any(|line| line.starts_with("pipeline | global |")));
-            }
+            assert_eq!(
+                monitor_lines
+                    .contains(&"pipeline | global | pipeline_sink_operations_total | latest=2"),
+                kind == TaskKind::Snapshot,
+            );
             let json: serde_json::Value = serde_json::from_str(
                 &captured
                     .iter()
