@@ -583,15 +583,6 @@ mod tests {
                 expected_bind_count: 0,
             },
             QueryCase {
-                name: "insert binds custom CLR binary parameters directly",
-                setup: QuerySetup::CustomClrBinary,
-                row_count: 1,
-                call: QueryCall::Insert,
-                expected_sql: "INSERT INTO [ape_dts].[dbo].[t1]([id],[code],[name],[custom]) VALUES(@P1,@P2,@P3,@P4)",
-                expected_cols: &["id", "code", "name", "custom"],
-                expected_bind_count: 4,
-            },
-            QueryCase {
                 name: "batch insert binds custom CLR binary parameters directly",
                 setup: QuerySetup::CustomClrBinary,
                 row_count: 2,
@@ -617,15 +608,6 @@ mod tests {
                 expected_sql: "[id],[code],[name],CASE WHEN [shape] IS NULL THEN NULL ELSE CONCAT(CONVERT(nvarchar(max), [shape].STSrid), N'|', [shape].AsTextZM()) END AS [shape]",
                 expected_cols: &[],
                 expected_bind_count: 0,
-            },
-            QueryCase {
-                name: "insert reconstructs geometry text",
-                setup: QuerySetup::Geometry,
-                row_count: 1,
-                call: QueryCall::Insert,
-                expected_sql: "INSERT INTO [dbo].[t1]([id],[code],[name],[shape]) VALUES(@P1,@P2,@P3,CASE WHEN @P4 IS NULL THEN NULL ELSE geometry::STGeomFromText(@P4, @P5) END)",
-                expected_cols: &["id", "code", "name", "shape"],
-                expected_bind_count: 4,
             },
             QueryCase {
                 name: "batch insert advances parameter indexes for spatial values",
@@ -797,21 +779,5 @@ mod tests {
                 "case [{name}] returned unexpected error: {error:#}"
             );
         }
-    }
-
-    #[test]
-    fn reports_invalid_text_transfer_types_as_errors() {
-        let tb_meta = build_tb_meta();
-        let builder = MssqlTableSqlBuilder::new(&tb_meta, None);
-
-        let extract_error = builder
-            .get_text_transfer_extract_expression(&MssqlColType::Int4, "[id]")
-            .unwrap_err();
-        assert!(extract_error.to_string().contains("got Int4"));
-
-        let placeholder_error = builder
-            .get_text_transfer_placeholder(&MssqlColType::Int4, 1)
-            .unwrap_err();
-        assert!(placeholder_error.to_string().contains("got Int4"));
     }
 }

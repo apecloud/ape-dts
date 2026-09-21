@@ -645,47 +645,26 @@ mod tests {
     }
 
     #[test]
-    fn test_spatial_value_helpers() {
-        let value = ColValue::Spatial {
-            srid: 4326,
-            wkt: "POINT (-122.36 47.656)".to_string(),
-        };
-
-        assert_eq!(value.type_name(), "Spatial");
-        assert_eq!(
-            value.to_option_string(),
-            Some("4326|POINT (-122.36 47.656)".to_string())
-        );
-        assert_eq!(
-            serde_json::to_value(&value).unwrap(),
-            serde_json::Value::String("4326|POINT (-122.36 47.656)".to_string())
-        );
-        assert_eq!(
-            value.get_malloc_size(),
-            std::mem::size_of::<i32>() + "POINT (-122.36 47.656)".len()
-        );
-    }
-
-    #[test]
-    fn test_tagged_spatial_value_round_trip() {
+    fn test_spatial_value_serialization() {
         #[derive(Debug, PartialEq, Serialize, Deserialize)]
         struct TaggedValues {
             #[serde(with = "tagged_col_value_map")]
             values: BTreeMap<String, ColValue>,
         }
 
+        let value = ColValue::Spatial {
+            srid: 4326,
+            wkt: "POINT (-122.36 47.656)".to_string(),
+        };
+        let transfer_value = "4326|POINT (-122.36 47.656)";
+        assert_eq!(value.to_option_string().as_deref(), Some(transfer_value));
+        assert_eq!(serde_json::to_value(&value).unwrap(), transfer_value);
+
         let expected = TaggedValues {
-            values: BTreeMap::from([(
-                "shape".to_string(),
-                ColValue::Spatial {
-                    srid: 4326,
-                    wkt: "POINT (-122.36 47.656)".to_string(),
-                },
-            )]),
+            values: BTreeMap::from([("shape".to_string(), value)]),
         };
         let serialized = serde_json::to_string(&expected).unwrap();
         let actual: TaggedValues = serde_json::from_str(&serialized).unwrap();
-
         assert_eq!(actual, expected);
     }
 }

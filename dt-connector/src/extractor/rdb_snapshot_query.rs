@@ -100,55 +100,27 @@ mod tests {
 
     #[test]
     fn test_cursor_bind_values() {
-        #[derive(Default)]
-        struct Case {
-            name: &'static str,
-            cols: &'static [&'static str],
-            expected: Option<&'static [&'static str]>,
-        }
         let cursor = HashMap::from([
             ("a".to_string(), ColValue::Long(10)),
             ("b".to_string(), ColValue::Long(90)),
             ("nullable".to_string(), ColValue::None),
         ]);
-        let cases = [
-            Case {
-                name: "no cursor placeholders",
-                expected: Some(&[]),
-                ..Default::default()
-            },
-            Case {
-                name: "placeholder order with repeated prefix",
-                cols: &["b", "b", "a"],
-                expected: Some(&["b", "b", "a"]),
-            },
-            Case {
-                name: "explicit null is a present value",
-                cols: &["nullable"],
-                expected: Some(&["nullable"]),
-            },
-            Case {
-                name: "missing cursor column is not null",
-                cols: &["a", "missing"],
-                expected: None,
-            },
-        ];
-        for case in cases {
-            let query = RdbSnapshotQuery {
-                cols: case.cols.iter().map(|col| col.to_string()).collect(),
-                ..Default::default()
-            };
-            let result = query.get_bind_values(&cursor);
-            if let Some(expected) = case.expected {
-                let values = result.unwrap();
-                assert_eq!(values.len(), expected.len(), "{}", case.name);
-                for (value, col) in values.into_iter().zip(expected) {
-                    assert!(std::ptr::eq(value, &cursor[*col]), "{}", case.name);
-                }
-            } else {
-                assert!(result.is_err(), "{}", case.name);
-            }
-        }
+        let mut query = RdbSnapshotQuery {
+            cols: ["b", "b", "a", "nullable"].map(str::to_string).to_vec(),
+            ..Default::default()
+        };
+        assert_eq!(
+            query.get_bind_values(&cursor).unwrap(),
+            [
+                &ColValue::Long(90),
+                &ColValue::Long(90),
+                &ColValue::Long(10),
+                &ColValue::None
+            ],
+        );
+        // Missing checkpoint data must fail, rather than silently bind NULL.
+        query.cols.push("missing".into());
+        assert!(query.get_bind_values(&cursor).is_err());
     }
 
     #[test]

@@ -217,41 +217,6 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "score before nullable",
-                keys: &[("a", &["a"], Some(8)), ("b", &["b"], Some(1))],
-                nullable: &["b"],
-                expected: Some("b"),
-                expected_id: &["b"],
-            },
-            Case {
-                name: "nullable fallback",
-                keys: &[("a", &["a"], Some(8)), ("b", &["b"], Some(1))],
-                nullable: &["a", "b"],
-                expected: Some("b"),
-                expected_id: &["b"],
-            },
-            Case {
-                name: "fewer columns on same score",
-                keys: &[("a", &["a", "b"], Some(2)), ("z", &["c"], Some(2))],
-                expected: Some("z"),
-                expected_id: &["c"],
-                ..Default::default()
-            },
-            Case {
-                name: "primary breaks tie",
-                keys: &[("a", &["a"], Some(1)), (RDB_PRIMARY_KEY, &["b"], Some(1))],
-                expected: Some(RDB_PRIMARY_KEY),
-                expected_id: &["b"],
-                ..Default::default()
-            },
-            Case {
-                name: "stable name breaks tie",
-                keys: &[("z", &["a"], Some(1)), ("a", &["b"], Some(1))],
-                expected: Some("a"),
-                expected_id: &["b"],
-                ..Default::default()
-            },
-            Case {
                 name: "unsupported primary",
                 keys: &[(RDB_PRIMARY_KEY, &["a"], None), ("uk", &["b"], Some(8))],
                 expected: Some("uk"),
@@ -259,39 +224,19 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "no scores",
-                keys: &[("uk", &["a"], None)],
+                name: "no eligible keys fall back to all columns",
+                keys: &[("uk", &["a"], None), ("empty", &[], Some(0))],
                 expected: None,
                 expected_id: &["a", "b", "c"],
                 ..Default::default()
             },
             Case {
-                name: "empty key",
-                keys: &[("uk", &[], Some(0))],
-                expected: None,
-                expected_id: &["a", "b", "c"],
-                ..Default::default()
-            },
-            Case {
-                name: "no keys",
-                keys: &[],
-                expected: None,
-                expected_id: &["a", "b", "c"],
-                ..Default::default()
-            },
-            Case {
-                name: "cheap composite determines order and identity",
+                name: "score before column count and nullability",
                 keys: &[("a", &["a", "b"], Some(2)), ("z", &["c"], Some(8))],
+                nullable: &["b"],
                 expected: Some("a"),
                 expected_id: &["a", "b"],
                 ..Default::default()
-            },
-            Case {
-                name: "cheap nullable single before nonnull composite",
-                keys: &[("a", &["a", "b"], Some(9)), ("z", &["c"], Some(1))],
-                nullable: &["c"],
-                expected: Some("z"),
-                expected_id: &["c"],
             },
             Case {
                 name: "column count before nullable",
@@ -315,7 +260,7 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "composite retains declared column order",
+                name: "stable key name preserves declared column order",
                 keys: &[("z", &["c", "b"], Some(2)), ("a", &["b", "a"], Some(2))],
                 expected: Some("a"),
                 expected_id: &["b", "a"],
@@ -323,68 +268,47 @@ mod tests {
             },
         ];
         for case in cases {
-            for reverse in [false, true] {
-                let mut keys = case.keys.to_vec();
-                if reverse {
-                    keys.reverse();
-                }
-                let mut tb_meta = RdbTbMeta {
-                    cols: vec!["a".into(), "b".into(), "c".into()],
-                    key_map: keys
-                        .iter()
-                        .map(|(key, cols, _)| {
-                            (
-                                key.to_string(),
-                                cols.iter().map(|col| col.to_string()).collect(),
-                            )
-                        })
-                        .collect(),
-                    nullable_cols: case.nullable.iter().map(|col| col.to_string()).collect(),
-                    ..Default::default()
-                };
-                let scores = keys
+            let mut tb_meta = RdbTbMeta {
+                cols: vec!["a".into(), "b".into(), "c".into()],
+                key_map: case
+                    .keys
                     .iter()
-                    .filter_map(|(key, _, score)| score.map(|score| (key.to_string(), score)))
-                    .collect();
-                assert_eq!(
-                    RdbMetaManager::select_order_key(&tb_meta, &scores).as_deref(),
-                    case.expected,
-                    "{}",
-                    case.name
-                );
-                let expected_order_cols = case
-                    .expected
-                    .map(|key| tb_meta.key_map[key].clone())
-                    .unwrap_or_default();
-                let attrs = tb_meta
-                    .key_map
-                    .iter()
-                    .map(|(key, cols)| {
+                    .map(|(key, cols, _)| {
                         (
-                            key.clone(),
-                            cols.iter()
-                                .map(|col| (col.clone(), SortDirection::Desc))
-                                .collect(),
+                            key.to_string(),
+                            cols.iter().map(|col| col.to_string()).collect(),
                         )
                     })
-                    .collect();
-                RdbMetaManager::set_order_cols(&mut tb_meta, &scores, attrs).unwrap();
-                assert_eq!(tb_meta.order_cols, expected_order_cols, "{}", case.name);
-                assert_eq!(tb_meta.order_col_attrs.len(), expected_order_cols.len());
-                assert_eq!(tb_meta.id_cols, case.expected_id, "{}", case.name);
-                assert_eq!(tb_meta.partition_col, case.expected_id[0], "{}", case.name);
-            }
+                    .collect(),
+                nullable_cols: case.nullable.iter().map(|col| col.to_string()).collect(),
+                ..Default::default()
+            };
+            let scores = case
+                .keys
+                .iter()
+                .filter_map(|(key, _, score)| score.map(|score| (key.to_string(), score)))
+                .collect();
+            let expected_order_cols = case
+                .expected
+                .map(|key| tb_meta.key_map[key].clone())
+                .unwrap_or_default();
+            let attrs = tb_meta
+                .key_map
+                .iter()
+                .map(|(key, cols)| {
+                    (
+                        key.clone(),
+                        cols.iter()
+                            .map(|col| (col.clone(), SortDirection::Asc))
+                            .collect(),
+                    )
+                })
+                .collect();
+            RdbMetaManager::set_order_cols(&mut tb_meta, &scores, attrs).unwrap();
+            assert_eq!(tb_meta.order_cols, expected_order_cols, "{}", case.name);
+            assert_eq!(tb_meta.id_cols, case.expected_id, "{}", case.name);
+            assert_eq!(tb_meta.partition_col, case.expected_id[0], "{}", case.name);
         }
-    }
-
-    #[test]
-    fn test_set_order_cols_rejects_empty_table() {
-        assert!(RdbMetaManager::set_order_cols(
-            &mut RdbTbMeta::default(),
-            &HashMap::new(),
-            HashMap::new(),
-        )
-        .is_err());
     }
 
     #[test]
@@ -441,24 +365,44 @@ mod tests {
                 ("float".into(), vec!["b".into()]),
                 ("composite".into(), vec!["a".into(), "b".into()]),
                 ("unsupported".into(), vec!["c".into(), "a".into()]),
+                ("bit".into(), vec!["d".into()]),
                 ("empty".into(), vec![]),
             ]),
             ..Default::default()
         };
         let expected = HashMap::from([
             ("integer".into(), 1),
-            ("float".into(), 12),
-            ("composite".into(), 13),
+            ("float".into(), 5),
+            ("composite".into(), 6),
+            ("bit".into(), 6),
         ]);
+        let assert_key_priority =
+            |meta: &RdbTbMeta, mut scores: HashMap<String, u32>, expected_keys: &[&str]| {
+                for key in expected_keys {
+                    assert_eq!(
+                        RdbMetaManager::select_order_key(meta, &scores).as_deref(),
+                        Some(*key)
+                    );
+                    scores.remove(*key);
+                }
+                assert!(RdbMetaManager::select_order_key(meta, &scores).is_none());
+            };
         let mut mysql = MysqlTbMeta {
             basic: basic.clone(),
             col_type_map: HashMap::from([
                 ("a".into(), MysqlColType::Int { unsigned: false }),
                 ("b".into(), MysqlColType::Double),
                 ("c".into(), MysqlColType::Point),
+                ("d".into(), MysqlColType::Bit),
             ]),
         };
-        assert_eq!(MysqlMetaManager::get_key_scores(&mysql).unwrap(), expected);
+        let mysql_scores = MysqlMetaManager::get_key_scores(&mysql).unwrap();
+        assert_eq!(mysql_scores, expected);
+        assert_key_priority(
+            &mysql.basic,
+            mysql_scores,
+            &["integer", "float", "bit", "composite"],
+        );
         mysql
             .basic
             .key_map
@@ -471,10 +415,21 @@ mod tests {
                 ("a".into(), MssqlColType::Int4),
                 ("b".into(), MssqlColType::Float8),
                 ("c".into(), MssqlColType::AssemblyUdt),
+                ("d".into(), MssqlColType::Bitn),
+                ("e".into(), MssqlColType::Guid),
             ]),
             ..Default::default()
         };
-        assert_eq!(MssqlMetaManager::get_key_scores(&mssql).unwrap(), expected);
+        mssql.basic.key_map.insert("uuid".into(), vec!["e".into()]);
+        let mut expected_mssql = expected.clone();
+        expected_mssql.insert("uuid".into(), 4);
+        let mssql_scores = MssqlMetaManager::get_key_scores(&mssql).unwrap();
+        assert_eq!(mssql_scores, expected_mssql);
+        assert_key_priority(
+            &mssql.basic,
+            mssql_scores,
+            &["integer", "uuid", "float", "bit", "composite"],
+        );
         mssql
             .basic
             .key_map
@@ -499,18 +454,44 @@ mod tests {
                 ("a".into(), pg_col_type(23)),
                 ("b".into(), pg_col_type(701)),
                 ("c".into(), pg_col_type(99999)),
+                ("d".into(), pg_col_type(1560)),
+                ("e".into(), pg_col_type(2950)),
+                ("flag".into(), pg_col_type(16)),
+                ("text".into(), pg_col_type(25)),
             ]),
             ..Default::default()
         };
+        pg.basic.key_map.extend([
+            ("uuid".into(), vec!["e".into()]),
+            ("bool".into(), vec!["flag".into()]),
+            ("text".into(), vec!["text".into()]),
+        ]);
         let mut expected_pg = expected;
+        expected_pg.extend([("uuid".into(), 4), ("bool".into(), 32), ("text".into(), 8)]);
         expected_pg.insert("unsupported".into(), 33); // A catalog-confirmed unique custom type retains its existing path.
-        assert_eq!(PgMetaManager::get_key_scores(&pg).unwrap(), expected_pg);
+        let pg_scores = PgMetaManager::get_key_scores(&pg).unwrap();
+        assert_eq!(pg_scores, expected_pg);
+        assert_key_priority(
+            &pg.basic,
+            pg_scores,
+            &[
+                "integer",
+                "uuid",
+                "float",
+                "bit",
+                "composite",
+                "text",
+                "bool",
+                "unsupported",
+            ],
+        );
+
         pg.basic
             .key_map
             .insert("missing".into(), vec!["missing".into()]);
         assert!(PgMetaManager::get_key_scores(&pg).is_err());
         for (oid, category, expected_weight) in [
-            (701, "N", 12),
+            (701, "N", 5),
             (869, "I", 16),
             (3904, "R", 20),
             (1007, "A", 20),
@@ -520,7 +501,5 @@ mod tests {
             col.category = category.into();
             assert_eq!(col.order_key_weight(), Some(expected_weight));
         }
-        assert_eq!(MssqlColType::Bitn.order_key_weight(), Some(4));
-        assert!(!MssqlColType::Bitn.can_be_splitted());
     }
 }

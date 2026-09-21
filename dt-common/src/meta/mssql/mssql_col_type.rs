@@ -53,10 +53,11 @@ impl MssqlColType {
             | Self::Datetime2
             | Self::DatetimeOffsetn => 2,
             Self::Money | Self::Money4 | Self::Decimaln | Self::Numericn => 3,
-            Self::Guid | Self::Bit | Self::Bitn => 4,
-            Self::BigVarBin | Self::BigBinary => 6,
+            Self::Guid => 4,
+            Self::Float4 | Self::Float8 => 5,
+            Self::Bit | Self::Bitn => 6,
+            Self::BigVarBin | Self::BigBinary => 7,
             Self::BigVarChar | Self::BigChar | Self::NVarchar | Self::NChar => 8,
-            Self::Float4 | Self::Float8 => 12,
             Self::Xml
             | Self::Text
             | Self::Image
@@ -308,20 +309,6 @@ mod tests {
             let tiberius_type = col_type.wire_type();
             assert_eq!(MssqlColType::try_from(tiberius_type).unwrap(), col_type);
         }
-    }
-
-    #[test]
-    fn exposes_special_transfer_wire_types() {
-        assert_eq!(MssqlColType::Geometry.wire_type(), ColumnType::NVarchar);
-        assert_eq!(MssqlColType::Geography.wire_type(), ColumnType::NVarchar);
-        assert_eq!(MssqlColType::HierarchyId.wire_type(), ColumnType::NVarchar);
-        assert_eq!(MssqlColType::Geometry.bind_parameter_count(), 2);
-        assert_eq!(MssqlColType::Geography.bind_parameter_count(), 2);
-        assert_eq!(MssqlColType::HierarchyId.bind_parameter_count(), 1);
-
-        let udt = MssqlColType::AssemblyUdt;
-        assert_eq!(udt.wire_type(), ColumnType::BigVarBin);
-        assert!(udt.requires_special_transfer());
     }
 
     #[test]

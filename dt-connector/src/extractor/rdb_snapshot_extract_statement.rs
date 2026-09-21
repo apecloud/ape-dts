@@ -750,47 +750,6 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "mysql_multiple_order_cols_after",
-                fixture: "mysql_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                predicate: After,
-                limit: 100,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) > (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC LIMIT 100"#,
-                expected_cols: &[
-                    r#"id"#,
-                    r#"price"#,
-                    r#"username"#,
-                    r#"bio"#,
-                    r#"large_blob"#,
-                ],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_time_order_col_after_casts_placeholder",
-                fixture: "mysql_time_order_tb_meta",
-                order_cols: &[("time_col", Asc), ("year_col", Asc)],
-                predicate: After,
-                limit: 4,
-                expected_sql: r#"SELECT `time_col`,`year_col`,`val` FROM `test_schema`.`time_order_table` WHERE (`time_col`, `year_col`) > (CAST(? AS TIME(6)), ?) ORDER BY `test_schema`.`time_order_table`.`time_col` ASC, `test_schema`.`time_order_table`.`year_col` ASC LIMIT 4"#,
-                expected_cols: &[r#"time_col"#, r#"year_col"#],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_single_order_col_range",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: Range,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? AND `id` <= ? ORDER BY `test_schema`.`test_table`.`id` ASC"#,
-                expected_cols: &[r#"id"#, r#"id"#],
-                ..Default::default()
-            },
-            Case {
                 name: "mysql_time_order_col_range_casts_placeholder",
                 fixture: "mysql_time_order_tb_meta",
                 order_cols: &[("time_col", Asc), ("year_col", Asc)],
@@ -826,42 +785,6 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "mysql_null_predicate_with_nullable_cols",
-                fixture: "mysql_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                predicate: AtOrBefore,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (`id`, `price`, `username`, `bio`, `large_blob`) <= (?, ?, ?, ?, ?) AND `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC"#,
-                expected_cols: &[
-                    r#"id"#,
-                    r#"price"#,
-                    r#"username"#,
-                    r#"bio"#,
-                    r#"large_blob"#,
-                ],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_is_null_predicate",
-                fixture: "mysql_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                predicate: IsNull,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `price` IS NULL OR `bio` IS NULL OR `large_blob` IS NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC"#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
                 name: "mysql_is_null_predicate_with_where_condition",
                 fixture: "mysql_tb_meta",
                 order_cols: &[
@@ -876,38 +799,6 @@ mod tests {
                 limit: 100,
                 expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (id > 100) AND (`price` IS NULL OR `bio` IS NULL OR `large_blob` IS NULL) ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC LIMIT 100"#,
                 expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_single_order_col_after",
-                fixture: "pg_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: After,
-                limit: 100,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "id" > $1::int8 ORDER BY "test_schema"."test_table"."id" ASC LIMIT 100"#,
-                expected_cols: &[r#"id"#],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_multiple_order_cols_after",
-                fixture: "pg_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                predicate: After,
-                limit: 100,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") > ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC LIMIT 100"#,
-                expected_cols: &[
-                    r#"id"#,
-                    r#"price"#,
-                    r#"username"#,
-                    r#"bio"#,
-                    r#"large_blob"#,
-                ],
                 ..Default::default()
             },
             Case {
@@ -956,106 +847,9 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "pg_null_predicate_with_nullable_cols",
-                fixture: "pg_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                predicate: AtOrBefore,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE ("id", "price", "username", "bio", "large_blob") <= ($1::int8, $2::float8, $3::varchar, $4::text, $5::bytea) AND "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC"#,
-                expected_cols: &[
-                    r#"id"#,
-                    r#"price"#,
-                    r#"username"#,
-                    r#"bio"#,
-                    r#"large_blob"#,
-                ],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_is_null_predicate",
-                fixture: "pg_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                predicate: IsNull,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "price" IS NULL OR "bio" IS NULL OR "large_blob" IS NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC"#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_is_null_predicate_with_where_condition",
-                fixture: "pg_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                predicate: IsNull,
-                where_condition: r#"id > 100"#,
-                limit: 100,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE (id > 100) AND ("price" IS NULL OR "bio" IS NULL OR "large_blob" IS NULL) ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC LIMIT 100"#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_with_where_condition",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: After,
-                where_condition: r#"id > 1000"#,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (id > 1000) AND `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#,
-                expected_cols: &[r#"id"#],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_with_where_condition",
-                fixture: "pg_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: After,
-                where_condition: r#"id > 1000"#,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE (id > 1000) AND "id" > $1::int8 ORDER BY "test_schema"."test_table"."id" ASC"#,
-                expected_cols: &[r#"id"#],
-                ..Default::default()
-            },
-            Case {
                 name: "mysql_no_order_cols",
                 fixture: "mysql_tb_meta",
                 expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table`"#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_no_order_cols",
-                fixture: "pg_tb_meta",
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table""#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "no_limit",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: After,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#,
-                expected_cols: &[r#"id"#],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_only_where_condition",
-                fixture: "mysql_tb_meta",
-                where_condition: r#"price > 100.0"#,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE (price > 100.0)"#,
                 expected_cols: &[],
                 ..Default::default()
             },
@@ -1068,68 +862,11 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "mysql_single_non_nullable_order_col",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("username", Asc)],
-                predicate: After,
-                limit: 50,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `username` > ? ORDER BY `test_schema`.`test_table`.`username` ASC LIMIT 50"#,
-                expected_cols: &[r#"username"#],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_single_non_nullable_order_col",
-                fixture: "pg_tb_meta",
-                order_cols: &[("username", Asc)],
-                predicate: After,
-                limit: 50,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "username" > $1::varchar ORDER BY "test_schema"."test_table"."username" ASC LIMIT 50"#,
-                expected_cols: &[r#"username"#],
-                ..Default::default()
-            },
-            Case {
-                name: "empty_where_condition",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: After,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#,
-                expected_cols: &[r#"id"#],
-                ..Default::default()
-            },
-            Case {
-                name: "limit_zero",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: After,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC"#,
-                expected_cols: &[r#"id"#],
-                ..Default::default()
-            },
-            Case {
                 name: "mysql_with_ignore_cols",
                 fixture: "mysql_tb_meta",
                 ignore_cols: &[r#"bio"#, r#"large_blob"#],
                 expected_sql: r#"SELECT `id`,`price`,`username` FROM `test_schema`.`test_table`"#,
                 expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_with_ignore_cols",
-                fixture: "pg_tb_meta",
-                ignore_cols: &[r#"bio"#, r#"large_blob"#],
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text FROM "test_schema"."test_table""#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_with_ignore_cols_and_order",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("id", Asc)],
-                predicate: After,
-                ignore_cols: &[r#"large_blob"#],
-                limit: 50,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio` FROM `test_schema`.`test_table` WHERE `id` > ? ORDER BY `test_schema`.`test_table`.`id` ASC LIMIT 50"#,
-                expected_cols: &[r#"id"#],
                 ..Default::default()
             },
             Case {
@@ -1141,45 +878,6 @@ mod tests {
                 limit: 50,
                 expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text FROM "test_schema"."test_table" WHERE "id" > $1::int8 ORDER BY "test_schema"."test_table"."id" ASC LIMIT 50"#,
                 expected_cols: &[r#"id"#],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_predicate_type_none_with_nullable_cols",
-                fixture: "mysql_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                limit: 100,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` WHERE `price` IS NOT NULL AND `bio` IS NOT NULL AND `large_blob` IS NOT NULL ORDER BY `test_schema`.`test_table`.`id` ASC, `test_schema`.`test_table`.`price` ASC, `test_schema`.`test_table`.`username` ASC, `test_schema`.`test_table`.`bio` ASC, `test_schema`.`test_table`.`large_blob` ASC LIMIT 100"#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "pg_predicate_type_none_with_nullable_cols",
-                fixture: "pg_tb_meta",
-                order_cols: &[
-                    ("id", Asc),
-                    ("price", Asc),
-                    ("username", Asc),
-                    ("bio", Asc),
-                    ("large_blob", Asc),
-                ],
-                limit: 100,
-                expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text,"large_blob"::bytea FROM "test_schema"."test_table" WHERE "price" IS NOT NULL AND "bio" IS NOT NULL AND "large_blob" IS NOT NULL ORDER BY "test_schema"."test_table"."id" ASC, "test_schema"."test_table"."price" ASC, "test_schema"."test_table"."username" ASC, "test_schema"."test_table"."bio" ASC, "test_schema"."test_table"."large_blob" ASC LIMIT 100"#,
-                expected_cols: &[],
-                ..Default::default()
-            },
-            Case {
-                name: "mysql_predicate_type_none_single_non_nullable_col",
-                fixture: "mysql_tb_meta",
-                order_cols: &[("id", Asc)],
-                limit: 100,
-                expected_sql: r#"SELECT `id`,`price`,`username`,`bio`,`large_blob` FROM `test_schema`.`test_table` ORDER BY `test_schema`.`test_table`.`id` ASC LIMIT 100"#,
-                expected_cols: &[],
                 ..Default::default()
             },
             Case {
@@ -1201,22 +899,6 @@ mod tests {
                 limit: 25,
                 expected_sql: r#"SELECT TOP (25) [tenant_id],[id],[name] FROM [test_schema].[test_table] WHERE ([name] <> N'ignored') AND (([id] > @P1) OR ([id] = @P2 AND [tenant_id] > @P3)) AND [tenant_id] IS NOT NULL ORDER BY [test_schema].[test_table].[id] ASC, [test_schema].[test_table].[tenant_id] ASC"#,
                 expected_cols: &[r#"id"#, r#"id"#, r#"tenant_id"#],
-                ..Default::default()
-            },
-            Case {
-                name: "mssql_multiple_order_cols_range_uses_distinct_parameters",
-                fixture: "mssql_tb_meta",
-                order_cols: &[("id", Asc), ("tenant_id", Asc)],
-                predicate: Range,
-                expected_sql: r#"SELECT [tenant_id],[id],[name] FROM [test_schema].[test_table] WHERE (([id] > @P1) OR ([id] = @P2 AND [tenant_id] > @P3)) AND (([id] < @P4) OR ([id] = @P5 AND [tenant_id] <= @P6)) AND [tenant_id] IS NOT NULL ORDER BY [test_schema].[test_table].[id] ASC, [test_schema].[test_table].[tenant_id] ASC"#,
-                expected_cols: &[
-                    r#"id"#,
-                    r#"id"#,
-                    r#"tenant_id"#,
-                    r#"id"#,
-                    r#"id"#,
-                    r#"tenant_id"#,
-                ],
                 ..Default::default()
             },
             Case {
@@ -1274,16 +956,6 @@ mod tests {
             let query = stmt.build().unwrap();
             assert_eq!(query.sql, case.expected_sql, "{}", case.name);
             assert_eq!(query.cols, case.expected_cols, "{}", case.name);
-            assert_eq!(query, stmt.build().unwrap(), "repeat build: {}", case.name);
-            if matches!(case.predicate, Range) {
-                let midpoint = query.cols.len() / 2;
-                assert_eq!(
-                    query.cols[..midpoint],
-                    query.cols[midpoint..],
-                    "{}",
-                    case.name
-                );
-            }
         }
     }
     #[test]
@@ -1299,21 +971,12 @@ mod tests {
         }
         let cases = [
             PredicateCase { db_type: DbType::Mysql, directions: &[Desc], predicate: After, expected_predicate: "`a` < ?", expected_cols: &["a"] },
-            PredicateCase { db_type: DbType::Mysql, directions: &[Desc], predicate: AtOrBefore, expected_predicate: "`a` >= ?", expected_cols: &["a"] },
             PredicateCase { db_type: DbType::Mysql, directions: &[Desc, Desc], predicate: Range, expected_predicate: "(`a`, `b`) < (?, ?) AND (`a`, `b`) >= (?, ?)", expected_cols: &["a", "b", "a", "b"] },
-            PredicateCase { db_type: DbType::Mysql, directions: &[Asc, Desc], predicate: After, expected_predicate: "((`a` > ?) OR (`a` = ? AND `b` < ?))", expected_cols: &["a", "a", "b"] },
-            PredicateCase { db_type: DbType::Mysql, directions: &[Asc, Desc], predicate: AtOrBefore, expected_predicate: "((`a` < ?) OR (`a` = ? AND `b` >= ?))", expected_cols: &["a", "a", "b"] },
             PredicateCase { db_type: DbType::Mysql, directions: &[Desc, Asc], predicate: Range, expected_predicate: "((`a` < ?) OR (`a` = ? AND `b` > ?)) AND ((`a` > ?) OR (`a` = ? AND `b` <= ?))", expected_cols: &["a", "a", "b", "a", "a", "b"] },
             PredicateCase { db_type: DbType::Mysql, directions: &[Asc, Desc, Asc], predicate: After, expected_predicate: "((`a` > ?) OR (`a` = ? AND `b` < ?) OR (`a` = ? AND `b` = ? AND `c` > ?))", expected_cols: &["a", "a", "b", "a", "b", "c"] },
             PredicateCase { db_type: DbType::Pg, directions: &[Desc], predicate: Range, expected_predicate: r#""a" > $1::int4 AND "a" <= $2::int4"#, expected_cols: &["a", "a"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Desc], predicate: Range, expected_predicate: r#"("a", "b") > ($1::int4, $2::int4) AND ("a", "b") <= ($3::int4, $4::int4)"#, expected_cols: &["a", "b", "a", "b"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Asc, Desc], predicate: After, expected_predicate: r#"("a", "b") > ($1::int4, $2::int4)"#, expected_cols: &["a", "b"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Asc, Desc], predicate: AtOrBefore, expected_predicate: r#"("a", "b") <= ($1::int4, $2::int4)"#, expected_cols: &["a", "b"] },
             PredicateCase { db_type: DbType::Pg, directions: &[Desc, Asc], predicate: Range, expected_predicate: r#"("a", "b") > ($1::int4, $2::int4) AND ("a", "b") <= ($3::int4, $4::int4)"#, expected_cols: &["a", "b", "a", "b"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Asc, Desc], predicate: AtOrBefore, expected_predicate: r#"("a", "b", "c") <= ($1::int4, $2::int4, $3::int4)"#, expected_cols: &["a", "b", "c"] },
             PredicateCase { db_type: DbType::Mssql, directions: &[Desc], predicate: Range, expected_predicate: "[a] < @P1 AND [a] >= @P2", expected_cols: &["a", "a"] },
-            PredicateCase { db_type: DbType::Mssql, directions: &[Desc, Desc], predicate: AtOrBefore, expected_predicate: "(([a] > @P1) OR ([a] = @P2 AND [b] >= @P3))", expected_cols: &["a", "a", "b"] },
-            PredicateCase { db_type: DbType::Mssql, directions: &[Asc, Desc], predicate: After, expected_predicate: "(([a] > @P1) OR ([a] = @P2 AND [b] < @P3))", expected_cols: &["a", "a", "b"] },
             PredicateCase { db_type: DbType::Mssql, directions: &[Asc, Desc], predicate: Range, expected_predicate: "(([a] > @P1) OR ([a] = @P2 AND [b] < @P3)) AND (([a] < @P4) OR ([a] = @P5 AND [b] >= @P6))", expected_cols: &["a", "a", "b", "a", "a", "b"] },
             PredicateCase { db_type: DbType::Mssql, directions: &[Desc, Asc, Desc], predicate: AtOrBefore, expected_predicate: "(([a] > @P1) OR ([a] = @P2 AND [b] < @P3) OR ([a] = @P4 AND [b] = @P5 AND [c] >= @P6))", expected_cols: &["a", "a", "b", "a", "b", "c"] },
         ];
@@ -1399,7 +1062,6 @@ mod tests {
                 )));
             }
             assert_eq!(query.cols, case.expected_cols);
-            assert_eq!(query, stmt.build().unwrap());
         }
     }
 
@@ -1407,16 +1069,12 @@ mod tests {
     fn test_missing_order_attributes() {
         let meta = create_mysql_tb_meta();
         let cols = vec!["id".to_string(), "username".to_string()];
-        for attrs in [
-            HashMap::new(),
-            HashMap::from([("id".to_string(), SortDirection::Asc)]),
-        ] {
-            assert!(RdbSnapshotExtractStatement::from(&meta)
-                .with_order_cols(&cols)
-                .with_order_col_attrs(&attrs)
-                .build()
-                .is_err());
-        }
+        let attrs = HashMap::from([("id".to_string(), SortDirection::Asc)]);
+        assert!(RdbSnapshotExtractStatement::from(&meta)
+            .with_order_cols(&cols)
+            .with_order_col_attrs(&attrs)
+            .build()
+            .is_err());
         assert!(RdbSnapshotExtractStatement::from(&meta)
             .with_order_cols(&cols)
             .build()

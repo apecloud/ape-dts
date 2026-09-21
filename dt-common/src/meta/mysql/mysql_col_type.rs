@@ -114,20 +114,20 @@ impl MysqlColType {
             | Self::Timestamp { .. }
             | Self::Year => 2,
             Self::Decimal { .. } => 3,
-            Self::Bit => 4,
+            Self::Float | Self::Double => 5,
+            Self::Bit => 6,
             Self::Binary { .. }
             | Self::VarBinary { .. }
             | Self::TinyBlob
             | Self::MediumBlob
             | Self::LongBlob
-            | Self::Blob => 6,
+            | Self::Blob => 7,
             Self::Char { .. }
             | Self::Varchar { .. }
             | Self::TinyText { .. }
             | Self::MediumText { .. }
             | Self::Text { .. }
             | Self::LongText { .. } => 8,
-            Self::Float | Self::Double => 12,
             // ENUM/SET order by ordinal/bitmask, but the cursor is bound as a string.
             Self::Enum { .. }
             | Self::Set { .. }

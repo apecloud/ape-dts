@@ -1,7 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::pg_value_type::{PgValueType, BPCHAR_OID, TEXT_OID, VARCHAR_OID};
+use super::pg_value_type::{
+    PgValueType, BIT_OID, BPCHAR_OID, BYTEA_OID, CHAR_OID, CIDR_OID, DATE_OID, FLOAT4_OID,
+    FLOAT8_OID, INET_OID, INT2_OID, INT4_OID, INT8_OID, INTERVAL_OID, MACADDR8_OID, MACADDR_OID,
+    MONEY_OID, NAME_OID, NUMERIC_OID, OID_OID, TEXT_OID, TIMESTAMPTZ_OID, TIMESTAMP_OID,
+    TIMETZ_OID, TIME_OID, UUID_OID, VARBIT_OID, VARCHAR_OID,
+};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PgColType {
@@ -29,14 +34,15 @@ impl PgColType {
         // Unknown types are represented as strings too. Use catalog OIDs/category,
         // rather than assigning them the cost of a built-in text column.
         Some(match self.oid {
-            20 | 21 | 23 | 26 => 1,
-            1082 | 1083 | 1114 | 1184 | 1186 | 1266 => 2,
-            790 | 1700 => 3,
-            16 | 1560 | 1562 | 2950 => 4,
-            17 => 6,
-            18 | 19 | TEXT_OID | VARCHAR_OID | BPCHAR_OID => 8,
-            700 | 701 => 12,
-            650 | 774 | 829 | 869 => 16,
+            INT8_OID | INT2_OID | INT4_OID | OID_OID => 1,
+            DATE_OID | TIME_OID | TIMESTAMP_OID | TIMESTAMPTZ_OID | INTERVAL_OID | TIMETZ_OID => 2,
+            MONEY_OID | NUMERIC_OID => 3,
+            UUID_OID => 4,
+            FLOAT4_OID | FLOAT8_OID => 5,
+            BIT_OID | VARBIT_OID => 6,
+            BYTEA_OID => 7,
+            CHAR_OID | NAME_OID | TEXT_OID | VARCHAR_OID | BPCHAR_OID => 8,
+            CIDR_OID | MACADDR8_OID | MACADDR_OID | INET_OID => 16,
             _ if self.is_array() || matches!(self.category.as_str(), "R") => 20,
             // The key catalog guarantees a complete ordinary-column unique index.
             // Keep existing indexable types eligible, including text-roundtripped types.

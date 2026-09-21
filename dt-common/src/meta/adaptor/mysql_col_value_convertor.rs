@@ -616,63 +616,22 @@ mod tests {
 
     #[test]
     fn from_binlog_preserves_mysql_spatial_srid() {
-        let wkb = point_wkb();
-        let mut mysql_internal = 4326u32.to_le_bytes().to_vec();
-        mysql_internal.extend_from_slice(&wkb);
-
-        let value = MysqlColValueConvertor::from_binlog(
-            &MysqlColType::Point,
-            ColumnValue::Blob(mysql_internal),
-        )
-        .unwrap();
-
-        assert_eq!(
-            ColValue::Spatial {
-                srid: 4326,
-                wkt: "POINT(0 0)".to_string(),
-            },
-            value
-        );
-    }
-
-    #[test]
-    fn from_binlog_strips_zero_srid_spatial_prefix() {
-        let wkb = point_wkb();
-        let mut mysql_internal = 0u32.to_le_bytes().to_vec();
-        mysql_internal.extend_from_slice(&wkb);
-
-        let value = MysqlColValueConvertor::from_binlog(
-            &MysqlColType::Point,
-            ColumnValue::Blob(mysql_internal),
-        )
-        .unwrap();
-
-        assert_eq!(
-            ColValue::Spatial {
-                srid: 0,
-                wkt: "POINT(0 0)".to_string(),
-            },
-            value
-        );
-    }
-
-    #[test]
-    fn from_binlog_keeps_plain_spatial_wkb() {
-        let wkb = point_wkb();
-
-        let value = MysqlColValueConvertor::from_binlog(
-            &MysqlColType::Point,
-            ColumnValue::Blob(wkb.clone()),
-        )
-        .unwrap();
-
-        assert_eq!(
-            ColValue::Spatial {
-                srid: 0,
-                wkt: "POINT(0 0)".to_string(),
-            },
-            value
-        );
+        for srid in [Some(4326u32), Some(0), None] {
+            let mut bytes = srid
+                .map(|srid| srid.to_le_bytes().to_vec())
+                .unwrap_or_default();
+            bytes.extend_from_slice(&point_wkb());
+            let value =
+                MysqlColValueConvertor::from_binlog(&MysqlColType::Point, ColumnValue::Blob(bytes))
+                    .unwrap();
+            assert_eq!(
+                value,
+                ColValue::Spatial {
+                    srid: srid.unwrap_or_default() as i32,
+                    wkt: "POINT(0 0)".to_string(),
+                }
+            );
+        }
     }
 
     #[test]

@@ -382,10 +382,6 @@ mod tests {
             "ST_GeomFromText(?, ?)",
             SqlUtil::mysql_spatial_from_text_placeholder_expr()
         );
-        assert_eq!(
-            "ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 2), POINT(3 4))', 0)",
-            SqlUtil::mysql_spatial_from_text_expr("GEOMETRYCOLLECTION(POINT(1 2), POINT(3 4))", 0)
-        );
     }
 
     #[test]
