@@ -20,7 +20,8 @@ Snapshot 任务同时输出 `pipeline | global` 汇总；task JSON / Prometheus 
 
 - Task metrics 在 `TaskMonitor` flush 时刷新。正常 pipeline 流程下，刷新周期由
   `[pipeline] checkpoint_interval_secs` 控制。
-- 利用率、batch 耗时和数量、partitioner 耗时累计本次任务运行以来的数据，不受窗口配置影响。
+- 利用率、batch 耗时和 partitioner 耗时使用时间窗口 counter；
+  `pipeline_sink_operations_total` 累计本次任务运行以来的有效操作数。
   pipeline monitor 保留到最后一次 flush 完成后才注销。
 - 吞吐量和响应时间指标使用 `[pipeline] counter_time_window_secs` 配置的滚动窗口。
 - 时间窗口 counter 最多保留 `[pipeline] counter_max_sub_count` 个样本；事件频率较高时，
@@ -31,7 +32,7 @@ Snapshot 任务同时输出 `pipeline | global` 汇总；task JSON / Prometheus 
 - 窗口指标沿用既有聚合逻辑：各 monitor 先计算自身统计，task 对各 monitor 的
   min/max 取极值，avg 使用 `(previous + current) / 2` 逐次合并。
   Sinker RPS/BPS 分别使用 `RecordsPerQuery`/`DataBytes`，RT 使用 `RtPerQuery`。
-- global 窗口日志直接相加各 monitor 的统计值，包括平均值和最大值；窗口 min
+- global 窗口日志直接相加各 monitor 的统计值，包括平均值和最大值；窗口 min_by_sec
   保持原有的零值输出。已完成表的未过期样本仍参与 global 日志，task 则过滤已完成
   monitor，因此两者统计口径不同。
 - 样本时间戳为提交指标的时刻；批量提交时可能与实际提取或数据库请求完成时刻不同。
@@ -76,19 +77,20 @@ Snapshot 任务同时输出 `pipeline | global` 汇总；task JSON / Prometheus 
 
 | Task 日志 / Prometheus 字段 | 单位 | 含义 |
 | --- | --- | --- |
-| `partitioner_duration_seconds_sum` | seconds | 本次运行以来各次 partition 调用的总耗时，`sum(P)`。 |
-| `partitioner_duration_seconds_avg` | seconds | 本次运行以来单次调用的算术平均耗时，`sum(P) / partition_call_count`。 |
+| `partitioner_duration_seconds_latest` | seconds | 当前窗口内最近一次保留的 partition 调用耗时。 |
+| `partitioner_duration_seconds_avg` | seconds | 当前窗口内保留调用的平均耗时，`sum(P) / partition_call_count`。 |
+| `partitioner_duration_seconds_min` | seconds | 当前窗口内单次有效 partition 调用耗时的最小值。 |
+| `partitioner_duration_seconds_max` | seconds | 当前窗口内单次有效 partition 调用耗时的最大值。 |
 
-两个字段均为秒数浮点 Gauge，累计本次任务运行以来的所有调用，
-不受 `counter_time_window_secs` 和 `counter_max_sub_count` 影响。
-pipeline 只保存累计 sum/count，task 在最后一次 flush 时仍读取该 monitor 的累计值。
-新任务实例重新统计，checkpoint 恢复不会恢复指标值。内部调用数独立于 `pipeline_sink_operations_total`，
-不另外导出 count。空输入、错误返回和 panic unwind 的调用同样记录已花费的时间；
-后续 sink 失败不会撤销已完成的 partition 样本。零耗时样本也参与平均值。
+四个字段均为秒数浮点 Gauge，统计 `counter_time_window_secs` 内保留的样本，
+最多保留 `counter_max_sub_count` 个样本。内部窗口调用数独立于
+`pipeline_sink_operations_total`，不另外导出 count。
+空输入和错误返回同样记录耗时；panic unwind 不产生样本。后续 sink 失败不会撤销
+已记录的 partition 样本。零耗时样本也参与平均值。
 
-测量启用后无样本时两个字段均为 0；已有统计不会随时间或表完成而归零。
-未启用时不产生对应 Task JSON 字段，
-Snapshot 的已注册 Prometheus Gauge 保持 0。当前不测量 raw、其他 partitioner 或 CDC 路径。
+首次采样前或全部样本过期后，四项指标均为 0。未启用测量时不产生对应 Task JSON
+字段，Snapshot 的已注册 Prometheus Gauge 保持 0。当前不测量 raw、其他 partitioner
+或 CDC 路径。checkpoint 恢复不会恢复这些统计值。
 
 ## Sinker 指标
 
@@ -117,7 +119,7 @@ Snapshot 的已注册 Prometheus Gauge 保持 0。当前不测量 raw、其他 p
 所有 partition；一个 partition 可能执行多个 SQL 请求。计时从派发开始，不包含
 此前由 `drain()` 完成的队列取数。既有 `sinker_workers_per_drain_*` 保留原名。
 
-以下 4 个指标测量 `BaseParallelizer::sink_dml` 成功完成的非空 DML batch。
+以下指标测量 `BaseParallelizer::sink_dml` 成功完成的非空 DML batch。
 Snapshot、table、partition、serial 等使用该入口的路径统一记录，包含 Snapshot 与 CDC
 任务；直接调用 sinker 的其他路径（例如 MergeParallelizer）暂不记录。
 `K = min(parallel_size, sinkers.len())`，parallel_size 为本次 sink_dml 的并发上限
@@ -128,28 +130,31 @@ D 从派发前计到全部 partition 完成，包含 mutex 等待和调度时间
 
 | Task 日志 / Prometheus 字段 | 单位 | 含义 |
 | --- | --- | --- |
-| `pipeline_sink_parallel_utilization_avg` | 0..1 | 本次运行以来每次有效 pipeline sink operation 的 U 的算术平均，`sum(U) / N`。 |
-| `pipeline_sink_duration_seconds_sum` | seconds | 本次运行以来各 pipeline sink operation 的墙钟耗时之和，`sum(D)`。 |
-| `pipeline_sink_duration_seconds_avg` | seconds | 本次运行以来单次 pipeline sink operation 的平均墙钟耗时，`sum(D) / N`。 |
-| `pipeline_sink_operations_total` | batches | 本次运行以来的有效 pipeline sink operation 数 N。 |
+| `pipeline_sink_parallel_utilization_latest` | 0..1 | 当前窗口内最近一次有效 sink 操作的利用率 U。 |
+| `pipeline_sink_parallel_utilization_avg` | 0..1 | 当前窗口内保留的有效 sink 操作的平均利用率，`sum(U) / window_count`。 |
+| `pipeline_sink_parallel_utilization_min` | 0..1 | 当前窗口内单次有效 sink 操作利用率的最小值。 |
+| `pipeline_sink_parallel_utilization_max` | 0..1 | 当前窗口内单次有效 sink 操作利用率的最大值。 |
+| `pipeline_sink_duration_seconds_latest` | seconds | 当前窗口内最近一次有效 sink 操作的墙钟耗时。 |
+| `pipeline_sink_duration_seconds_avg` | seconds | 当前窗口内保留的 sink 操作平均墙钟耗时，`sum(D) / window_count`。 |
+| `pipeline_sink_duration_seconds_min` | seconds | 当前窗口内单次有效 sink 操作耗时的最小值。 |
+| `pipeline_sink_duration_seconds_max` | seconds | 当前窗口内单次有效 sink 操作耗时的最大值。 |
+| `pipeline_sink_operations_total` | batches | 本次运行以来的有效 sink 操作总数。 |
 
-这些字段累计本次任务运行以来的全部有效 batch，沿用 Prometheus Gauge 类型。
-利用率、batch 耗时、partitioner 耗时与累计批次数均使用通用无窗口 counter。
-`pipeline_sink_operations_total` 每个有效 pipeline sink operation 增加 1；monitor.log 对应独立的 `pipeline_sink_operations_total | latest=N` 行。
+这些字段沿用 Prometheus Gauge 类型。利用率和耗时使用通用时间窗口 counter，
+`counter_time_window_secs` 限制样本年龄，`counter_max_sub_count` 限制样本数量。
+利用率平均值对每个保留的 batch 等权计算，latest 为窗口内最近一次有效样本。
+W 仅供内部计算，不导出指标。
 
-新指标不受 `counter_time_window_secs` / `counter_max_sub_count` 限制。
-pipeline 在 batch 完成时更新累计 sum/count，不保留历史样本队列。
-任务只有一个 pipeline，其 monitor 保留到最后一次 flush 完成后才注销。
-count 和 sum 在本次运行内持续累加，avg 基于全部有效样本计算。
+`pipeline_sink_operations_total` 使用无窗口 counter，每个有效 sink 操作增加 1，
+monitor.log 中的 `pipeline_sink_operations_total | latest=N` 输出本次运行的累计操作数。
+该累计值不是窗口平均值的分母。pipeline monitor 保留到 final flush 完成后才注销。
 新任务实例重新统计，checkpoint 恢复不会恢复指标值。
-利用率 avg 按 batch 等权平均；W 仅供内部计算，没有导出指标。
-`sum(D)` 是该 pipeline 各次成功 sink 操作的总墙钟耗时。
 
-空 batch、错误、取消、非 DML 操作和无效测量不计入 N。测量启用后，N=0 时全部新字段为 0，
-已有统计不会因空闲或表完成而归零；以 N 区分无样本与有效的零利用率。未启用测量时 Task JSON
-不包含这些字段，Prometheus 已注册 Gauge 保持 0。
+空 batch、错误、取消、非 DML 操作和无效测量不产生样本，也不增加累计操作数。
+窗口内没有有效样本时，已启用的窗口字段输出 0，累计操作数保持不变。
+未启用测量时 Task JSON 不包含这些字段，Prometheus 已注册 Gauge 保持 0。
 例如 K=4、各 partition 为 100/10/10/10 ms 时 U=0.325；只有两个 100 ms partition 时 U=0.5。
-高利用率也可能来自连接池等待，应结合 D、吞吐和目标库延迟判断。
+高利用率也可能来自连接池等待，应结合耗时、吞吐和目标库延迟判断。
 
 ## Checker 指标
 

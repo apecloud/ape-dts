@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### General and Platform
 
-- add cumulative pipeline sink utilization, duration, and operation counts, plus Snapshot chunk partitioner duration metrics ([#591](https://github.com/apecloud/ape-dts/issues/591))
+- add time-window pipeline sink utilization and duration metrics, cumulative operation counts, and Snapshot chunk partitioner duration metrics ([#591](https://github.com/apecloud/ape-dts/issues/591))
 
 #### Redis
 
@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### General and Platform
 
-- preserve monitor samples across repeated initialization and merge cumulative counter sums and counts before calculating averages
+- preserve monitor samples across repeated initialization and skip invalid integer metric samples instead of panicking
 - exit with a non-zero status code when the task panics, instead of leaving the process hanging
 
 #### Redis

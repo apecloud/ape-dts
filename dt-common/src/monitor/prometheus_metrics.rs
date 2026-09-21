@@ -286,19 +286,44 @@ impl PrometheusMetrics {
         )?;
 
         register_handler(
+            "pipeline_sink_parallel_utilization_latest",
+            "latest successful pipeline sink operation utilization in the current time window (0 to 1)",
+            TaskMetricsType::PipelineSinkParallelUtilizationLatest,
+        )?;
+        register_handler(
             "pipeline_sink_parallel_utilization_avg",
-            "mean utilization per successful pipeline sink operation since task start (0 to 1)",
+            "mean utilization per successful pipeline sink operation in the current time window (0 to 1)",
             TaskMetricsType::PipelineSinkParallelUtilizationAvg,
         )?;
         register_handler(
-            "pipeline_sink_duration_seconds_sum",
-            "sum of successful pipeline sink operation wall-clock durations since task start, in seconds",
-            TaskMetricsType::PipelineSinkDurationSecondsSum,
+            "pipeline_sink_parallel_utilization_min",
+            "minimum successful pipeline sink operation utilization in the current time window (0 to 1)",
+            TaskMetricsType::PipelineSinkParallelUtilizationMin,
+        )?;
+        register_handler(
+            "pipeline_sink_parallel_utilization_max",
+            "maximum successful pipeline sink operation utilization in the current time window (0 to 1)",
+            TaskMetricsType::PipelineSinkParallelUtilizationMax,
+        )?;
+        register_handler(
+            "pipeline_sink_duration_seconds_latest",
+            "latest successful pipeline sink operation wall-clock duration in the current time window, in seconds",
+            TaskMetricsType::PipelineSinkDurationSecondsLatest,
         )?;
         register_handler(
             "pipeline_sink_duration_seconds_avg",
-            "mean successful pipeline sink operation wall-clock duration since task start, in seconds",
+            "mean successful pipeline sink operation wall-clock duration in the current time window, in seconds",
             TaskMetricsType::PipelineSinkDurationSecondsAvg,
+        )?;
+        register_handler(
+            "pipeline_sink_duration_seconds_min",
+            "minimum successful pipeline sink operation wall-clock duration in the current time window, in seconds",
+            TaskMetricsType::PipelineSinkDurationSecondsMin,
+        )?;
+        register_handler(
+            "pipeline_sink_duration_seconds_max",
+            "maximum successful pipeline sink operation wall-clock duration in the current time window, in seconds",
+            TaskMetricsType::PipelineSinkDurationSecondsMax,
         )?;
         register_handler(
             "pipeline_sink_operations_total",
@@ -310,14 +335,24 @@ impl PrometheusMetrics {
             match task_type.kind {
                 TaskKind::Snapshot => {
                     register_handler(
-                        "partitioner_duration_seconds_sum",
-                        "sum of chunk partition call durations since task start, in seconds",
-                        TaskMetricsType::PartitionerDurationSecondsSum,
+                        "partitioner_duration_seconds_latest",
+                        "latest chunk partition call duration in the current time window, in seconds",
+                        TaskMetricsType::PartitionerDurationSecondsLatest,
                     )?;
                     register_handler(
                         "partitioner_duration_seconds_avg",
-                        "mean chunk partition call duration since task start, in seconds",
+                        "mean chunk partition call duration in the current time window, in seconds",
                         TaskMetricsType::PartitionerDurationSecondsAvg,
+                    )?;
+                    register_handler(
+                        "partitioner_duration_seconds_min",
+                        "minimum chunk partition call duration in the current time window, in seconds",
+                        TaskMetricsType::PartitionerDurationSecondsMin,
+                    )?;
+                    register_handler(
+                        "partitioner_duration_seconds_max",
+                        "maximum chunk partition call duration in the current time window, in seconds",
+                        TaskMetricsType::PartitionerDurationSecondsMax,
                     )?;
                     register_handler(
                         "extractor_plan_records",
@@ -463,7 +498,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn exports_cumulative_metrics_through_final_flush() {
+    async fn exports_window_metrics_and_preserves_total_through_final_flush() {
         use std::{sync::Arc, time::Duration};
 
         use crate::{
@@ -497,29 +532,38 @@ mod tests {
         handle.register_monitor("pipeline", handle.build_monitor("pipeline", "pipeline"));
         let partition = handle.partitioner_monitor().unwrap();
         for micros in [100, 200, 900] {
-            partition.add_no_window_counter(
-                crate::monitor::counter_type::CounterType::PartitionerDurationSeconds,
-                Duration::from_micros(micros).as_secs_f64(),
-                1,
-            );
+            partition
+                .add_counter(
+                    crate::monitor::counter_type::CounterType::PartitionerDurationSeconds,
+                    Duration::from_micros(micros).as_secs_f64(),
+                )
+                .await;
         }
         let metrics = handle.pipeline_sink_monitor().unwrap();
         let batch = task.sinker_worker_metrics().start_pipeline_sink(4);
         batch.record_work(Duration::from_millis(130));
         tokio::time::advance(Duration::from_millis(100)).await;
-        TaskMonitorHandle::record_pipeline_sink_metrics(&metrics, batch);
+        TaskMonitorHandle::record_pipeline_sink_metrics(&metrics, batch).await;
         task.add_no_window_metrics(TaskMetricsType::SinkerSinkedRecords, 123);
         task.flush().await;
         let mut output = String::new();
         TextEncoder::new()
             .encode_utf8(&prometheus.registry.gather(), &mut output)
             .unwrap();
+        assert!(output.contains("pipeline_sink_parallel_utilization_latest 0.325\n"));
         assert!(output.contains("pipeline_sink_parallel_utilization_avg 0.325\n"));
-        for suffix in ["sum", "avg"] {
+        assert!(output.contains("pipeline_sink_parallel_utilization_min 0.325\n"));
+        assert!(output.contains("pipeline_sink_parallel_utilization_max 0.325\n"));
+        for suffix in ["latest", "avg", "min", "max"] {
             assert!(output.contains(&format!("pipeline_sink_duration_seconds_{suffix} 0.1\n")));
         }
         assert!(output.contains("pipeline_sink_operations_total 1\n"));
-        for (suffix, expected) in [("sum", 0.0012), ("avg", 0.0004)] {
+        for (suffix, expected) in [
+            ("latest", 0.0009),
+            ("avg", 0.0004),
+            ("min", 0.0001),
+            ("max", 0.0009),
+        ] {
             let prefix = format!("partitioner_duration_seconds_{suffix} ");
             let actual = output
                 .lines()
@@ -530,13 +574,35 @@ mod tests {
             assert!((actual - expected).abs() < 1e-12);
         }
         assert!(output.contains("sinker_sinked_records 123\n"));
-        tokio::time::advance(Duration::from_secs(86400)).await;
+        let counters: Vec<_> = metrics
+            .time_window_counters
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+        for counter in counters {
+            for sample in counter.counters.write().await.iter_mut() {
+                sample.timestamp = std::time::Instant::now() - Duration::from_secs(2);
+            }
+        }
         task.flush().await;
         let mut after_flush = String::new();
         TextEncoder::new()
             .encode_utf8(&prometheus.registry.gather(), &mut after_flush)
             .unwrap();
-        assert_eq!(after_flush, output);
+        for prefix in [
+            "pipeline_sink_parallel_utilization",
+            "pipeline_sink_duration_seconds",
+            "partitioner_duration_seconds",
+        ] {
+            for suffix in ["latest", "avg", "min", "max"] {
+                assert!(
+                    after_flush.contains(&format!("{prefix}_{suffix} 0\n")),
+                    "{after_flush}"
+                );
+            }
+        }
+        assert!(after_flush.contains("pipeline_sink_operations_total 1\n"));
+        assert!(after_flush.contains("sinker_sinked_records 123\n"));
         task.unregister("pipeline", vec![MonitorType::Pipeline]);
     }
 

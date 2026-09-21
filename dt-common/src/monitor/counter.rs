@@ -1,4 +1,4 @@
-use std::{fmt::Write, time::Instant};
+use std::time::Instant;
 
 use super::{
     counter_type::{AggregateType, CounterType},
@@ -42,13 +42,8 @@ impl Counter {
         if count == 0 {
             return;
         }
-        let value = value.into();
-        if self.count == 0 {
-            self.set(value, count);
-        } else {
-            self.value += value;
-            self.count += count;
-        }
+        self.value += value.into();
+        self.count += count;
     }
 
     /// Merge sums and counts so averages are weighted by sample count.
@@ -61,13 +56,13 @@ impl Counter {
         self.value / self.count.max(1)
     }
 
-    pub fn aggregate(&self, aggregate: &AggregateType) -> TaskMetricValue {
-        match aggregate {
+    pub fn aggregate(&self, aggregate: &AggregateType) -> Option<TaskMetricValue> {
+        Some(match aggregate {
             AggregateType::Latest | AggregateType::Sum => self.value,
             AggregateType::AvgByCount => self.avg_by_count(),
             AggregateType::Count => self.count.into(),
-            _ => unreachable!("unsupported aggregation for a no-window counter"),
-        }
+            _ => return None,
+        })
     }
 
     pub(crate) fn log_line(
@@ -78,7 +73,9 @@ impl Counter {
     ) -> String {
         let mut line = format!("{name} | {description} | {counter_type}");
         for aggregate in counter_type.get_aggregate_types() {
-            write!(line, " | {aggregate}={}", self.aggregate(&aggregate)).unwrap();
+            if let Some(value) = self.aggregate(&aggregate) {
+                line.push_str(&format!(" | {aggregate}={value}"));
+            }
         }
         line
     }

@@ -271,7 +271,7 @@ impl BaseParallelizer {
         }
 
         if let Some((monitor, monitor_guard)) = monitor {
-            TaskMonitorHandle::record_pipeline_sink_metrics(&monitor, monitor_guard);
+            TaskMonitorHandle::record_pipeline_sink_metrics(&monitor, monitor_guard).await;
         }
         Ok(workers_used_count)
     }
@@ -414,7 +414,7 @@ mod tests {
     }
 
     fn batch_metrics() -> TestMetrics {
-        let monitor = Arc::new(Monitor::new("pipeline", "test", 1, 1, 1));
+        let monitor = Arc::new(Monitor::new("pipeline", "test", 60, 100, 1));
         for counter in [
             CounterType::PipelineSinkOperationsTotal,
             CounterType::PipelineSinkParallelUtilization,
@@ -428,25 +428,31 @@ mod tests {
         }
     }
 
-    fn measurements(metrics: &TestMetrics) -> (u64, f64, f64) {
-        let counters = &metrics.monitor.no_window_counters;
+    async fn measurements(metrics: &TestMetrics) -> (u64, f64, f64) {
+        let operations = metrics
+            .monitor
+            .no_window_counters
+            .get(&CounterType::PipelineSinkOperationsTotal)
+            .unwrap()
+            .value
+            .as_u64()
+            .unwrap();
+        let utilization = metrics
+            .monitor
+            .time_window_counters
+            .get(&CounterType::PipelineSinkParallelUtilization)
+            .unwrap()
+            .clone();
+        let duration = metrics
+            .monitor
+            .time_window_counters
+            .get(&CounterType::PipelineSinkDurationSeconds)
+            .unwrap()
+            .clone();
         (
-            counters
-                .get(&CounterType::PipelineSinkOperationsTotal)
-                .unwrap()
-                .value
-                .as_u64()
-                .unwrap(),
-            counters
-                .get(&CounterType::PipelineSinkParallelUtilization)
-                .unwrap()
-                .avg_by_count()
-                .as_f64(),
-            counters
-                .get(&CounterType::PipelineSinkDurationSeconds)
-                .unwrap()
-                .value
-                .as_f64(),
+            operations,
+            utilization.statistics().await.avg_by_count.as_f64(),
+            duration.statistics().await.latest.as_f64(),
         )
     }
 
@@ -490,7 +496,7 @@ mod tests {
             )
             .await
             .unwrap();
-            let snapshot = measurements(&metrics);
+            let snapshot = measurements(&metrics).await;
             assert_eq!(snapshot.0, 1);
             assert!((snapshot.1 - utilization).abs() < 1e-10, "{snapshot:?}");
             assert!((snapshot.2 - elapsed).abs() < 1e-10, "{snapshot:?}");
@@ -506,7 +512,7 @@ mod tests {
             run_batch(vec![Vec::new()], &sinkers, 2, metrics.clone())
                 .await
                 .unwrap();
-            assert_eq!(measurements(&metrics).0, 0);
+            assert_eq!(measurements(&metrics).await.0, 0);
             let mut bad = row(10);
             bad.tb = mode.into();
             assert!(run_batch(
@@ -517,7 +523,7 @@ mod tests {
             )
             .await
             .is_err());
-            assert_eq!(measurements(&metrics).0, 0);
+            assert_eq!(measurements(&metrics).await.0, 0);
             // Wait for the other, already-started worker to release its guard.
             for sinker in &sinkers {
                 drop(sinker.lock().await);
@@ -543,7 +549,7 @@ mod tests {
         assert_eq!(workers.snapshot().busy, 0);
         drop(held);
         task.await.unwrap().unwrap();
-        assert_eq!(measurements(&metrics).1, 0.5);
+        assert_eq!(measurements(&metrics).await.1, 0.5);
 
         let task_sinkers = sinkers.clone();
         let task_metrics = metrics.clone();
@@ -560,13 +566,13 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(workers.snapshot().busy, 0);
-        assert_eq!(measurements(&metrics).0, 1);
+        assert_eq!(measurements(&metrics).await.0, 1);
         run_batch(vec![vec![row(100)]], &sinkers, 1, metrics.clone())
             .await
             .unwrap();
-        let (count, utilization, duration) = measurements(&metrics);
+        let (count, utilization, duration) = measurements(&metrics).await;
         assert_eq!(count, 2);
         assert_eq!(utilization, 0.75);
-        assert!((duration - 0.3).abs() < 1e-12);
+        assert!((duration - 0.1).abs() < 1e-12);
     }
 }

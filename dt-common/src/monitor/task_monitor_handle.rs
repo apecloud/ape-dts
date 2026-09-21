@@ -91,17 +91,22 @@ impl TaskMonitorHandle {
     }
 
     /// Record one successful sink operation after all its workers have completed.
-    pub fn record_pipeline_sink_metrics(monitor: &Monitor, guard: PipelineSinkMetricsGuard) {
+    pub async fn record_pipeline_sink_metrics(monitor: &Monitor, guard: PipelineSinkMetricsGuard) {
         let Some((duration, utilization)) = guard.finish() else {
             return;
         };
-        monitor.add_no_window_counter(CounterType::PipelineSinkParallelUtilization, utilization, 1);
-        monitor.add_no_window_counter(
-            CounterType::PipelineSinkDurationSeconds,
-            duration.as_secs_f64(),
-            1,
-        );
-        monitor.add_no_window_counter(CounterType::PipelineSinkOperationsTotal, 1, 1);
+        monitor
+            .add_counter(CounterType::PipelineSinkParallelUtilization, utilization)
+            .await;
+        monitor
+            .add_counter(
+                CounterType::PipelineSinkDurationSeconds,
+                duration.as_secs_f64(),
+            )
+            .await;
+        monitor
+            .add_counter(CounterType::PipelineSinkOperationsTotal, 1)
+            .await;
     }
 
     pub fn is_snapshot_task(&self) -> bool {

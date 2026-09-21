@@ -12,11 +12,7 @@ use crate::monitor::prometheus_metrics::PrometheusMetrics;
 use crate::{
     config::config_enums::{TaskKind, TaskType},
     log_task,
-    monitor::{
-        counter_type::{AggregateType, CounterType},
-        task_metrics::TaskMetricsType,
-        FlushableMonitor,
-    },
+    monitor::{counter_type::CounterType, task_metrics::TaskMetricsType, FlushableMonitor},
     utils::limit_queue::LimitedQueue,
 };
 
@@ -393,17 +389,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorRpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::ExtractorRpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::ExtractorRpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
             // extractor bps
@@ -416,17 +412,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorBpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::ExtractorBpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::ExtractorBpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
             // extractor pushed records
@@ -439,17 +435,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorPushedRpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::ExtractorPushedRpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::ExtractorPushedRpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
             // extractor pushed bytes
@@ -462,17 +458,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::ExtractorPushedBpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::ExtractorPushedBpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::ExtractorPushedBpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
         }
@@ -497,55 +493,97 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::SinkerWorkersPerDrainMax,
-                    statics.max.into(),
+                    statics.max,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::SinkerWorkersPerDrainAvg,
-                    statics.avg_by_count.into(),
+                    statics.avg_by_count,
                 );
             }
 
-            for counter_type in [
-                CounterType::PipelineSinkOperationsTotal,
-                CounterType::PipelineSinkParallelUtilization,
-                CounterType::PipelineSinkDurationSeconds,
-                CounterType::PartitionerDurationSeconds,
-            ] {
-                if let Some(counter) = monitor.no_window_counters.get(&counter_type) {
-                    for aggregate_type in counter_type.get_aggregate_types() {
-                        let metrics_type = match (&counter_type, &aggregate_type) {
-                            (CounterType::PipelineSinkOperationsTotal, AggregateType::Latest) => {
-                                TaskMetricsType::PipelineSinkOperationsTotal
-                            }
-                            (
-                                CounterType::PipelineSinkParallelUtilization,
-                                AggregateType::AvgByCount,
-                            ) => TaskMetricsType::PipelineSinkParallelUtilizationAvg,
-                            (CounterType::PipelineSinkDurationSeconds, AggregateType::Sum) => {
-                                TaskMetricsType::PipelineSinkDurationSecondsSum
-                            }
-                            (
-                                CounterType::PipelineSinkDurationSeconds,
-                                AggregateType::AvgByCount,
-                            ) => TaskMetricsType::PipelineSinkDurationSecondsAvg,
-                            (CounterType::PartitionerDurationSeconds, AggregateType::Sum) => {
-                                TaskMetricsType::PartitionerDurationSecondsSum
-                            }
-                            (
-                                CounterType::PartitionerDurationSeconds,
-                                AggregateType::AvgByCount,
-                            ) => TaskMetricsType::PartitionerDurationSecondsAvg,
-                            _ => continue,
-                        };
-                        // The task has one pipeline; its counters cover the entire run.
-                        calc_handler(
-                            CalcType::Latest,
-                            metrics_type,
-                            counter.aggregate(&aggregate_type),
-                        );
-                    }
-                }
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::PipelineSinkParallelUtilization)
+                .map(|entry| entry.value().clone());
+            if let Some(counter) = counter {
+                let statistics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Latest,
+                    TaskMetricsType::PipelineSinkParallelUtilizationLatest,
+                    statistics.latest,
+                );
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::PipelineSinkParallelUtilizationAvg,
+                    statistics.avg_by_count,
+                );
+                calc_handler(
+                    CalcType::Min,
+                    TaskMetricsType::PipelineSinkParallelUtilizationMin,
+                    statistics.min,
+                );
+                calc_handler(
+                    CalcType::Max,
+                    TaskMetricsType::PipelineSinkParallelUtilizationMax,
+                    statistics.max,
+                );
+            }
+
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::PipelineSinkDurationSeconds)
+                .map(|entry| entry.value().clone());
+            if let Some(counter) = counter {
+                let statistics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Latest,
+                    TaskMetricsType::PipelineSinkDurationSecondsLatest,
+                    statistics.latest,
+                );
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::PipelineSinkDurationSecondsAvg,
+                    statistics.avg_by_count,
+                );
+                calc_handler(
+                    CalcType::Min,
+                    TaskMetricsType::PipelineSinkDurationSecondsMin,
+                    statistics.min,
+                );
+                calc_handler(
+                    CalcType::Max,
+                    TaskMetricsType::PipelineSinkDurationSecondsMax,
+                    statistics.max,
+                );
+            }
+
+            let counter = monitor
+                .time_window_counters
+                .get(&CounterType::PartitionerDurationSeconds)
+                .map(|entry| entry.value().clone());
+            if let Some(counter) = counter {
+                let statistics = counter.statistics().await;
+                calc_handler(
+                    CalcType::Latest,
+                    TaskMetricsType::PartitionerDurationSecondsLatest,
+                    statistics.latest,
+                );
+                calc_handler(
+                    CalcType::Avg,
+                    TaskMetricsType::PartitionerDurationSecondsAvg,
+                    statistics.avg_by_count,
+                );
+                calc_handler(
+                    CalcType::Min,
+                    TaskMetricsType::PartitionerDurationSecondsMin,
+                    statistics.min,
+                );
+                calc_handler(
+                    CalcType::Max,
+                    TaskMetricsType::PartitionerDurationSecondsMax,
+                    statistics.max,
+                );
             }
         }
 
@@ -570,17 +608,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::SinkerRtMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::SinkerRtMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::SinkerRtAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
             // sinker rps
@@ -593,17 +631,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::SinkerRpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::SinkerRpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::SinkerRpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
             // sinker bps
@@ -616,17 +654,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::SinkerBpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::SinkerBpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::SinkerBpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
         }
@@ -652,17 +690,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::CheckerRpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::CheckerRpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::CheckerRpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
             // checker miss
@@ -675,17 +713,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::CheckerMissRpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::CheckerMissRpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::CheckerMissRpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
             // checker diff
@@ -698,17 +736,17 @@ impl TaskMonitor {
                 calc_handler(
                     CalcType::Min,
                     TaskMetricsType::CheckerDiffRpsMin,
-                    statics.min_by_sec.into(),
+                    statics.min_by_sec,
                 );
                 calc_handler(
                     CalcType::Max,
                     TaskMetricsType::CheckerDiffRpsMax,
-                    statics.max_by_sec.into(),
+                    statics.max_by_sec,
                 );
                 calc_handler(
                     CalcType::Avg,
                     TaskMetricsType::CheckerDiffRpsAvg,
-                    statics.avg_by_sec.into(),
+                    statics.avg_by_sec,
                 );
             }
         }
@@ -873,10 +911,9 @@ fn calc_nowindow_metrics(
                           metrics_type: TaskMetricsType,
                           calc_type: CalcType| {
         if let Some(counter) = monitor.no_window_counters.get(&counter_type) {
-            let value = counter
-                .value
-                .as_u64()
-                .expect("legacy task counters must be integers");
+            let Some(value) = counter.value.as_u64() else {
+                return;
+            };
             match calc_type {
                 CalcType::Add => {
                     result_map
@@ -903,10 +940,9 @@ fn calc_nowindow_metrics(
     let batch_metrics_handler =
         |monitor: &Arc<Monitor>, counter_type: CounterType, metrics_type: TaskMetricsType| {
             if let Some(counter) = monitor.no_window_counters.get(&counter_type) {
-                let value = counter
-                    .value
-                    .as_u64()
-                    .expect("legacy task counters must be integers");
+                let Some(value) = counter.value.as_u64() else {
+                    return;
+                };
                 batch_metrics
                     .entry(metrics_type)
                     .and_modify(|v| *v += value)
@@ -927,6 +963,12 @@ fn calc_nowindow_metrics(
                 );
             }
             MonitorType::Pipeline => {
+                metric_handler(
+                    &monitor,
+                    CounterType::PipelineSinkOperationsTotal,
+                    TaskMetricsType::PipelineSinkOperationsTotal,
+                    CalcType::Latest,
+                );
                 metric_handler(
                     &monitor,
                     CounterType::Timestamp,
@@ -1092,7 +1134,24 @@ mod sinker_worker_tests {
             .get(&CounterType::RecordCount)
             .unwrap()
             .clone();
-        assert_eq!(counter.statistics().await.sum, 300);
+        assert_eq!(counter.statistics().await.sum.as_u64(), Some(300));
+    }
+
+    #[tokio::test]
+    async fn invalid_integer_metrics_are_skipped_without_losing_valid_metrics() {
+        let task = build_task_monitor();
+        let monitor = Arc::new(Monitor::new("pipeline", "test", 60, 100, 10));
+        task.register("test", vec![(MonitorType::Pipeline, monitor.clone())]);
+        monitor.set_counter(CounterType::QueuedRecordCurrent, 1.5);
+        monitor.set_counter(CounterType::SinkedRecordTotal, 2.5);
+        monitor.set_counter(CounterType::PipelineSinkOperationsTotal, 3);
+        let metrics = task.calc().await.unwrap();
+        assert!(!metrics.contains_key(&TaskMetricsType::PipelineQueueSize));
+        assert!(!metrics.contains_key(&TaskMetricsType::SinkerSinkedRecords));
+        assert_eq!(
+            metrics[&TaskMetricsType::PipelineSinkOperationsTotal].as_u64(),
+            Some(3)
+        );
     }
 
     // Capture real log targets on this test's current-thread runtime, without
@@ -1142,14 +1201,12 @@ mod sinker_worker_tests {
                 let batch = task.sinker_worker_metrics().start_pipeline_sink(4);
                 batch.record_work(Duration::from_millis(work_ms));
                 tokio::time::advance(Duration::from_millis(duration_ms)).await;
-                TaskMonitorHandle::record_pipeline_sink_metrics(&metrics, batch);
+                TaskMonitorHandle::record_pipeline_sink_metrics(&metrics, batch).await;
             }
             if let Some(partitioner) = handle.partitioner_monitor() {
-                partitioner.add_no_window_counter(
-                    CounterType::PartitionerDurationSeconds,
-                    0.00025,
-                    1,
-                );
+                partitioner
+                    .add_counter(CounterType::PartitionerDurationSeconds, 0.00025)
+                    .await;
             }
             handle.add_counter(id, CounterType::BufferSize, 4).await;
             handle
@@ -1166,18 +1223,18 @@ mod sinker_worker_tests {
                 .map(|(_, line)| line.as_str())
                 .collect::<Vec<_>>();
             for suffix in [
-                "buffer_size | sum=4 | avg=4 | max=4",
-                "sinker_workers_per_drain | sum=2 | avg=2 | max=2",
+                "buffer_size | sum=4 | avg=4 | max=4 | min=4",
+                "sinker_workers_per_drain | sum=2 | avg=2 | max=2 | min=2",
                 "sinked_records | latest=141",
-                "pipeline_sink_parallel_utilization | avg=0.625",
-                "pipeline_sink_duration_seconds | sum=0.5 | avg=0.25",
+                "pipeline_sink_parallel_utilization | latest=0.25 | avg=0.625 | min=0.25 | max=1",
+                "pipeline_sink_duration_seconds | latest=0.4 | avg=0.25 | min=0.1 | max=0.4",
                 "pipeline_sink_operations_total | latest=2",
             ] {
                 let expected = format!("pipeline | {id} | {suffix}");
                 assert!(monitor_lines.contains(&expected.as_str()), "{expected}");
             }
             let partition = format!(
-                "pipeline | {id} | partitioner_duration_seconds | sum=0.00025 | avg=0.00025"
+                "pipeline | {id} | partitioner_duration_seconds | latest=0.00025 | avg=0.00025 | min=0.00025 | max=0.00025"
             );
             assert_eq!(
                 monitor_lines.contains(&partition.as_str()),
@@ -1197,14 +1254,19 @@ mod sinker_worker_tests {
             )
             .unwrap();
             assert_eq!(json["pipeline_sink_operations_total"], 2);
+            assert_eq!(json["pipeline_sink_parallel_utilization_latest"], 0.25);
             assert_eq!(json["pipeline_sink_parallel_utilization_avg"], 0.625);
-            assert_eq!(json["pipeline_sink_duration_seconds_sum"], 0.5);
+            assert_eq!(json["pipeline_sink_parallel_utilization_min"], 0.25);
+            assert_eq!(json["pipeline_sink_parallel_utilization_max"], 1.0);
+            assert_eq!(json["pipeline_sink_duration_seconds_latest"], 0.4);
             assert_eq!(json["pipeline_sink_duration_seconds_avg"], 0.25);
+            assert_eq!(json["pipeline_sink_duration_seconds_min"], 0.1);
+            assert_eq!(json["pipeline_sink_duration_seconds_max"], 0.4);
             if kind == TaskKind::Snapshot {
-                assert_eq!(json["partitioner_duration_seconds_sum"], 0.00025);
+                assert_eq!(json["partitioner_duration_seconds_latest"], 0.00025);
                 assert_eq!(json["partitioner_duration_seconds_avg"], 0.00025);
             } else {
-                assert!(json.get("partitioner_duration_seconds_sum").is_none());
+                assert!(json.get("partitioner_duration_seconds_latest").is_none());
             }
         }
     }

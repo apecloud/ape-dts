@@ -6,6 +6,7 @@ use dashmap::DashMap;
 use super::counter::Counter;
 use super::counter_type::CounterType;
 use super::monitor::Monitor;
+use super::task_metrics::TaskMetricValue;
 use super::time_window_counter::WindowCounterStatistics;
 use super::FlushableMonitor;
 use crate::log_monitor;
@@ -107,15 +108,17 @@ impl GroupMonitor {
         for (counter_type, statistics_vec) in window_counter_statistics_map {
             let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
             for aggregate_type in counter_type.get_aggregate_types() {
-                let mut aggregate_value = 0;
+                let mut aggregate_value = TaskMetricValue::default();
                 for statistics in statistics_vec.iter() {
                     aggregate_value += match aggregate_type {
+                        AggregateType::Latest => statistics.latest,
                         AggregateType::AvgByCount => statistics.avg_by_count,
                         AggregateType::AvgBySec => statistics.avg_by_sec,
                         AggregateType::Sum => statistics.sum,
                         AggregateType::MaxBySec => statistics.max_by_sec,
                         AggregateType::MaxByCount => statistics.max,
-                        AggregateType::Count => statistics.count,
+                        AggregateType::MinByCount => statistics.min,
+                        AggregateType::Count => statistics.count.into(),
                         _ => continue,
                     };
                 }

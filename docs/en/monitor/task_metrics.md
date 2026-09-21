@@ -24,9 +24,9 @@ See [pipeline monitoring](monitor.md#pipeline) for the format and no-sample beha
 - Task metrics are refreshed when `TaskMonitor` is flushed. In the normal
   pipeline flow, the refresh interval is controlled by
   `[pipeline] checkpoint_interval_secs`.
-- Utilization, batch duration/count, and partitioner duration accumulate for the
-  current task run. The pipeline monitor remains registered through the final
-  flush; window settings do not apply.
+- Utilization, batch duration, and partitioner duration use time-window counters.
+  `pipeline_sink_operations_total` is cumulative for the current task run.
+  The pipeline monitor remains registered through the final flush.
 - Throughput and response-time metrics use the rolling window configured by
   `[pipeline] counter_time_window_secs`.
 - A time-window counter retains at most
@@ -42,7 +42,7 @@ See [pipeline monitoring](monitor.md#pipeline) for the format and no-sample beha
   averages with `(previous + current) / 2`. Sinker RPS/BPS use
   `RecordsPerQuery`/`DataBytes`, and RT uses `RtPerQuery`.
 - Global window logs add each monitor's statistics, including its averages and
-  maxima. Global window minima retain the existing zero output. Unexpired samples
+  maxima. Global per-second window minima retain the existing zero output. Unexpired samples
   from completed tables still participate in global logs, while task metrics
   filter completed monitors. These outputs therefore have different aggregation
   semantics.
@@ -92,23 +92,22 @@ mutex waits, writes, and checkpoints are outside this interval.
 
 | Task log / Prometheus field | Unit | Meaning |
 | --- | --- | --- |
-| `partitioner_duration_seconds_sum` | seconds | Total partition call duration since task start, `sum(P)`. |
-| `partitioner_duration_seconds_avg` | seconds | Arithmetic mean per call, `sum(P) / partition_call_count`. |
+| `partitioner_duration_seconds_latest` | seconds | Duration of the most recent retained partition call in the current window. |
+| `partitioner_duration_seconds_avg` | seconds | Arithmetic mean per retained call in the current window, `sum(P) / partition_call_count`. |
+| `partitioner_duration_seconds_min` | seconds | Minimum retained partition call duration in the current window. |
+| `partitioner_duration_seconds_max` | seconds | Maximum retained partition call duration in the current window. |
 
-Both fields are floating-point gauges in seconds, accumulated since the current
-task run started. They are independent of `counter_time_window_secs` and
-`counter_max_sub_count`. Each pipeline stores sums and counts instead of
-historical samples. Task metrics read the pipeline counters through the final flush.
-A new task run starts from zero; checkpoint recovery does not restore these statistics.
-The internal call count is independent of `pipeline_sink_operations_total` and is not exported.
-Empty input, error returns, and panic unwinding also record elapsed time. A subsequent
-sink failure does not discard a completed partition sample. Zero durations participate
-in the average.
+These fields are floating-point gauges in seconds, computed from samples retained
+within `counter_time_window_secs`, up to `counter_max_sub_count` samples.
+The internal window call count is independent of `pipeline_sink_operations_total`
+and is not exported. Empty input and error returns record elapsed time; panic
+unwinding produces no sample. A later sink failure does not discard an already
+recorded partition sample. Zero durations participate in the average.
 
-Once measurement is enabled, both fields are zero until the first sample.
-Recorded values persist throughout the task run. Tasks without measurement omit
-these JSON fields; registered Snapshot Prometheus gauges remain zero. Raw partitioning, other partitioners,
-and CDC paths are not measured yet.
+Before the first sample or after all samples expire, all four fields are zero.
+Tasks without measurement omit these JSON fields; registered Snapshot Prometheus
+gauges remain zero. Raw partitioning, other partitioners, and CDC paths are not
+measured yet. Checkpoint recovery does not restore these statistics.
 
 ## Sinker metrics
 
@@ -138,7 +137,7 @@ partitions. A partition can execute multiple SQL requests. Timing starts at
 dispatch, after queue consumption by `drain()`. Existing
 `sinker_workers_per_drain_*` names are retained for compatibility.
 
-These four metrics measure successful, nonempty DML batches through
+These metrics measure successful, nonempty DML batches through
 `BaseParallelizer::sink_dml`, including snapshot, table, partition, and serial
 parallelizers in Snapshot or CDC tasks. Paths that call sinkers directly, such as
 `MergeParallelizer`, are not instrumented yet.
@@ -151,31 +150,35 @@ partition/rebalance computation and checkpoints. Each batch has `U = W / (K * D)
 
 | Task log / Prometheus field | Unit | Meaning |
 | --- | --- | --- |
-| `pipeline_sink_parallel_utilization_avg` | 0..1 | Arithmetic mean of U across all valid pipeline sink operations since task start, `sum(U) / N`. |
-| `pipeline_sink_duration_seconds_sum` | seconds | Sum of pipeline sink operation wall-clock durations since task start, `sum(D)`. |
-| `pipeline_sink_duration_seconds_avg` | seconds | Average pipeline sink operation wall-clock duration, `sum(D) / N`. |
-| `pipeline_sink_operations_total` | batches | Number of valid pipeline sink operations N since task start. |
+| `pipeline_sink_parallel_utilization_latest` | 0..1 | Utilization U of the most recent retained sink operation in the current window. |
+| `pipeline_sink_parallel_utilization_avg` | 0..1 | Arithmetic mean of U across retained operations in the current window, `sum(U) / window_count`. |
+| `pipeline_sink_parallel_utilization_min` | 0..1 | Minimum retained sink operation utilization in the current window. |
+| `pipeline_sink_parallel_utilization_max` | 0..1 | Maximum retained sink operation utilization in the current window. |
+| `pipeline_sink_duration_seconds_latest` | seconds | Wall-clock duration of the most recent retained sink operation in the current window. |
+| `pipeline_sink_duration_seconds_avg` | seconds | Average retained operation duration in the current window, `sum(D) / window_count`. |
+| `pipeline_sink_duration_seconds_min` | seconds | Minimum retained sink operation duration in the current window. |
+| `pipeline_sink_duration_seconds_max` | seconds | Maximum retained sink operation duration in the current window. |
+| `pipeline_sink_operations_total` | batches | Number of valid pipeline sink operations since task start. |
 
-All fields accumulate statistics for the current task run and use Prometheus gauges.
-Utilization, batch durations, partitioner durations, and batch totals all use the
-common no-window counters. `pipeline_sink_operations_total` increments once per valid pipeline sink operation and
-emits a separate `pipeline_sink_operations_total | latest=N` line in monitor.log.
+All fields use Prometheus gauges. Utilization and duration use the common time-window
+counters. `counter_time_window_secs` bounds sample age and `counter_max_sub_count`
+bounds retained samples. Each completed batch has equal weight in the utilization
+average; `latest` reports the most recent retained operation. W is internal and
+is not exported.
 
-Neither `counter_time_window_secs` nor `counter_max_sub_count` applies.
-Completed batches update sums and counts without retaining individual
-samples. The task's single pipeline monitor remains registered through the final
-flush. Count and sums accumulate during the run; averages cover all valid samples.
-A new task run starts from zero; checkpoint recovery does not restore these statistics.
-Utilization averages give each batch equal weight. W is internal and is not exported.
-`sum(D)` is the total elapsed time of successful sink operations in the pipeline.
+`pipeline_sink_operations_total` uses a no-window counter and increments once per
+valid sink operation. Its `pipeline_sink_operations_total | latest=N` log line
+reports the task-run total, which is not the denominator of window averages.
+The task's pipeline monitor remains registered through the final flush. A new
+run starts from zero; checkpoint recovery does not restore these statistics.
 
-Empty, failed, canceled, non-DML, and invalid measurements do not contribute to N.
-Once measurement is enabled, N=0 produces zero for all four fields.
-Idle time and table completion do not reset recorded values. Use N to distinguish
-no samples from valid zero utilization. Tasks without measurement omit these JSON fields; registered
-Prometheus gauges remain zero. For K=4, partitions taking 100/10/10/10 ms give U=0.325;
-only two 100 ms partitions give U=0.5. High utilization can include connection-pool
-waits, so interpret it alongside D, throughput, and destination latency.
+Empty, failed, canceled, non-DML, and invalid measurements produce no sample and
+do not increment the total. Enabled window fields report zero when no live samples
+remain; the operation total stays unchanged. Tasks without measurement omit these
+JSON fields; registered Prometheus gauges remain zero.
+For K=4, partitions taking 100/10/10/10 ms give U=0.325; only two 100 ms partitions
+give U=0.5. High utilization can include connection-pool waits, so interpret it
+alongside duration, throughput, and destination latency.
 
 ## Checker metrics
 

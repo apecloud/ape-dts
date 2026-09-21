@@ -13,6 +13,12 @@ pub enum TaskMetricValue {
     Float(f64),
 }
 
+impl Default for TaskMetricValue {
+    fn default() -> Self {
+        Self::Integer(0)
+    }
+}
+
 impl TaskMetricValue {
     pub fn as_u64(self) -> Option<u64> {
         match self {
@@ -170,13 +176,20 @@ pub enum TaskMetricsType {
 
     SinkerDdlCount,
 
+    PipelineSinkParallelUtilizationLatest,
     PipelineSinkParallelUtilizationAvg,
+    PipelineSinkParallelUtilizationMin,
+    PipelineSinkParallelUtilizationMax,
 
-    PipelineSinkDurationSecondsSum,
+    PipelineSinkDurationSecondsLatest,
     PipelineSinkDurationSecondsAvg,
+    PipelineSinkDurationSecondsMin,
+    PipelineSinkDurationSecondsMax,
 
     PipelineSinkOperationsTotal,
 
-    PartitionerDurationSecondsSum,
+    PartitionerDurationSecondsLatest,
     PartitionerDurationSecondsAvg,
+    PartitionerDurationSecondsMin,
+    PartitionerDurationSecondsMax,
 }

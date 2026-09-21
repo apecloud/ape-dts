@@ -49,7 +49,9 @@ impl Parallelizer for SnapshotParallelizer {
         // Finish partition timing before dispatching or waiting for any sinker.
         let sub_datas = match monitor {
             Some(monitor) => {
-                monitor.measure_duration(CounterType::PartitionerDurationSeconds, partition)
+                monitor
+                    .measure_duration(CounterType::PartitionerDurationSeconds, partition)
+                    .await
             }
             None => partition(),
         }?;
