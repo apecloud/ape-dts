@@ -169,16 +169,14 @@ pub enum TaskMetricsType {
     SinkerSinkedBytes,
 
     SinkerDdlCount,
+
     PipelineSinkParallelUtilizationAvg,
-    PipelineSinkParallelUtilizationMin,
-    PipelineSinkParallelUtilizationMax,
+
     PipelineSinkDurationSecondsSum,
-    PipelineSinkDurationSecondsMin,
-    PipelineSinkDurationSecondsMax,
     PipelineSinkDurationSecondsAvg,
+
     PipelineSinkOperationsTotal,
+
     PartitionerDurationSecondsSum,
-    PartitionerDurationSecondsMin,
-    PartitionerDurationSecondsMax,
     PartitionerDurationSecondsAvg,
 }

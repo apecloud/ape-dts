@@ -208,17 +208,17 @@ the existing counters under the same pipeline ID:
 pipeline | f49dc9ee7d863b59 | buffer_size | sum=180 | avg=3 | max=4
 pipeline | f49dc9ee7d863b59 | sinker_workers_per_drain | sum=66 | avg=1 | max=2
 pipeline | f49dc9ee7d863b59 | sinked_records | latest=141
-pipeline | f49dc9ee7d863b59 | pipeline_sink_parallel_utilization | avg=0.625 | min=0.25 | max=1
-pipeline | f49dc9ee7d863b59 | pipeline_sink_duration_seconds | sum=0.5 | avg=0.25 | min=0.1 | max=0.4
+pipeline | f49dc9ee7d863b59 | pipeline_sink_parallel_utilization | avg=0.625
+pipeline | f49dc9ee7d863b59 | pipeline_sink_duration_seconds | sum=0.5 | avg=0.25
 pipeline | f49dc9ee7d863b59 | pipeline_sink_operations_total | latest=2
-pipeline | f49dc9ee7d863b59 | partitioner_duration_seconds | sum=0.0012 | avg=0.0004 | min=0.0001 | max=0.0009
+pipeline | f49dc9ee7d863b59 | partitioner_duration_seconds | sum=0.0012 | avg=0.0004
 ```
 
 Timestamps are omitted above. Utilization is a ratio from `0` to `1`; durations use
 seconds and preserve fractional values. `pipeline_sink_operations_total` reports all valid pipeline sink operations
 processed by that pipeline during the current task run. These four new groups
 accumulate statistics independently of `counter_time_window_secs` and
-`counter_max_sub_count`. Each pipeline stores only sums, counts, and extrema.
+`counter_max_sub_count`. Each pipeline stores only sums and counts.
 All four groups use the common no-window counters and aggregation rules.
 `pipeline_sink_operations_total` increments once per valid pipeline sink operation; its log field is `latest`.
 
@@ -229,7 +229,7 @@ reports them. Partitioner duration is sampled per partitioning call and uses its
 own call count when calculating the average.
 
 Snapshot tasks also report aggregates in the existing `pipeline | global` group.
-Averages use sums and sample counts; extrema cover all valid samples. Each task has
+Averages use sums and sample counts. Each task has
 one pipeline whose monitor remains registered until the final flush completes.
 Task JSON and Prometheus read its cumulative counters, so finishing individual
 tables does not reset these values. CDC keeps its existing behavior of logging
@@ -247,9 +247,9 @@ Snapshot and CDC; partitioner metrics currently cover only Snapshot chunk partit
 | buffer_size | time window | Number of entries cached in pipeline |
 | sinked_count | no window | Total Number of entries handled by task |
 | pipeline_sink_operations_total | no window | Total completed valid pipeline sink operations |
-| pipeline_sink_parallel_utilization | no window | Per-batch utilization: avg, min, max |
-| pipeline_sink_duration_seconds | no window | Batch duration in seconds: sum, avg, min, max |
-| partitioner_duration_seconds | no window | Partition duration in seconds: sum, avg, min, max |
+| pipeline_sink_parallel_utilization | no window | Per-batch utilization: avg |
+| pipeline_sink_duration_seconds | no window | Batch duration in seconds: sum, avg |
+| partitioner_duration_seconds | no window | Partition duration in seconds: sum, avg |
 
 <br/>
 

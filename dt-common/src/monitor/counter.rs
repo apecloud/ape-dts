@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{fmt::Write, time::Instant};
 
 use super::{
     counter_type::{AggregateType, CounterType},
@@ -11,8 +11,6 @@ pub struct Counter {
     pub timestamp: Instant,
     pub value: TaskMetricValue,
     pub count: u64,
-    pub min: TaskMetricValue,
-    pub max: TaskMetricValue,
 }
 
 impl Counter {
@@ -22,8 +20,6 @@ impl Counter {
             timestamp: Instant::now(),
             value,
             count,
-            min: value,
-            max: value,
         }
     }
 
@@ -39,8 +35,6 @@ impl Counter {
         let value = value.into();
         self.value = value;
         self.count = count;
-        self.min = value;
-        self.max = value;
     }
 
     #[inline(always)]
@@ -54,13 +48,10 @@ impl Counter {
         } else {
             self.value += value;
             self.count += count;
-            self.min = self.min.min(value);
-            self.max = self.max.max(value);
         }
     }
 
-    /// Merge raw statistics, so averages are weighted by sample count and empty
-    /// counters do not contribute a spurious zero to the minimum.
+    /// Merge sums and counts so averages are weighted by sample count.
     pub fn merge(&mut self, other: &Self) {
         if other.count == 0 {
             return;
@@ -70,8 +61,6 @@ impl Counter {
         } else {
             self.value += other.value;
             self.count += other.count;
-            self.min = self.min.min(other.min);
-            self.max = self.max.max(other.max);
         }
     }
 
@@ -84,10 +73,8 @@ impl Counter {
         match aggregate {
             AggregateType::Latest | AggregateType::Sum => self.value,
             AggregateType::AvgByCount => self.avg_by_count(),
-            AggregateType::MinByCount => self.min,
-            AggregateType::MaxByCount => self.max,
             AggregateType::Count => self.count.into(),
-            _ => unreachable!("per-second statistics require a time window"),
+            _ => unreachable!("unsupported aggregation for a no-window counter"),
         }
     }
 
@@ -97,7 +84,6 @@ impl Counter {
         description: &str,
         counter_type: &CounterType,
     ) -> String {
-        use std::fmt::Write;
         let mut line = format!("{name} | {description} | {counter_type}");
         for aggregate in counter_type.get_aggregate_types() {
             write!(line, " | {aggregate}={}", self.aggregate(&aggregate)).unwrap();
@@ -116,8 +102,6 @@ mod tests {
         counter.add(u64::MAX - 1, 1);
         counter.add(1, 1);
         assert_eq!(counter.value, TaskMetricValue::Integer(u64::MAX));
-        assert_eq!(counter.min, TaskMetricValue::Integer(1));
-        assert_eq!(counter.max, TaskMetricValue::Integer(u64::MAX - 1));
         assert_eq!(
             counter.avg_by_count(),
             TaskMetricValue::Integer(u64::MAX / 2)
@@ -130,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_uses_sample_weights_and_ignores_empty_extrema() {
+    fn merge_uses_sample_weights_and_ignores_empty_counters() {
         let mut first = Counter::new(0.0, 0);
         first.add(0.9, 1);
         let mut second = Counter::new(0.0, 0);
@@ -145,28 +129,6 @@ mod tests {
             assert_eq!(merged.count, 4);
             assert!((merged.value.as_f64() - 1.2).abs() < 1e-12);
             assert!((merged.avg_by_count().as_f64() - 0.3).abs() < 1e-12);
-            assert_eq!(merged.min.as_f64(), 0.0);
-            assert_eq!(merged.max.as_f64(), 0.9);
         }
-        first.merge(&Counter::new(0.0, 0));
-        assert_eq!(first.min.as_f64(), 0.9);
-    }
-
-    #[test]
-    fn mixed_values_promote_to_float_and_set_resets_statistics() {
-        let mut counter = Counter::new(2, 1);
-        counter.add(0.5, 1);
-        assert_eq!(counter.value, TaskMetricValue::Float(2.5));
-        assert_eq!(counter.avg_by_count(), TaskMetricValue::Float(1.25));
-        assert_eq!(counter.min, TaskMetricValue::Float(0.5));
-        assert_eq!(counter.max, TaskMetricValue::Float(2.0));
-        counter.set(7, 1);
-        assert_eq!(counter.value, TaskMetricValue::Integer(7));
-        assert_eq!(counter.min, counter.value);
-        assert_eq!(counter.max, counter.value);
-        assert_eq!(counter.avg_by_count(), counter.value);
-        counter.add(100, 0);
-        assert_eq!(counter.count, 1);
-        assert_eq!(counter.value, TaskMetricValue::Integer(7));
     }
 }

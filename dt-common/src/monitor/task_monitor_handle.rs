@@ -6,8 +6,7 @@ use crate::{
     monitor::{
         counter_type::CounterType,
         monitor::Monitor,
-        pipeline_sink_metrics::PipelineSinkMetricsGuard,
-        sinker_worker_metrics::SinkerWorkerMetrics,
+        sinker_worker_metrics::{PipelineSinkMetricsGuard, SinkerWorkerMetrics},
         task_metrics::{TaskMetricValue, TaskMetricsType},
         task_monitor::{MonitorType, TaskMonitor},
     },
@@ -73,8 +72,9 @@ impl TaskMonitorHandle {
     }
 
     pub fn sinker_worker_metrics(&self) -> Arc<SinkerWorkerMetrics> {
-        self.pipeline_monitor()
-            .map(|monitor| monitor.sinker_worker_metrics())
+        self.task_monitor
+            .as_ref()
+            .map(|task_monitor| task_monitor.sinker_worker_metrics())
             .unwrap_or_default()
     }
 

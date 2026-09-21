@@ -1,14 +1,12 @@
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     time::Duration,
 };
 
 use tokio::time::Instant;
-
-use super::pipeline_sink_metrics::PipelineSinkMetricsState;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SinkerWorkerMetricsSnapshot {
@@ -16,12 +14,13 @@ pub struct SinkerWorkerMetricsSnapshot {
     pub busy: u64,
 }
 
-/// One pipeline's sinker pool. Completed samples live in its Monitor counters.
-#[derive(Debug, Default)]
+/// Task-wide worker counts and work time for the current pipeline sink operation.
+#[derive(Debug)]
 pub struct SinkerWorkerMetrics {
     configured: AtomicU64,
     busy: AtomicU64,
-    pub(super) pipeline_sink: Mutex<Option<PipelineSinkMetricsState>>,
+    // MAX disables timing, including after an overflow or a cancelled operation.
+    work_ns: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -35,7 +34,24 @@ pub struct SinkerWorkerBusyGuard<'a> {
     started_at: Option<Instant>,
 }
 
+impl Default for SinkerWorkerMetrics {
+    fn default() -> Self {
+        Self {
+            configured: AtomicU64::new(0),
+            busy: AtomicU64::new(0),
+            work_ns: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
 impl SinkerWorkerMetrics {
+    /// A task has one pipeline with sequential sink operations. All workers from
+    /// the previous operation must have exited before starting another one,
+    /// including after errors or cancellation.
+    pub fn start_pipeline_sink(self: &Arc<Self>, parallelism: usize) -> PipelineSinkMetricsGuard {
+        PipelineSinkMetricsGuard::new(self.clone(), parallelism)
+    }
+
     pub fn register_worker(self: &Arc<Self>) -> SinkerWorkerRecorder {
         self.configured.fetch_add(1, Ordering::Relaxed);
         SinkerWorkerRecorder {
@@ -50,10 +66,13 @@ impl SinkerWorkerMetrics {
         }
     }
 
-    pub(super) fn record_work(&self, elapsed: Duration) {
-        if let Some(state) = self.pipeline_sink.lock().unwrap().as_mut() {
-            state.record_work(elapsed);
-        }
+    fn record_work(&self, elapsed: Duration) {
+        let ns = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+        let _ = self
+            .work_ns
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                (value != u64::MAX).then(|| value.saturating_add(ns))
+            });
     }
 }
 
@@ -66,9 +85,9 @@ impl SinkerWorkerRecorder {
         }
     }
 
-    pub fn enter_with_timer(&self, non_empty: bool) -> SinkerWorkerBusyGuard<'_> {
+    pub fn enter_with_timer(&self) -> SinkerWorkerBusyGuard<'_> {
         let mut guard = self.enter();
-        if non_empty && self.metrics.pipeline_sink.lock().unwrap().is_some() {
+        if self.metrics.work_ns.load(Ordering::Relaxed) != u64::MAX {
             guard.started_at = Some(Instant::now());
         }
         guard
@@ -77,17 +96,66 @@ impl SinkerWorkerRecorder {
 
 impl Drop for SinkerWorkerBusyGuard<'_> {
     fn drop(&mut self) {
-        if let Some(started) = self.started_at {
-            self.recorder.metrics.record_work(started.elapsed());
+        if let Some(started_at) = self.started_at {
+            self.recorder.metrics.record_work(started_at.elapsed());
         }
         let previous = self.recorder.metrics.busy.fetch_sub(1, Ordering::Relaxed);
         debug_assert!(previous > 0, "sinker worker count underflow");
     }
 }
 
+/// Measures one BaseParallelizer::sink_dml call. Only finish produces a sample.
+/// Owns the lifecycle of the task's shared work counter for one operation.
+pub struct PipelineSinkMetricsGuard {
+    started: Instant,
+    parallelism: usize,
+    metrics: Arc<SinkerWorkerMetrics>,
+}
+
+impl PipelineSinkMetricsGuard {
+    fn new(metrics: Arc<SinkerWorkerMetrics>, parallelism: usize) -> Self {
+        metrics.work_ns.store(0, Ordering::Relaxed);
+        Self {
+            started: Instant::now(),
+            parallelism,
+            metrics,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_work(&self, elapsed: Duration) {
+        self.metrics.record_work(elapsed);
+    }
+
+    /// Called only after every partition has joined successfully.
+    pub fn finish(self) -> Option<(Duration, f64)> {
+        let duration = self.started.elapsed();
+        if self.parallelism == 0 || duration.is_zero() {
+            return None;
+        }
+        let work_ns = self.metrics.work_ns.swap(u64::MAX, Ordering::Relaxed);
+        let capacity_ns = duration.as_nanos().checked_mul(self.parallelism as u128)?;
+        // MAX marks an invalid measurement, such as a work duration overflow.
+        if work_ns == u64::MAX || u128::from(work_ns) > capacity_ns {
+            return None;
+        }
+        Some((duration, work_ns as f64 / capacity_ns as f64))
+    }
+}
+
+impl Drop for PipelineSinkMetricsGuard {
+    fn drop(&mut self) {
+        self.metrics.work_ns.store(u64::MAX, Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{hint::black_box, sync::Arc, time::Instant};
+    use std::{
+        hint::black_box,
+        sync::{atomic::Ordering, Arc},
+        time::{Duration, Instant},
+    };
 
     use super::SinkerWorkerMetrics;
 
@@ -109,9 +177,9 @@ mod tests {
         assert_eq!(metrics.snapshot().busy, 0);
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[test]
     #[ignore = "manual release-mode hot-path measurement"]
-    async fn measures_tracker_hot_path_cost() {
+    fn measures_tracker_hot_path_cost() {
         const ITERATIONS: u32 = 1_000_000;
 
         let metrics = Arc::new(SinkerWorkerMetrics::default());
@@ -124,23 +192,61 @@ mod tests {
         let nanoseconds_per_operation = elapsed.as_nanos() as f64 / f64::from(ITERATIONS);
 
         eprintln!("sinker worker tracker: {nanoseconds_per_operation:.2} ns/enter+drop");
-        let started = Instant::now();
-        for _ in 0..ITERATIONS {
-            black_box(worker.enter_with_timer(true));
-        }
-        let idle_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
-        let batch = crate::monitor::pipeline_sink_metrics::PipelineSinkMetricsGuard::new(
-            metrics.clone(),
-            1,
-            ITERATIONS as usize,
-        );
-        let started = Instant::now();
-        for _ in 0..ITERATIONS {
-            black_box(worker.enter_with_timer(true));
-        }
-        let active_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
-        eprintln!("sink guard: idle={idle_ns:.2} ns/call, active={active_ns:.2} ns/call");
-        assert!(batch.finish().is_some());
         assert_eq!(metrics.snapshot().busy, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sink_guard_only_times_calls_in_its_pipeline_operation() {
+        let workers = Arc::new(SinkerWorkerMetrics::default());
+        let worker = workers.register_worker();
+        let unmeasured = worker.enter_with_timer();
+        assert_eq!(workers.snapshot().busy, 1);
+        assert!(unmeasured.started_at.is_none());
+        drop(unmeasured);
+        let batch = workers.start_pipeline_sink(1);
+        let control = worker.enter();
+        tokio::time::advance(Duration::from_millis(10)).await;
+        drop(control);
+        let sink = worker.enter_with_timer();
+        assert_eq!(workers.snapshot().busy, 1);
+        tokio::time::advance(Duration::from_millis(10)).await;
+        drop(sink);
+        assert_eq!(workers.snapshot().busy, 0);
+        let (_, utilization) = batch.finish().unwrap();
+        assert_eq!(utilization, 0.5);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rejects_zero_duration_and_invalid_measurements() {
+        let metrics = Arc::new(SinkerWorkerMetrics::default());
+        assert!(metrics.start_pipeline_sink(1).finish().is_none());
+        for (parallelism, work) in [(0, 1), (1, 101)] {
+            let mut batch = metrics.start_pipeline_sink(parallelism);
+            batch.started -= Duration::from_millis(100);
+            batch.record_work(Duration::from_millis(work));
+            assert!(batch.finish().is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_operation_disables_timing_until_workers_exit_and_next_operation_starts() {
+        let metrics = Arc::new(SinkerWorkerMetrics::default());
+        let worker = metrics.register_worker();
+        let cancelled = metrics.start_pipeline_sink(1);
+        let late_guard = worker.enter_with_timer();
+        tokio::time::advance(Duration::from_millis(10)).await;
+        drop(cancelled);
+        tokio::time::advance(Duration::from_millis(20)).await;
+        drop(late_guard);
+        assert_eq!(metrics.work_ns.load(Ordering::Relaxed), u64::MAX);
+        assert_eq!(metrics.snapshot().busy, 0);
+
+        // Reuse is supported only after all workers from the old operation exit.
+        let next = metrics.start_pipeline_sink(1);
+        let next_guard = worker.enter_with_timer();
+        tokio::time::advance(Duration::from_millis(20)).await;
+        drop(next_guard);
+        assert_eq!(next.finish().unwrap().1, 1.0);
+        assert_eq!(metrics.work_ns.load(Ordering::Relaxed), u64::MAX);
     }
 }

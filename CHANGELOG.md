@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### General and Platform
 
-- preserve monitor samples across repeated initialization and correct global averages, extrema, aligned per-second rates, and task sinker throughput aggregation
+- preserve monitor samples across repeated initialization and merge cumulative counter sums and counts before calculating averages
 - exit with a non-zero status code when the task panics, instead of leaving the process hanging
 
 #### Redis

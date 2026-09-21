@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use super::counter::Counter;
 use super::counter_type::CounterType;
 use super::monitor::Monitor;
-use super::time_window_counter::{TimeWindowCounter, WindowCounterStatistics};
+use super::time_window_counter::WindowCounterStatistics;
 use super::FlushableMonitor;
 use crate::log_monitor;
 use crate::monitor::counter_type::AggregateType;
@@ -70,32 +70,56 @@ impl GroupMonitor {
     }
 
     pub async fn flush(&self) {
+        let window_counter_statistics_map: DashMap<CounterType, Vec<WindowCounterStatistics>> =
+            DashMap::new();
         let no_window_counter_statistics_map = self.no_window_statistics();
+
         let monitors: Vec<Arc<Monitor>> = self
             .monitors
             .iter()
             .map(|entry| entry.value().clone())
             .collect();
-        let window_counter_statistics_map =
-            Self::window_statistics(&monitors, Instant::now()).await;
 
-        for (counter_type, statistics) in window_counter_statistics_map {
-            if statistics.count == 0 {
-                continue;
+        for monitor in monitors {
+            let counter_types: Vec<CounterType> = monitor
+                .time_window_counters
+                .iter()
+                .map(|entry| entry.key().clone())
+                .collect();
+
+            for counter_type in counter_types {
+                let counter = monitor
+                    .time_window_counters
+                    .get(&counter_type)
+                    .map(|r| r.value().clone());
+                if let Some(counter) = counter {
+                    if !counter.has_live_data().await {
+                        continue;
+                    }
+                    let statistics = counter.statistics().await;
+                    window_counter_statistics_map
+                        .entry(counter_type)
+                        .or_default()
+                        .push(statistics);
+                }
             }
+        }
+
+        for (counter_type, statistics_vec) in window_counter_statistics_map {
             let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
             for aggregate_type in counter_type.get_aggregate_types() {
-                let aggregate_value = match aggregate_type {
-                    AggregateType::AvgByCount => statistics.avg_by_count,
-                    AggregateType::AvgBySec => statistics.avg_by_sec,
-                    AggregateType::Sum => statistics.sum,
-                    AggregateType::MaxBySec => statistics.max_by_sec,
-                    AggregateType::MinBySec => statistics.min_by_sec,
-                    AggregateType::MaxByCount => statistics.max,
-                    AggregateType::MinByCount => statistics.min,
-                    AggregateType::Count => statistics.count,
-                    _ => continue,
-                };
+                let mut aggregate_value = 0;
+                for statistics in statistics_vec.iter() {
+                    aggregate_value += match aggregate_type {
+                        AggregateType::AvgByCount => statistics.avg_by_count,
+                        AggregateType::AvgBySec => statistics.avg_by_sec,
+                        AggregateType::Sum => statistics.sum,
+                        AggregateType::MaxBySec => statistics.max_by_sec,
+                        AggregateType::MaxByCount => statistics.max,
+                        AggregateType::Count => statistics.count,
+                        _ => continue,
+                    };
+                }
                 log = format!("{} | {}={}", log, aggregate_type, aggregate_value);
             }
             log_monitor!("{}", log);
@@ -108,35 +132,10 @@ impl GroupMonitor {
             );
         }
     }
-
-    pub(crate) async fn window_statistics(
-        monitors: &[Arc<Monitor>],
-        now: Instant,
-    ) -> HashMap<CounterType, WindowCounterStatistics> {
-        let mut windows: HashMap<CounterType, Vec<Arc<TimeWindowCounter>>> = HashMap::new();
-        for monitor in monitors {
-            for entry in monitor.time_window_counters.iter() {
-                windows
-                    .entry(entry.key().clone())
-                    .or_default()
-                    .push(entry.value().clone());
-            }
-        }
-        let mut result = HashMap::new();
-        for (counter_type, counters) in windows {
-            result.insert(
-                counter_type,
-                TimeWindowCounter::statistics_across(&counters, now).await,
-            );
-        }
-        result
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     #[test]
@@ -169,14 +168,9 @@ mod tests {
             let utilization = &counters[&CounterType::PipelineSinkParallelUtilization];
             assert_eq!(utilization.count, 3);
             assert!((utilization.avg_by_count().as_f64() - 7.0 / 12.0).abs() < 1e-12);
-            assert_eq!(
-                (utilization.min.as_f64(), utilization.max.as_f64()),
-                (0.25, 1.0)
-            );
             let duration = &counters[&CounterType::PipelineSinkDurationSeconds];
             assert_eq!(duration.value.as_f64(), 1.75);
             assert!((duration.avg_by_count().as_f64() - 1.75 / 3.0).abs() < 1e-12);
-            assert_eq!((duration.min.as_f64(), duration.max.as_f64()), (0.25, 1.0));
             assert_eq!(
                 counters[&CounterType::PipelineSinkOperationsTotal]
                     .value
@@ -198,75 +192,5 @@ mod tests {
             group.remove_monitor(id);
             assert_totals();
         }
-    }
-
-    #[test]
-    fn concurrent_settlement_preserves_each_monitors_samples() {
-        let group = GroupMonitor::new("pipeline", "global");
-        std::thread::scope(|scope| {
-            for _ in 0..16 {
-                let group = &group;
-                scope.spawn(move || {
-                    let monitor = Arc::new(Monitor::new("pipeline", "test", 0, 0, 1));
-                    monitor.add_no_window_counter(
-                        CounterType::PipelineSinkDurationSeconds,
-                        0.25,
-                        1,
-                    );
-                    group.settle_no_window_monitor(&monitor);
-                });
-            }
-        });
-        let counters = group.no_window_statistics();
-        let duration = &counters[&CounterType::PipelineSinkDurationSeconds];
-        assert_eq!(duration.count, 16);
-        assert_eq!(duration.value.as_f64(), 4.0);
-        assert_eq!(duration.avg_by_count().as_f64(), 0.25);
-    }
-
-    #[tokio::test]
-    async fn count_statistics_merge_samples_instead_of_monitor_averages() {
-        let a = Arc::new(Monitor::new("sinker", "a", 60, 100, 10));
-        let b = Arc::new(Monitor::new("sinker", "b", 60, 100, 10));
-        let empty = Arc::new(Monitor::new("sinker", "empty", 60, 100, 10));
-        a.add_counter(CounterType::RtPerQuery, 90).await;
-        for value in [10, 20, 0] {
-            b.add_counter(CounterType::RtPerQuery, value).await;
-        }
-        b.mark_tombstone(); // GroupMonitor keeps finished tables' live samples.
-        for monitors in [vec![a.clone(), b.clone(), empty.clone()], vec![empty, b, a]] {
-            let statistics = GroupMonitor::window_statistics(&monitors, Instant::now()).await;
-            let result = &statistics[&CounterType::RtPerQuery];
-            assert_eq!(result.count, 4);
-            assert_eq!(result.avg_by_count, 30);
-            assert_eq!(result.min, 0);
-            assert_eq!(result.max, 90);
-        }
-    }
-
-    #[tokio::test]
-    async fn rate_statistics_align_seconds_and_ignore_expired_samples() {
-        let now = Instant::now();
-        let mut monitors = Vec::new();
-        for (id, values) in [("a", [100, 20]), ("b", [10, 200])] {
-            let monitor = Arc::new(Monitor::new("sinker", id, 60, 100, 10));
-            for (age, value) in [(1, values[0]), (2, values[1]), (60, 999)] {
-                monitor.add_counter(CounterType::RecordCount, value).await;
-                let window = monitor
-                    .time_window_counters
-                    .get(&CounterType::RecordCount)
-                    .unwrap()
-                    .clone();
-                window.counters.write().await.back_mut().unwrap().timestamp =
-                    now - Duration::from_secs(age);
-            }
-            monitors.push(monitor);
-        }
-        let statistics = GroupMonitor::window_statistics(&monitors, now).await;
-        let result = &statistics[&CounterType::RecordCount];
-        assert_eq!(result.sum, 330);
-        assert_eq!(result.min_by_sec, 110);
-        assert_eq!(result.max_by_sec, 220);
-        assert_eq!(result.avg_by_sec, 165);
     }
 }

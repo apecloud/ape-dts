@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use dt_common::{
     config::parallelizer_config::ChunkPartitionerRebalanceConfig,
     meta::{dt_data::DtItem, dt_queue::DtQueue, row_data::RowData},
+    monitor::counter_type::CounterType,
 };
 use dt_connector::Sinker;
 
@@ -47,10 +48,9 @@ impl Parallelizer for SnapshotParallelizer {
         };
         // Finish partition timing before dispatching or waiting for any sinker.
         let sub_datas = match monitor {
-            Some(monitor) => monitor.measure_counter(
-                dt_common::monitor::counter_type::CounterType::PartitionerDurationSeconds,
-                partition,
-            ),
+            Some(monitor) => {
+                monitor.measure_duration(CounterType::PartitionerDurationSeconds, partition)
+            }
             None => partition(),
         }?;
         self.base_parallelizer

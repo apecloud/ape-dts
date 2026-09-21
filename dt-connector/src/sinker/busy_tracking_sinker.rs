@@ -26,7 +26,7 @@ impl BusyTrackingSinker {
 #[async_trait]
 impl Sinker for BusyTrackingSinker {
     async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
-        let _guard = self.recorder.enter_with_timer(!data.is_empty());
+        let _guard = self.recorder.enter_with_timer();
         self.inner
             .sink_dml(data, batch)
             .await
@@ -324,15 +324,6 @@ mod tests {
     #[ignore = "manual release-mode end-to-end overhead measurement"]
     async fn measures_decorator_end_to_end_cost() {
         const ITERATIONS: u32 = 500_000;
-        let row = RowData::new(
-            String::new(),
-            "schema".into(),
-            "table".into(),
-            1,
-            dt_common::meta::row_type::RowType::Insert,
-            None,
-            None,
-        );
 
         let fail = Arc::new(AtomicBool::new(false));
         let mut direct: Box<dyn Sinker + Send> = Box::new(TestSinker {
@@ -350,29 +341,19 @@ mod tests {
 
         let started = Instant::now();
         for _ in 0..ITERATIONS {
-            black_box(direct.sink_dml(vec![row.clone()], false).await.unwrap());
+            black_box(direct.sink_dml(Vec::new(), false).await.unwrap());
         }
         let direct_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
 
         let started = Instant::now();
         for _ in 0..ITERATIONS {
-            black_box(tracked.sink_dml(vec![row.clone()], false).await.unwrap());
+            black_box(tracked.sink_dml(Vec::new(), false).await.unwrap());
         }
         let tracked_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
-        let batch = dt_common::monitor::pipeline_sink_metrics::PipelineSinkMetricsGuard::new(
-            metrics.clone(),
-            1,
-            ITERATIONS as usize,
-        );
-        let started = Instant::now();
-        for _ in 0..ITERATIONS {
-            black_box(tracked.sink_dml(vec![row.clone()], false).await.unwrap());
-        }
-        let active_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
-        assert!(batch.finish().is_some());
 
         eprintln!(
-            "sinker decorator: direct={direct_ns:.2} ns/call, idle={tracked_ns:.2} ns/call, active={active_ns:.2} ns/call"
+            "sinker decorator: direct={direct_ns:.2} ns/call, tracked={tracked_ns:.2} ns/call, delta={:.2} ns/call",
+            tracked_ns - direct_ns
         );
     }
 }

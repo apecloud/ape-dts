@@ -1,15 +1,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use tokio::time::Instant;
 
 use super::counter::Counter;
 use super::counter_type::{CounterType, WindowType};
-use super::sinker_worker_metrics::{SinkerWorkerMetrics, SinkerWorkerMetricsSnapshot};
 use super::task_metrics::TaskMetricValue;
 use super::time_window_counter::TimeWindowCounter;
 use super::FlushableMonitor;
@@ -25,7 +22,6 @@ pub struct Monitor {
     pub time_window_secs: u64,
     pub max_sub_count: u64,
     pub count_window: u64,
-    sinker_worker_metrics: OnceLock<Arc<SinkerWorkerMetrics>>,
     tombstone: AtomicBool,
 }
 
@@ -52,21 +48,8 @@ impl Monitor {
             time_window_secs,
             max_sub_count,
             count_window,
-            sinker_worker_metrics: OnceLock::new(),
             tombstone: AtomicBool::new(false),
         }
-    }
-
-    /// Lazily allocated for pipeline monitors; shared by their worker wrappers.
-    pub fn sinker_worker_metrics(&self) -> Arc<SinkerWorkerMetrics> {
-        self.sinker_worker_metrics.get_or_init(Arc::default).clone()
-    }
-
-    pub(crate) fn sinker_worker_snapshot(&self) -> SinkerWorkerMetricsSnapshot {
-        self.sinker_worker_metrics
-            .get()
-            .map(|metrics| metrics.snapshot())
-            .unwrap_or_default()
     }
 
     pub fn clear_tombstone(&self) {
@@ -110,7 +93,7 @@ impl Monitor {
     }
 
     /// Measure one synchronous call in seconds, including errors and unwinding.
-    pub fn measure_counter<T>(
+    pub fn measure_duration<T>(
         &self,
         counter_type: CounterType,
         operation: impl FnOnce() -> T,
@@ -122,7 +105,7 @@ impl Monitor {
         struct Timer<'a> {
             monitor: &'a Monitor,
             counter_type: CounterType,
-            started: tokio::time::Instant,
+            started: Instant,
         }
         impl Drop for Timer<'_> {
             fn drop(&mut self) {
@@ -136,7 +119,7 @@ impl Monitor {
         let _timer = Timer {
             monitor: self,
             counter_type,
-            started: tokio::time::Instant::now(),
+            started: Instant::now(),
         };
         operation()
     }
@@ -360,8 +343,7 @@ mod tests {
                 .unwrap();
             assert_eq!(counter.count, 4);
             assert!((counter.value.as_f64() - 0.0012).abs() < 1e-12);
-            assert_eq!(counter.min.as_f64(), 0.0);
-            assert_eq!(counter.max.as_f64(), 0.0009);
+
             assert!((counter.avg_by_count().as_f64() - 0.0003).abs() < 1e-12);
         }
         tokio::time::advance(Duration::from_secs(86400)).await;
@@ -379,16 +361,16 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn generic_timer_preserves_results_and_records_errors_and_unwinding() {
+    async fn measure_duration_preserves_results_and_records_errors_and_unwinding() {
         let monitor = Monitor::new("pipeline", "test", 1, 1, 1);
         let counter_type = CounterType::PartitionerDurationSeconds;
-        assert_eq!(monitor.measure_counter(counter_type.clone(), || 42), 42);
+        assert_eq!(monitor.measure_duration(counter_type.clone(), || 42), 42);
         assert_eq!(
-            monitor.measure_counter(counter_type.clone(), || Err::<(), _>("partition failed")),
+            monitor.measure_duration(counter_type.clone(), || Err::<(), _>("partition failed")),
             Err("partition failed")
         );
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || monitor.measure_counter(counter_type.clone(), || panic!("partition panic"))
+            || monitor.measure_duration(counter_type.clone(), || panic!("partition panic"))
         ))
         .is_err());
         let counter = monitor.no_window_counters.get(&counter_type).unwrap();

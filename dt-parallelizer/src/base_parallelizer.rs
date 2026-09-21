@@ -13,7 +13,7 @@ use dt_common::{
     },
     monitor::{
         counter::Counter, counter_type::CounterType, monitor::Monitor,
-        pipeline_sink_metrics::PipelineSinkMetricsGuard, task_monitor_handle::TaskMonitorHandle,
+        sinker_worker_metrics::PipelineSinkMetricsGuard, task_monitor_handle::TaskMonitorHandle,
     },
 };
 use dt_connector::Sinker;
@@ -112,12 +112,19 @@ impl BaseParallelizer {
         parallel_size: usize,
         batch: bool,
     ) -> anyhow::Result<()> {
+        let monitor = self.monitor.pipeline_sink_monitor().map(|monitor| {
+            let monitor_guard = self
+                .monitor
+                .sinker_worker_metrics()
+                .start_pipeline_sink(parallel_size.min(sinkers.len()));
+            (monitor, monitor_guard)
+        });
         let workers_used = self
             .sink_by_available_sinker(
                 sub_data_items,
                 sinkers,
                 parallel_size,
-                self.monitor.pipeline_sink_monitor(),
+                monitor,
                 move |sinker, data| async move { sinker.lock().await.sink_dml(data, batch).await },
             )
             .await?;
@@ -190,7 +197,7 @@ impl BaseParallelizer {
         mut sub_data_items: Vec<Vec<T>>,
         sinkers: &[SharedSinker],
         parallel_size: usize,
-        batch_monitor: Option<Arc<Monitor>>,
+        monitor: Option<(Arc<Monitor>, PipelineSinkMetricsGuard)>,
         run: Run,
     ) -> anyhow::Result<usize>
     where
@@ -210,20 +217,13 @@ impl BaseParallelizer {
             );
         }
 
-        if batch_monitor.is_some() {
+        if monitor.is_some() {
             sub_data_items.retain(|data| !data.is_empty());
             if sub_data_items.is_empty() {
                 return Ok(0);
             }
         }
         let active_sinkers = parallel_size.min(sinkers.len());
-        let batch = batch_monitor.as_ref().map(|monitor| {
-            PipelineSinkMetricsGuard::new(
-                monitor.sinker_worker_metrics(),
-                active_sinkers,
-                sub_data_items.len(),
-            )
-        });
         let mut pending = sub_data_items.into_iter();
         let mut join_set = JoinSet::new();
         let spawn_sink_task = |join_set: &mut JoinSet<anyhow::Result<(usize, bool)>>,
@@ -270,8 +270,8 @@ impl BaseParallelizer {
             }
         }
 
-        if let (Some(batch), Some(monitor)) = (batch, batch_monitor) {
-            TaskMonitorHandle::record_pipeline_sink_metrics(&monitor, batch);
+        if let Some((monitor, monitor_guard)) = monitor {
+            TaskMonitorHandle::record_pipeline_sink_metrics(&monitor, monitor_guard);
         }
         Ok(workers_used_count)
     }
@@ -394,9 +394,8 @@ mod tests {
 
     fn sinkers(
         count: usize,
-        monitor: &Monitor,
+        workers: Arc<SinkerWorkerMetrics>,
     ) -> (Vec<super::SharedSinker>, Arc<SinkerWorkerMetrics>) {
-        let workers = monitor.sinker_worker_metrics();
         let sinkers = (0..count)
             .map(|_| {
                 Arc::new(Mutex::new(Box::new(BusyTrackingSinker::new(
@@ -408,7 +407,13 @@ mod tests {
         (sinkers, workers)
     }
 
-    fn batch_metrics() -> Arc<Monitor> {
+    #[derive(Clone)]
+    struct TestMetrics {
+        monitor: Arc<Monitor>,
+        workers: Arc<SinkerWorkerMetrics>,
+    }
+
+    fn batch_metrics() -> TestMetrics {
         let monitor = Arc::new(Monitor::new("pipeline", "test", 1, 1, 1));
         for counter in [
             CounterType::PipelineSinkOperationsTotal,
@@ -417,11 +422,14 @@ mod tests {
         ] {
             monitor.init_counter(counter);
         }
-        monitor
+        TestMetrics {
+            monitor,
+            workers: Arc::default(),
+        }
     }
 
-    fn measurements(monitor: &Monitor) -> (u64, f64, f64) {
-        let counters = &monitor.no_window_counters;
+    fn measurements(metrics: &TestMetrics) -> (u64, f64, f64) {
+        let counters = &metrics.monitor.no_window_counters;
         (
             counters
                 .get(&CounterType::PipelineSinkOperationsTotal)
@@ -446,14 +454,17 @@ mod tests {
         data: Vec<Vec<RowData>>,
         sinkers: &[super::SharedSinker],
         parallelism: usize,
-        metrics: Arc<Monitor>,
+        metrics: TestMetrics,
     ) -> anyhow::Result<usize> {
+        let monitor_guard = metrics
+            .workers
+            .start_pipeline_sink(parallelism.min(sinkers.len()));
         BaseParallelizer::default()
             .sink_by_available_sinker(
                 data,
                 sinkers,
                 parallelism,
-                Some(metrics),
+                Some((metrics.monitor, monitor_guard)),
                 |sinker, data| async move { sinker.lock().await.sink_dml(data, true).await },
             )
             .await
@@ -470,7 +481,7 @@ mod tests {
             (vec![50, 50, 50, 50, 50, 50, 50, 50], 4, 4, 1.0, 0.1),
         ] {
             let metrics = batch_metrics();
-            let (sinkers, workers) = sinkers(available, &metrics);
+            let (sinkers, workers) = sinkers(available, metrics.workers.clone());
             run_batch(
                 costs.into_iter().map(|cost| vec![row(cost)]).collect(),
                 &sinkers,
@@ -488,68 +499,32 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn auto_split_improves_utilization_for_one_large_chunk() {
-        use dt_common::config::parallelizer_config::{
-            ChunkPartitionerRebalanceConfig, ChunkPartitionerRebalanceStrategy,
-        };
-
-        use crate::chunk_partitioner::ChunkPartitioner;
-
-        let mut results = Vec::new();
-        for strategy in [
-            ChunkPartitionerRebalanceStrategy::None,
-            ChunkPartitionerRebalanceStrategy::AutoSplit,
-        ] {
-            let config = ChunkPartitionerRebalanceConfig {
-                strategy,
-                min_partition_rows: 1,
-                ..Default::default()
-            };
-            let data = (0..16).map(|_| row(10)).collect();
-            let partitions = ChunkPartitioner::partition_dml(data, 4, &config).unwrap();
-            let metrics = batch_metrics();
-            let (sinkers, _) = sinkers(4, &metrics);
-            run_batch(partitions, &sinkers, 4, metrics.clone())
-                .await
-                .unwrap();
-            results.push(measurements(&metrics));
-        }
-        assert_eq!(results[0].1, 0.25);
-        assert_eq!(results[1].1, 1.0);
-        assert!(results[1].2 < results[0].2);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn concurrent_batches_keep_independent_work_and_noop_handles_do_not_publish() {
-        let first_metrics = batch_metrics();
-        let second_metrics = batch_metrics();
-        let (a, _) = sinkers(2, &first_metrics);
-        let (b, _) = sinkers(2, &second_metrics);
-        let (first, second) = tokio::join!(
-            run_batch(
-                vec![vec![row(100)], vec![row(100)]],
-                &a,
-                2,
-                first_metrics.clone()
-            ),
-            run_batch(vec![vec![row(200)]], &b, 2, second_metrics.clone())
-        );
-        first.unwrap();
-        second.unwrap();
-        assert_eq!(measurements(&first_metrics), (1, 1.0, 0.1));
-        assert_eq!(measurements(&second_metrics), (1, 0.5, 0.2));
-        BaseParallelizer::default()
-            .sink_dml(vec![vec![row(100)]], &a, 2, true)
+    async fn sequential_operations_reuse_workers_and_reset_work_time() {
+        let metrics = batch_metrics();
+        let (sinkers, workers) = sinkers(2, metrics.workers.clone());
+        run_batch(
+            vec![vec![row(100)], vec![row(100)]],
+            &sinkers,
+            2,
+            metrics.clone(),
+        )
+        .await
+        .unwrap();
+        run_batch(vec![vec![row(200)]], &sinkers, 2, metrics.clone())
             .await
             .unwrap();
-        assert_eq!(measurements(&first_metrics).0, 1);
-        assert_eq!(measurements(&second_metrics).0, 1);
+        let (count, utilization, duration) = measurements(&metrics);
+        assert_eq!(count, 2);
+        assert_eq!(utilization, 0.75);
+        assert!((duration - 0.3).abs() < 1e-12);
+        assert_eq!(workers.snapshot().configured, 2);
+        assert_eq!(workers.snapshot().busy, 0);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn empty_invalid_and_unwrapped_batches_do_not_publish_samples() {
+    async fn empty_and_invalid_batches_do_not_publish_samples() {
         let metrics = batch_metrics();
-        let (sinkers, workers) = sinkers(2, &metrics);
+        let (sinkers, workers) = sinkers(2, metrics.workers.clone());
         assert_eq!(
             run_batch(vec![Vec::new()], &sinkers, 2, metrics.clone())
                 .await
@@ -568,21 +543,15 @@ mod tests {
         assert!(run_batch(vec![vec![row(10)]], &[], 2, metrics.clone())
             .await
             .is_err());
-        let unwrapped = vec![Arc::new(Mutex::new(
-            Box::new(TimedSinker) as Box<dyn Sinker + Send>
-        ))];
-        run_batch(vec![vec![row(10)]], &unwrapped, 1, metrics.clone())
-            .await
-            .unwrap();
         assert_eq!(measurements(&metrics).0, 0);
         assert_eq!(workers.snapshot().busy, 0);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn failed_and_panicked_operations_allow_reuse_after_workers_exit() {
+    async fn failed_and_panicked_operations_do_not_publish_or_pollute_retries() {
         for mode in ["fail", "panic"] {
             let metrics = batch_metrics();
-            let (sinkers, workers) = sinkers(2, &metrics);
+            let (sinkers, workers) = sinkers(2, metrics.workers.clone());
             let mut bad = row(10);
             bad.tb = mode.into();
             assert!(run_batch(
@@ -594,8 +563,8 @@ mod tests {
             .await
             .is_err());
             assert_eq!(measurements(&metrics).0, 0);
-            // Production stops the pipeline after failure. A caller that reuses
-            // this pool must wait for the aborted workers to release their locks.
+            // Production exits the pipeline on failure. To reuse the tracker in
+            // this test, wait for the already-started, aborted workers to exit.
             for sinker in &sinkers {
                 drop(sinker.lock().await);
             }
@@ -618,7 +587,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn cancellation_and_mutex_wait_are_excluded_from_work() {
         let metrics = batch_metrics();
-        let (sinkers, workers) = sinkers(1, &metrics);
+        let (sinkers, workers) = sinkers(1, metrics.workers.clone());
         let held = sinkers[0].lock().await;
         let task_sinkers = sinkers.clone();
         let task_metrics = metrics.clone();
@@ -651,5 +620,12 @@ mod tests {
         }
         assert_eq!(workers.snapshot().busy, 0);
         assert_eq!(measurements(&cancelled_metrics).0, 1);
+        run_batch(vec![vec![row(100)]], &sinkers, 1, metrics.clone())
+            .await
+            .unwrap();
+        let (count, utilization, duration) = measurements(&metrics);
+        assert_eq!(count, 2);
+        assert_eq!(utilization, 0.75);
+        assert!((duration - 0.3).abs() < 1e-12);
     }
 }

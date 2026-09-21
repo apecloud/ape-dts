@@ -1,6 +1,6 @@
 use strum::{Display, EnumString, IntoStaticStr};
 
-use super::task_metrics::{TaskMetricValue, TaskMetricsType};
+use super::task_metrics::TaskMetricValue;
 
 #[derive(EnumString, IntoStaticStr, Display, PartialEq, Eq, Hash, Clone)]
 pub enum CounterType {
@@ -97,32 +97,6 @@ impl CounterType {
         }
     }
 
-    pub(crate) fn task_metrics(&self) -> Vec<(AggregateType, TaskMetricsType)> {
-        use AggregateType::*;
-        use TaskMetricsType::*;
-        match self {
-            Self::PipelineSinkOperationsTotal => vec![(Latest, PipelineSinkOperationsTotal)],
-            Self::PipelineSinkParallelUtilization => vec![
-                (AvgByCount, PipelineSinkParallelUtilizationAvg),
-                (MinByCount, PipelineSinkParallelUtilizationMin),
-                (MaxByCount, PipelineSinkParallelUtilizationMax),
-            ],
-            Self::PipelineSinkDurationSeconds => vec![
-                (Sum, PipelineSinkDurationSecondsSum),
-                (AvgByCount, PipelineSinkDurationSecondsAvg),
-                (MinByCount, PipelineSinkDurationSecondsMin),
-                (MaxByCount, PipelineSinkDurationSecondsMax),
-            ],
-            Self::PartitionerDurationSeconds => vec![
-                (Sum, PartitionerDurationSecondsSum),
-                (AvgByCount, PartitionerDurationSecondsAvg),
-                (MinByCount, PartitionerDurationSecondsMin),
-                (MaxByCount, PartitionerDurationSecondsMax),
-            ],
-            _ => vec![],
-        }
-    }
-
     pub fn get_window_type(&self) -> WindowType {
         match self {
             Self::BatchWriteFailures
@@ -157,17 +131,10 @@ impl CounterType {
     pub fn get_aggregate_types(&self) -> Vec<AggregateType> {
         match self.get_window_type() {
             WindowType::NoWindow => match self {
-                Self::PipelineSinkParallelUtilization => vec![
-                    AggregateType::AvgByCount,
-                    AggregateType::MinByCount,
-                    AggregateType::MaxByCount,
-                ],
-                Self::PipelineSinkDurationSeconds | Self::PartitionerDurationSeconds => vec![
-                    AggregateType::Sum,
-                    AggregateType::AvgByCount,
-                    AggregateType::MinByCount,
-                    AggregateType::MaxByCount,
-                ],
+                Self::PipelineSinkParallelUtilization => vec![AggregateType::AvgByCount],
+                Self::PipelineSinkDurationSeconds | Self::PartitionerDurationSeconds => {
+                    vec![AggregateType::Sum, AggregateType::AvgByCount]
+                }
                 _ => vec![AggregateType::Latest],
             },
 
