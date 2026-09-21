@@ -10,7 +10,6 @@ use dt_common::{
     error::{DtError, DtOptionExt, DtResultExt},
     log_info, log_warn,
 };
-use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use postgres_types::PgLsn;
 use tokio_postgres::{
@@ -91,6 +90,10 @@ impl PgCdcClient {
             ConnectionAuthConfig::NoAuth => {}
         }
 
+        config.ssl_mode(match effective_ssl_config.ssl_mode {
+            SslMode::Disable => tokio_postgres::config::SslMode::Disable,
+            _ => tokio_postgres::config::SslMode::Require,
+        });
         Ok((config, effective_ssl_config))
     }
 
@@ -98,51 +101,24 @@ impl PgCdcClient {
         SslConfig {
             ssl_mode: SslMode::Disable,
             ssl_ca_path: String::new(),
+            ..SslConfig::default()
         }
     }
 
     fn build_tls_connector(ssl_config: &SslConfig) -> anyhow::Result<MakeTlsConnector> {
-        let mut builder =
-            SslConnector::builder(SslMethod::tls()).context(DtError::DatabaseTlsFailed(
+        let builder = ssl_config
+            .build_openssl_connector()
+            .context(DtError::DatabaseTlsFailed(
                 DbType::Pg,
-                "failed to create the PostgreSQL TLS connector".to_string(),
+                "failed to configure PostgreSQL TLS".to_string(),
             ))?;
-
-        match ssl_config.ssl_mode {
-            SslMode::Disable => {
-                return Err(DtError::InvalidConfig(
-                    "TLS connector requested while PostgreSQL TLS is disabled".to_string(),
-                )
-                .into());
-            }
-            SslMode::Require => {
-                builder.set_verify(SslVerifyMode::NONE);
-            }
-            SslMode::VerifyCa | SslMode::VerifyFull => {
-                if ssl_config.ssl_ca_path.is_empty() {
-                    return Err(DtError::InvalidConfig(
-                        "a CA certificate path is required by the selected TLS mode".to_string(),
-                    )
-                    .into());
-                }
-                builder.set_ca_file(&ssl_config.ssl_ca_path).context(
-                    DtError::DatabaseTlsFailed(
-                        DbType::Pg,
-                        "failed to load the PostgreSQL CA certificate".to_string(),
-                    ),
-                )?;
-                builder.set_verify(SslVerifyMode::PEER);
-            }
-        }
-
-        let mut connector = MakeTlsConnector::new(builder.build());
-        if matches!(ssl_config.ssl_mode, SslMode::VerifyCa) {
+        let mut connector = MakeTlsConnector::new(builder);
+        if matches!(ssl_config.ssl_mode, SslMode::Require | SslMode::VerifyCa) {
             connector.set_callback(|config, _domain| {
                 config.set_verify_hostname(false);
                 Ok(())
             });
         }
-
         Ok(connector)
     }
 
@@ -153,12 +129,16 @@ impl PgCdcClient {
         ))?;
         let mut ssl_mode = None;
         let mut ssl_ca_path = None;
+        let mut ssl_client_cert_path = None;
+        let mut ssl_client_key_path = None;
         let mut other_pairs = vec![];
 
         for (key, value) in parsed.query_pairs() {
             match key.as_ref() {
                 "sslmode" => ssl_mode = Some(Self::parse_url_ssl_mode(value.as_ref())?),
                 "sslrootcert" => ssl_ca_path = Some(value.into_owned()),
+                "sslcert" => ssl_client_cert_path = Some(value.into_owned()),
+                "sslkey" => ssl_client_key_path = Some(value.into_owned()),
                 // Replication connections are parsed by tokio-postgres directly and
                 // do not understand app-layer wrapped options like
                 // `options[statement_timeout]=10s`.
@@ -172,6 +152,9 @@ impl PgCdcClient {
         let ssl_config = ssl_mode.map(|ssl_mode| SslConfig {
             ssl_mode,
             ssl_ca_path: ssl_ca_path.unwrap_or_default(),
+            ssl_client_cert_path: ssl_client_cert_path.unwrap_or_default(),
+            ssl_client_key_path: ssl_client_key_path.unwrap_or_default(),
+            ..SslConfig::default()
         });
 
         Ok((parsed.to_string(), ssl_config))
@@ -378,6 +361,10 @@ mod tests {
         let (config, ssl_config) = client.build_replication_config().unwrap();
 
         assert_eq!(ssl_config.ssl_mode, SslMode::Require);
+        assert_eq!(
+            config.get_ssl_mode(),
+            tokio_postgres::config::SslMode::Require
+        );
         assert_eq!(config.get_user(), Some("auth_user"));
         assert_eq!(config.get_password(), Some("auth_pass".as_bytes()));
         assert_eq!(config.get_dbname(), Some("test_db"));
@@ -393,6 +380,7 @@ mod tests {
                 ssl_config: dt_common::config::ssl_config::SslConfig {
                     ssl_mode: SslMode::Disable,
                     ssl_ca_path: String::new(),
+                    ..Default::default()
                 },
             },
         );
@@ -400,6 +388,10 @@ mod tests {
         let (config, ssl_config) = client.build_replication_config().unwrap();
 
         assert_eq!(ssl_config.ssl_mode, SslMode::Disable);
+        assert_eq!(
+            config.get_ssl_mode(),
+            tokio_postgres::config::SslMode::Disable
+        );
         assert_eq!(config.get_user(), Some("url_user"));
         assert_eq!(config.get_password(), Some("url_pass".as_bytes()));
         assert_eq!(config.get_dbname(), Some("test_db"));

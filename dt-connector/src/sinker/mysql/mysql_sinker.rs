@@ -96,7 +96,7 @@ impl Sinker for MysqlSinker {
                 }
             }
             if let Some(ssl) = self.connection_auth.ssl_config() {
-                conn_options = ssl.apply_mysql(conn_options);
+                conn_options = ssl.apply_mysql(conn_options)?;
             }
 
             let start_time = Instant::now();

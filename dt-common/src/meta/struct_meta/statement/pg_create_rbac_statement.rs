@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::{
     rbac::PgPrivilege, rbac::PgRole, rbac::PgRoleMember, structure_type::StructureType,
 };
@@ -11,7 +12,7 @@ pub struct PgCreateRbacStatement {
 }
 
 impl PgCreateRbacStatement {
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if filter.filter_structure(&StructureType::Rbac) {
             return Ok(sqls);
@@ -70,7 +71,7 @@ impl PgCreateRbacStatement {
                 sql = format!("{} WITH {}", sql, options.join(" "));
             }
 
-            sqls.push((format!("rbac.role.{}", role.name), sql));
+            sqls.push((StructKey::new(StructKeyType::RbacRole, [&role.name]), sql));
 
             if !role.rol_configs.is_empty() {
                 for config in &role.rol_configs {
@@ -83,7 +84,10 @@ impl PgCreateRbacStatement {
                         let alter_sql =
                             format!("ALTER ROLE \"{}\" SET {} TO '{}'", role.name, param, value);
                         sqls.push((
-                            format!("rbac.role_config.{}.{}", role.name, param),
+                            StructKey::new(
+                                StructKeyType::RbacRoleConfig,
+                                [role.name.clone(), param.to_string()],
+                            ),
                             alter_sql,
                         ));
                     }
@@ -98,9 +102,13 @@ impl PgCreateRbacStatement {
                     sql = format!("{} WITH ADMIN OPTION", sql);
                 }
                 sqls.push((
-                    format!(
-                        "rbac.member.{}.{}.{}",
-                        member.role, member.member, member.admin_option
+                    StructKey::new(
+                        StructKeyType::RbacMember,
+                        [
+                            member.role.clone(),
+                            member.member.clone(),
+                            member.admin_option.to_string(),
+                        ],
                     ),
                     sql,
                 ));
@@ -394,7 +402,10 @@ mod tests {
         };
 
         let privilege = PgPrivilege {
-            key: "rbac.privilege.table.public.test_table.test_role.NO".to_string(),
+            key: StructKey::new(
+                StructKeyType::RbacPrivilegeTable,
+                ["public", "test_table", "test_role", "NO"],
+            ),
             origin: "GRANT SELECT ON TABLE public.test_table TO \"test_role\"".to_string(),
         };
 

@@ -178,6 +178,19 @@ impl ColValue {
         }
     }
 
+    pub fn is_same_raw_value(&self, other: &ColValue) -> bool {
+        if self.is_integer() && other.is_integer() {
+            return match (
+                self.convert_into_integer_128(),
+                other.convert_into_integer_128(),
+            ) {
+                (Ok(v1), Ok(v2)) => v1 == v2,
+                _ => false,
+            };
+        }
+        return self.is_same_value(other);
+    }
+
     pub fn hash_code(&self) -> anyhow::Result<u64> {
         if matches!(self, ColValue::None | ColValue::UnchangedToast) {
             return Ok(0);
@@ -478,6 +491,88 @@ mod tests {
         assert!(v2.is_same_value(&ColValue::Double(f64::NAN)));
         assert!(v3.is_same_value(&ColValue::None));
         assert!(v4.is_same_value(&ColValue::Long(7)));
+    }
+
+    #[test]
+    fn test_is_same_raw_value() {
+        let integers = [
+            ColValue::Tiny(7),
+            ColValue::UnsignedTiny(7),
+            ColValue::Short(7),
+            ColValue::UnsignedShort(7),
+            ColValue::Long(7),
+            ColValue::UnsignedLong(7),
+            ColValue::LongLong(7),
+            ColValue::UnsignedLongLong(7),
+        ];
+        for left in &integers {
+            for right in &integers {
+                assert!(left.is_same_raw_value(right), "{left:?} != {right:?}");
+            }
+            assert!(!left.is_same_raw_value(&ColValue::LongLong(8)));
+        }
+
+        let cases = [
+            (ColValue::Tiny(-1), ColValue::LongLong(-1), true),
+            (ColValue::Tiny(0), ColValue::UnsignedLongLong(0), true),
+            (ColValue::Tiny(-1), ColValue::UnsignedTiny(u8::MAX), false),
+            (
+                ColValue::LongLong(-1),
+                ColValue::UnsignedLongLong(u64::MAX),
+                false,
+            ),
+            (
+                ColValue::LongLong(i64::MAX),
+                ColValue::UnsignedLongLong(i64::MAX as u64),
+                true,
+            ),
+            (
+                ColValue::LongLong(i64::MIN),
+                ColValue::UnsignedLongLong(i64::MAX as u64 + 1),
+                false,
+            ),
+            (
+                ColValue::UnsignedLongLong(u64::MAX),
+                ColValue::UnsignedLongLong(u64::MAX),
+                true,
+            ),
+            (ColValue::Long(7), ColValue::String("7".into()), false),
+            (ColValue::Long(7), ColValue::Double(7.0), false),
+            (ColValue::Float(f32::NAN), ColValue::Float(f32::NAN), true),
+            (ColValue::Double(f64::NAN), ColValue::Double(f64::NAN), true),
+            (ColValue::Float(7.0), ColValue::Double(7.0), false),
+            (
+                ColValue::RawString(b"test".to_vec()),
+                ColValue::String("test".into()),
+                true,
+            ),
+            (
+                ColValue::RawString(b"test".to_vec()),
+                ColValue::String("other".into()),
+                false,
+            ),
+            (
+                ColValue::RawString(vec![0xff]),
+                ColValue::String("\u{fffd}".into()),
+                false,
+            ),
+            (ColValue::None, ColValue::None, true),
+            (ColValue::None, ColValue::Long(0), false),
+            (ColValue::UnchangedToast, ColValue::UnchangedToast, true),
+            (ColValue::None, ColValue::UnchangedToast, false),
+        ];
+        for (left, right, expected) in cases {
+            assert_eq!(
+                left.is_same_raw_value(&right),
+                expected,
+                "{left:?} vs {right:?}"
+            );
+            assert_eq!(
+                right.is_same_raw_value(&left),
+                expected,
+                "{right:?} vs {left:?}"
+            );
+        }
     }
 
     #[test]

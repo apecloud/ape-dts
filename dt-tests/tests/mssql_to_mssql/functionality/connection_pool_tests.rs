@@ -197,7 +197,7 @@ mod test {
                 connection_timeout_secs: 15,
             },
             InvalidConfigCase {
-                name: "unsupported verify_ca TLS mode",
+                name: "verify_ca TLS mode without CA",
                 connection_string: endpoint.connection_string().to_string(),
                 auth: ConnectionAuthConfig::BasicSsl {
                     username: Some(username.clone()),
@@ -205,6 +205,7 @@ mod test {
                     ssl_config: SslConfig {
                         ssl_mode: SslMode::VerifyCa,
                         ssl_ca_path: String::new(),
+                        ..SslConfig::default()
                     },
                 },
                 max_connections: 1,
@@ -219,6 +220,7 @@ mod test {
                     ssl_config: SslConfig {
                         ssl_mode: SslMode::VerifyFull,
                         ssl_ca_path: String::new(),
+                        ..SslConfig::default()
                     },
                 },
                 max_connections: 1,
@@ -265,6 +267,7 @@ mod test {
             ssl_config: SslConfig {
                 ssl_mode: SslMode::Disable,
                 ssl_ca_path: String::new(),
+                ..SslConfig::default()
             },
         };
         let invalid_endpoint = MssqlTestEndpoint::from_connection_string_and_auth(

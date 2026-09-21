@@ -116,12 +116,29 @@ impl RdbTestRunner {
     }
 
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
-        let mut base = if relative_test_dir.starts_with("mssql_to_mssql/") {
+        Self::new_with_config_overrides(relative_test_dir, &[]).await
+    }
+
+    pub async fn new_with_config_overrides(
+        relative_test_dir: &str,
+        overrides: &[(String, String, String)],
+    ) -> anyhow::Result<Self> {
+        let mut base = if relative_test_dir.starts_with("mssql_to_mssql/")
+            || relative_test_dir.starts_with("tls/mssql/")
+        {
             BaseTestRunner::new_with_sql_load_strategy(relative_test_dir, SqlLoadStrategy::MssqlGo)
                 .await?
         } else {
             BaseTestRunner::new(relative_test_dir).await?
         };
+
+        if !overrides.is_empty() {
+            TestConfigUtil::update_task_config(
+                &base.task_config_file,
+                &base.task_config_file,
+                overrides,
+            );
+        }
 
         // prepare conn pools
         let mut src_conn_pool_mysql = None;
