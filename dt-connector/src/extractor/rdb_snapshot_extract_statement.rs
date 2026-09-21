@@ -286,6 +286,11 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
     }
 
     fn direction(&self, col: &str) -> anyhow::Result<SortDirection> {
+        // PostgreSQL snapshots use ascending cursor order even for DESC indexes.
+        // Apply it to both ORDER BY and cursor predicates so pagination agrees.
+        if self.pg_tb_meta.is_some() {
+            return Ok(SortDirection::Asc);
+        }
         self.order_col_attrs
             .and_then(|attrs| attrs.get(col))
             .copied()
@@ -1300,12 +1305,12 @@ mod tests {
             PredicateCase { db_type: DbType::Mysql, directions: &[Asc, Desc], predicate: AtOrBefore, expected_predicate: "((`a` < ?) OR (`a` = ? AND `b` >= ?))", expected_cols: &["a", "a", "b"] },
             PredicateCase { db_type: DbType::Mysql, directions: &[Desc, Asc], predicate: Range, expected_predicate: "((`a` < ?) OR (`a` = ? AND `b` > ?)) AND ((`a` > ?) OR (`a` = ? AND `b` <= ?))", expected_cols: &["a", "a", "b", "a", "a", "b"] },
             PredicateCase { db_type: DbType::Mysql, directions: &[Asc, Desc, Asc], predicate: After, expected_predicate: "((`a` > ?) OR (`a` = ? AND `b` < ?) OR (`a` = ? AND `b` = ? AND `c` > ?))", expected_cols: &["a", "a", "b", "a", "b", "c"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Desc], predicate: Range, expected_predicate: r#""a" < $1::int4 AND "a" >= $2::int4"#, expected_cols: &["a", "a"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Desc], predicate: Range, expected_predicate: r#"("a", "b") < ($1::int4, $2::int4) AND ("a", "b") >= ($3::int4, $4::int4)"#, expected_cols: &["a", "b", "a", "b"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Asc, Desc], predicate: After, expected_predicate: r#"(("a" > $1::int4) OR ("a" = $2::int4 AND "b" < $3::int4))"#, expected_cols: &["a", "a", "b"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Asc, Desc], predicate: AtOrBefore, expected_predicate: r#"(("a" < $1::int4) OR ("a" = $2::int4 AND "b" >= $3::int4))"#, expected_cols: &["a", "a", "b"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Asc], predicate: Range, expected_predicate: r#"(("a" < $1::int4) OR ("a" = $2::int4 AND "b" > $3::int4)) AND (("a" > $4::int4) OR ("a" = $5::int4 AND "b" <= $6::int4))"#, expected_cols: &["a", "a", "b", "a", "a", "b"] },
-            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Asc, Desc], predicate: AtOrBefore, expected_predicate: r#"(("a" > $1::int4) OR ("a" = $2::int4 AND "b" < $3::int4) OR ("a" = $4::int4 AND "b" = $5::int4 AND "c" >= $6::int4))"#, expected_cols: &["a", "a", "b", "a", "b", "c"] },
+            PredicateCase { db_type: DbType::Pg, directions: &[Desc], predicate: Range, expected_predicate: r#""a" > $1::int4 AND "a" <= $2::int4"#, expected_cols: &["a", "a"] },
+            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Desc], predicate: Range, expected_predicate: r#"("a", "b") > ($1::int4, $2::int4) AND ("a", "b") <= ($3::int4, $4::int4)"#, expected_cols: &["a", "b", "a", "b"] },
+            PredicateCase { db_type: DbType::Pg, directions: &[Asc, Desc], predicate: After, expected_predicate: r#"("a", "b") > ($1::int4, $2::int4)"#, expected_cols: &["a", "b"] },
+            PredicateCase { db_type: DbType::Pg, directions: &[Asc, Desc], predicate: AtOrBefore, expected_predicate: r#"("a", "b") <= ($1::int4, $2::int4)"#, expected_cols: &["a", "b"] },
+            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Asc], predicate: Range, expected_predicate: r#"("a", "b") > ($1::int4, $2::int4) AND ("a", "b") <= ($3::int4, $4::int4)"#, expected_cols: &["a", "b", "a", "b"] },
+            PredicateCase { db_type: DbType::Pg, directions: &[Desc, Asc, Desc], predicate: AtOrBefore, expected_predicate: r#"("a", "b", "c") <= ($1::int4, $2::int4, $3::int4)"#, expected_cols: &["a", "b", "c"] },
             PredicateCase { db_type: DbType::Mssql, directions: &[Desc], predicate: Range, expected_predicate: "[a] < @P1 AND [a] >= @P2", expected_cols: &["a", "a"] },
             PredicateCase { db_type: DbType::Mssql, directions: &[Desc, Desc], predicate: AtOrBefore, expected_predicate: "(([a] > @P1) OR ([a] = @P2 AND [b] >= @P3))", expected_cols: &["a", "a", "b"] },
             PredicateCase { db_type: DbType::Mssql, directions: &[Asc, Desc], predicate: After, expected_predicate: "(([a] > @P1) OR ([a] = @P2 AND [b] < @P3))", expected_cols: &["a", "a", "b"] },
@@ -1382,6 +1387,11 @@ mod tests {
                 case.directions
             );
             for (col, direction) in order_cols.iter().zip(case.directions) {
+                let direction = if matches!(case.db_type, DbType::Pg) {
+                    &Asc
+                } else {
+                    direction
+                };
                 assert!(order_by.contains(&format!(
                     "{}.{} {direction}",
                     stmt.table_name(),

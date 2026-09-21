@@ -171,24 +171,34 @@ pub async fn run_order_key_test(db_type: DbType) -> anyhow::Result<()> {
         ],
     );
     runner.run_snapshot_test(false).await?;
-    let mut resume_cases = vec![
-        ("mixed", "defghij"),
-        ("descending", "abc"),
-        ("selected", "abc"),
-        ("scored_key", "abc"),
-        ("nullable_key", "defghi"),
-        ("float_key", "abcd"),
-        ("catalog_key", "abcd"),
-        ("cursor_ignored", "defg"),
-    ];
-    if matches!(db_type, DbType::Pg) {
-        resume_cases.extend([
-            ("network_key", "abc"),
-            ("range_key", "abc"),
-            ("array_key", "abc"),
-            ("bool_key", "a"),
-        ]);
-    }
+    let resume_cases = if matches!(db_type, DbType::Pg) {
+        // PostgreSQL resumes in ascending order regardless of index directions.
+        vec![
+            ("mixed", "abdfghij"),
+            ("descending", "efg"),
+            ("selected", "abc"),
+            ("scored_key", "efg"),
+            ("nullable_key", "abdghi"),
+            ("float_key", "fg"),
+            ("catalog_key", "dg"),
+            ("cursor_ignored", "defg"),
+            ("network_key", "efg"),
+            ("range_key", "efg"),
+            ("array_key", "efg"),
+            ("bool_key", "b"),
+        ]
+    } else {
+        vec![
+            ("mixed", "defghij"),
+            ("descending", "abc"),
+            ("selected", "abc"),
+            ("scored_key", "abc"),
+            ("nullable_key", "defghi"),
+            ("float_key", "abcd"),
+            ("catalog_key", "abcd"),
+            ("cursor_ignored", "defg"),
+        ]
+    };
     for (table, expected_payloads) in resume_cases {
         let target = if matches!(db_type, DbType::Mssql) {
             (
