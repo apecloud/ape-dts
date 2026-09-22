@@ -57,6 +57,7 @@ matches.
 | `RS001` | `ResourceExhausted` | A source or destination resource limit was reached |
 | `MD001` | `ObjectNotFound` | A required table, topic, or other endpoint object does not exist |
 | `MD002` | `DatabaseNotFound` | A database does not exist |
+| `MD003` | `ObjectAlreadyExists` | A destination object the migration creates already exists |
 | `DB001` | `DatabaseOperationFailed` | A database operation failed |
 | `DB002` | `DatabaseOperationTimeout` | A database operation timed out |
 | `DB003` | `DatabaseOperationConflict` | A database operation conflicts with concurrent or existing database state |
@@ -232,7 +233,8 @@ metadata that no raw provider error can supply.
 
 Failures while reading endpoint catalog or control metadata retain their typed
 provider error so that the provider classifier determines the code. Missing
-objects use `MD001`/`MD002`, unsupported structures use `PR005`, source
+objects use `MD001`/`MD002`, destination objects that the migration creates but that
+already exist use `MD003`, unsupported structures use `PR005`, source
 statements unsupported by the Ape-DTS parser use `PR006`, unmet version or
 topology requirements use `PR001`/`PR002`, and rejected destination DDL uses
 `DB001`. Invalid source payloads and persisted migration records use `DT001`.
@@ -260,6 +262,7 @@ codes are also used internally for these initial SQLx mappings:
 |---|---|
 | PostgreSQL missing schema/table/column/object/function; MySQL missing table/column/object/routine | `MD001` |
 | PostgreSQL `3D000`/`57P04`, MySQL `1049` | `MD002` |
+| MySQL `1050`/`1061`/`1826` (table, index, or foreign key already exists) | `MD003` |
 | PostgreSQL SQLSTATE class `28`; MySQL access-denied, locked, or rejected account | `AU001` |
 | PostgreSQL `42501`; MySQL command, object, or administrative permission errors | `AU002` |
 | PostgreSQL SQLSTATE class `08` and shutdown errors; MySQL client/server connection errors | `CN001` |

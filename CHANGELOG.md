@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - preserve monitor samples across repeated initialization and skip invalid integer metric samples instead of panicking
 - exit with a non-zero status code when the task panics, instead of leaving the process hanging
 
+#### MySQL
+
+- make structure sync re-runnable against a non-empty destination: index and constraint DDL that the destination rejects because the object already exists (`1061`, `1826`) is now skipped instead of failing the task, consistent with the `CREATE TABLE IF NOT EXISTS` behavior
+
 #### Redis
 
 - fail the task on unsupported RDB type bytes; the entry length of an unknown type can not be determined, so the parser previously desynchronized and silently produced partial data
