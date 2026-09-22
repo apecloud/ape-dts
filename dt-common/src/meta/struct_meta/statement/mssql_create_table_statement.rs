@@ -1,4 +1,7 @@
-use super::mssql_comment_statement::MssqlComment;
+use super::{
+    mssql_comment_statement::MssqlComment,
+    struct_statement::{StructKey, StructKeyType},
+};
 use crate::{
     config::config_enums::DbType, error::DtError,
     meta::struct_meta::structure::structure_type::StructureType, rdb_filter::RdbFilter,
@@ -119,16 +122,20 @@ impl MssqlCreateTableStatement {
         self.table.table_name = dst_tb.to_string();
     }
 
-    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         let table_enabled = !filter.filter_structure(&StructureType::Table);
 
         if table_enabled {
             sqls.push((
-                format!(
-                    "table.{}.{}.{}",
-                    self.table.database_name, self.table.schema_name, self.table.table_name
-                ),
+                StructKey::new(
+                    StructKeyType::Table,
+                    [
+                        self.table.schema_name.as_str(),
+                        self.table.table_name.as_str(),
+                    ],
+                )
+                .with_database(&self.table.database_name),
                 self.table_to_sql()?,
             ));
         }
@@ -141,13 +148,15 @@ impl MssqlCreateTableStatement {
                 continue;
             }
             sqls.push((
-                format!(
-                    "constraint.{}.{}.{}.{}",
-                    self.table.database_name,
-                    self.table.schema_name,
-                    self.table.table_name,
-                    constraint.constraint_name
-                ),
+                StructKey::new(
+                    StructKeyType::Constraint,
+                    [
+                        self.table.schema_name.as_str(),
+                        self.table.table_name.as_str(),
+                        constraint.constraint_name.as_str(),
+                    ],
+                )
+                .with_database(&self.table.database_name),
                 self.constraint_to_sql(constraint)?,
             ));
         }
@@ -157,14 +166,16 @@ impl MssqlCreateTableStatement {
                     continue;
                 };
                 sqls.push((
-                    format!(
-                        "constraint.{}.{}.{}.{}.{}",
-                        self.table.database_name,
-                        self.table.schema_name,
-                        self.table.table_name,
-                        constraint.constraint_name,
-                        state
-                    ),
+                    StructKey::new(
+                        StructKeyType::Constraint,
+                        [
+                            self.table.schema_name.as_str(),
+                            self.table.table_name.as_str(),
+                            constraint.constraint_name.as_str(),
+                            state,
+                        ],
+                    )
+                    .with_database(&self.table.database_name),
                     sql,
                 ));
             }
@@ -174,25 +185,30 @@ impl MssqlCreateTableStatement {
             self.table.indexes.sort_by_key(|index| index.index_id);
             for index in &self.table.indexes {
                 sqls.push((
-                    format!(
-                        "index.{}.{}.{}.{}",
-                        self.table.database_name,
-                        self.table.schema_name,
-                        self.table.table_name,
-                        index.index_name
-                    ),
+                    StructKey::new(
+                        StructKeyType::Index,
+                        [
+                            self.table.schema_name.as_str(),
+                            self.table.table_name.as_str(),
+                            index.index_name.as_str(),
+                        ],
+                    )
+                    .with_database(&self.table.database_name),
                     self.index_to_sql(index)?,
                 ));
             }
             for index in self.table.indexes.iter().filter(|index| index.is_disabled) {
                 sqls.push((
-                    format!(
-                        "index.{}.{}.{}.{}.disable",
-                        self.table.database_name,
-                        self.table.schema_name,
-                        self.table.table_name,
-                        index.index_name
-                    ),
+                    StructKey::new(
+                        StructKeyType::Index,
+                        [
+                            self.table.schema_name.as_str(),
+                            self.table.table_name.as_str(),
+                            index.index_name.as_str(),
+                            "disable",
+                        ],
+                    )
+                    .with_database(&self.table.database_name),
                     self.index_disable_sql(index)?,
                 ));
             }
@@ -638,6 +654,52 @@ impl MssqlCreateTableStatement {
 mod tests {
     use super::*;
     use crate::config::filter_config::FilterConfig;
+
+    #[test]
+    fn index_name_with_disable_suffix_does_not_collide_with_index_state() {
+        let filter = RdbFilter::from_config(
+            &FilterConfig {
+                do_structures: "index".to_string(),
+                ..Default::default()
+            },
+            &DbType::Mssql,
+        )
+        .unwrap();
+        let disabled = MssqlIndex {
+            index_name: "ix".to_string(),
+            index_id: 1,
+            index_type: 2,
+            index_type_desc: "NONCLUSTERED".to_string(),
+            is_unique: false,
+            is_disabled: true,
+            filter_definition: None,
+            xml_primary_index_name: None,
+            xml_secondary_type_desc: None,
+            hash_bucket_count: None,
+            columns: vec![MssqlIndexColumn {
+                column_name: "id".to_string(),
+                index_column_id: 1,
+                key_ordinal: 1,
+                is_descending_key: false,
+                is_included_column: false,
+            }],
+        };
+        let dotted = MssqlIndex {
+            index_name: "ix.disable".to_string(),
+            index_id: 2,
+            is_disabled: false,
+            ..disabled.clone()
+        };
+        let sqls = index_test_statement(vec![disabled, dotted])
+            .to_sqls(&filter)
+            .unwrap();
+        assert_eq!(sqls.len(), 3);
+        assert_eq!(sqls[1].0.to_string(), sqls[2].0.to_string());
+        let map = sqls
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(map.len(), 3);
+    }
 
     #[test]
     fn index_types_not_executed_by_e2e_generate_sql() {

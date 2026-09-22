@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use tokio::time::Instant;
 
 use super::counter::Counter;
 use super::counter_type::{CounterType, WindowType};
+use super::task_metrics::TaskMetricValue;
 use super::time_window_counter::TimeWindowCounter;
 use super::FlushableMonitor;
 use crate::log_monitor;
@@ -52,6 +54,44 @@ impl Monitor {
 
     pub fn clear_tombstone(&self) {
         self.tombstone.store(false, Ordering::Release);
+    }
+
+    pub fn init_counter(&self, counter_type: CounterType) {
+        match counter_type.get_window_type() {
+            WindowType::NoWindow => {
+                self.no_window_counters
+                    .entry(counter_type)
+                    .or_insert_with(|| Counter::new(0, 0));
+            }
+            WindowType::TimeWindow => {
+                self.time_window_counter(counter_type);
+            }
+        }
+    }
+
+    fn time_window_counter(&self, counter_type: CounterType) -> Arc<TimeWindowCounter> {
+        self.time_window_counters
+            .entry(counter_type)
+            .or_insert_with(|| {
+                Arc::new(TimeWindowCounter::new(
+                    self.time_window_secs,
+                    self.max_sub_count,
+                ))
+            })
+            .clone()
+    }
+
+    /// Measure one synchronous call in seconds, including error returns.
+    pub async fn measure_duration<T>(
+        &self,
+        counter_type: CounterType,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        let started = Instant::now();
+        let result = operation();
+        self.add_counter(counter_type, started.elapsed().as_secs_f64())
+            .await;
+        result
     }
 
     pub fn mark_tombstone(&self) {
@@ -111,12 +151,14 @@ impl Monitor {
                 let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
                 for aggregate_type in counter_type.get_aggregate_types() {
                     let aggregate_value = match aggregate_type {
+                        AggregateType::Latest => statistics.latest,
                         AggregateType::AvgByCount => statistics.avg_by_count,
                         AggregateType::AvgBySec => statistics.avg_by_sec,
                         AggregateType::Sum => statistics.sum,
                         AggregateType::MaxBySec => statistics.max_by_sec,
                         AggregateType::MaxByCount => statistics.max,
-                        AggregateType::Count => statistics.count,
+                        AggregateType::MinByCount => statistics.min,
+                        AggregateType::Count => statistics.count.into(),
                         _ => continue,
                     };
                     log = format!("{} | {}={}", log, aggregate_type, aggregate_value);
@@ -132,16 +174,10 @@ impl Monitor {
             .collect::<Vec<_>>();
         for counter_type in no_window_counter_types {
             if let Some(counter) = self.no_window_counters.get(&counter_type) {
-                let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
-                for aggregate_type in counter_type.get_aggregate_types() {
-                    let aggregate_value = match aggregate_type {
-                        AggregateType::Latest => counter.value,
-                        AggregateType::AvgByCount => counter.avg_by_count(),
-                        _ => continue,
-                    };
-                    log = format!("{} | {}={}", log, aggregate_type, aggregate_value);
-                }
-                log_monitor!("{}", log);
+                log_monitor!(
+                    "{}",
+                    counter.log_line(&self.name, &self.description, &counter_type)
+                );
             }
         }
     }
@@ -149,7 +185,7 @@ impl Monitor {
     pub(crate) async fn add_batch_counter(
         &self,
         counter_type: CounterType,
-        value: u64,
+        value: impl Into<TaskMetricValue> + Send,
         count: u64,
     ) -> &Self {
         if count == 0 {
@@ -158,11 +194,20 @@ impl Monitor {
         self.add_counter_internal(counter_type, value, count).await
     }
 
-    pub(crate) async fn add_counter(&self, counter_type: CounterType, value: u64) -> &Self {
+    pub(crate) async fn add_counter(
+        &self,
+        counter_type: CounterType,
+        value: impl Into<TaskMetricValue> + Send,
+    ) -> &Self {
         self.add_counter_internal(counter_type, value, 1).await
     }
 
-    pub(crate) fn set_counter(&self, counter_type: CounterType, value: u64) -> &Self {
+    pub(crate) fn set_counter(
+        &self,
+        counter_type: CounterType,
+        value: impl Into<TaskMetricValue> + Send,
+    ) -> &Self {
+        let value = value.into();
         if let WindowType::NoWindow = counter_type.get_window_type() {
             self.no_window_counters
                 .entry(counter_type)
@@ -183,9 +228,10 @@ impl Monitor {
     async fn add_counter_internal(
         &self,
         counter_type: CounterType,
-        value: u64,
+        value: impl Into<TaskMetricValue> + Send,
         count: u64,
     ) -> &Self {
+        let value = value.into();
         match counter_type.get_window_type() {
             WindowType::NoWindow => {
                 self.no_window_counters
@@ -195,17 +241,9 @@ impl Monitor {
             }
 
             WindowType::TimeWindow => {
-                let counter = self
-                    .time_window_counters
-                    .entry(counter_type)
-                    .or_insert_with(|| {
-                        Arc::new(TimeWindowCounter::new(
-                            self.time_window_secs,
-                            self.max_sub_count,
-                        ))
-                    })
-                    .clone();
-                counter.add(value, count).await;
+                self.time_window_counter(counter_type)
+                    .add(value, count)
+                    .await;
             }
         }
         self
@@ -225,19 +263,38 @@ impl Monitor {
             }
 
             WindowType::TimeWindow => {
-                let counter = self
-                    .time_window_counters
-                    .entry(counter_type)
-                    .or_insert_with(|| {
-                        Arc::new(TimeWindowCounter::new(
-                            self.time_window_secs,
-                            self.max_sub_count,
-                        ))
-                    })
-                    .clone();
-                counter.adds(entry).await;
+                self.time_window_counter(counter_type).adds(entry).await;
             }
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn measure_duration_preserves_results_and_records_errors() {
+        let monitor = Monitor::new("pipeline", "test", 60, 100, 1);
+        let counter_type = CounterType::PartitionerDurationSeconds;
+        assert_eq!(
+            monitor.measure_duration(counter_type.clone(), || 42).await,
+            42
+        );
+        assert_eq!(
+            monitor
+                .measure_duration(counter_type.clone(), || Err::<(), _>("partition failed"))
+                .await,
+            Err("partition failed")
+        );
+        let counter = monitor
+            .time_window_counters
+            .get(&counter_type)
+            .unwrap()
+            .clone();
+        let statistics = counter.statistics().await;
+        assert_eq!(statistics.count, 2);
+        assert_eq!(statistics.sum, TaskMetricValue::Float(0.0));
     }
 }

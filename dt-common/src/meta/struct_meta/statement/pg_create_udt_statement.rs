@@ -1,3 +1,4 @@
+use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::structure_type::StructureType;
 use crate::meta::struct_meta::structure::user_defined::PgUdt;
 use crate::rdb_filter::RdbFilter;
@@ -8,14 +9,17 @@ pub struct PgCreateUdtStatement {
 }
 
 impl PgCreateUdtStatement {
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if filter.filter_structure(&StructureType::Udt) {
             return Ok(sqls);
         }
 
         let sql = self.udt.create_statement.to_string();
-        let key = format!("udt.{}.{}", self.udt.schema_name, self.udt.typ_name);
+        let key = StructKey::new(
+            StructKeyType::Udt,
+            [&self.udt.schema_name, &self.udt.typ_name],
+        );
         sqls.push((key, sql));
         Ok(sqls)
     }

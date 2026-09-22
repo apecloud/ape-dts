@@ -1,3 +1,4 @@
+use super::struct_statement::{StructKey, StructKeyType};
 use crate::{
     config::config_enums::DbType, meta::struct_meta::structure::structure_type::StructureType,
     rdb_filter::RdbFilter, utils::sql_util::SqlUtil,
@@ -40,32 +41,36 @@ impl MssqlComment {
         schema_name: &str,
         object_name: &str,
         filter: &RdbFilter,
-    ) -> Option<(String, String)> {
+    ) -> Option<(StructKey, String)> {
         if filter.filter_structure(&StructureType::Comment) || !self.owner_enabled(filter) {
             return None;
         }
 
         let (key, comment, level1, level2) = match self {
             Self::Database { comment } => (
-                format!("database_comment.{database_name}"),
+                StructKey::new(StructKeyType::DatabaseComment, [] as [&str; 0])
+                    .with_database(database_name),
                 comment,
                 None,
                 None,
             ),
             Self::Schema { comment } => (
-                format!("schema_comment.{database_name}.{schema_name}"),
+                StructKey::new(StructKeyType::SchemaComment, [schema_name])
+                    .with_database(database_name),
                 comment,
                 None,
                 None,
             ),
             Self::Table { comment } => (
-                format!("table_comment.{database_name}.{schema_name}.{object_name}"),
+                StructKey::new(StructKeyType::TableComment, [schema_name, object_name])
+                    .with_database(database_name),
                 comment,
                 Some(("TABLE", object_name)),
                 None,
             ),
             Self::Sequence { comment } => (
-                format!("sequence_comment.{database_name}.{schema_name}.{object_name}"),
+                StructKey::new(StructKeyType::SequenceComment, [schema_name, object_name])
+                    .with_database(database_name),
                 comment,
                 Some(("SEQUENCE", object_name)),
                 None,
@@ -74,9 +79,11 @@ impl MssqlComment {
                 column_name,
                 comment,
             } => (
-                format!(
-                    "column_comment.{database_name}.{schema_name}.{object_name}.{column_name}"
-                ),
+                StructKey::new(
+                    StructKeyType::ColumnComment,
+                    [schema_name, object_name, column_name.as_str()],
+                )
+                .with_database(database_name),
                 comment,
                 Some(("TABLE", object_name)),
                 Some(("COLUMN", column_name.as_str())),
@@ -86,9 +93,11 @@ impl MssqlComment {
                 comment,
                 ..
             } => (
-                format!(
-                    "constraint_comment.{database_name}.{schema_name}.{object_name}.{constraint_name}"
-                ),
+                StructKey::new(
+                    StructKeyType::ConstraintComment,
+                    [schema_name, object_name, constraint_name.as_str()],
+                )
+                .with_database(database_name),
                 comment,
                 Some(("TABLE", object_name)),
                 Some(("CONSTRAINT", constraint_name.as_str())),
@@ -98,9 +107,11 @@ impl MssqlComment {
                 comment,
                 ..
             } => (
-                format!(
-                    "index_comment.{database_name}.{schema_name}.{object_name}.{index_name}"
-                ),
+                StructKey::new(
+                    StructKeyType::IndexComment,
+                    [schema_name, object_name, index_name.as_str()],
+                )
+                .with_database(database_name),
                 comment,
                 Some(("TABLE", object_name)),
                 Some(("INDEX", index_name.as_str())),

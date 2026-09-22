@@ -2,7 +2,7 @@ name: Integration Tests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, "release-*"]
     types: [opened, synchronize, reopened, edited, ready_for_review]
     paths-ignore:
       - "**.md"

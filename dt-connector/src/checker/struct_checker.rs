@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::bail;
+use anyhow::{bail, ensure};
 use async_mutex::Mutex;
 use chrono::Local;
 use dt_common::{
@@ -14,7 +14,8 @@ use dt_common::{
     meta::{
         mssql::mssql_connection_pool::MssqlConnectionPool,
         struct_meta::{
-            statement::struct_statement::StructStatement, struct_data::StructData,
+            statement::struct_statement::{StructKey, StructStatement},
+            struct_data::StructData,
             structure::structure_type::StructureType,
         },
     },
@@ -28,7 +29,9 @@ use sqlx::{MySql, Pool, Postgres};
 use tokio::time::sleep;
 
 use crate::{
-    checker::check_log::{to_json_line, CheckSummaryLog, CheckTableSummaryLog, StructCheckLog},
+    checker::check_log::{
+        to_json_line, CheckSummaryLog, CheckTableSummaryLog, StructCheckKey, StructCheckLog,
+    },
     meta_fetcher::{
         mssql::mssql_struct_fetcher::MssqlStructFetcher,
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
@@ -36,27 +39,6 @@ use crate::{
     rdb_router::RdbRouter,
     rdb_struct_filter::RdbStructFilter,
 };
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct StructCheckKey {
-    key: String,
-    db: String,
-    schema: String,
-    tb: String,
-}
-
-impl StructCheckKey {
-    fn new(key: String, db: &str, schema: &str, tb: &str) -> Self {
-        Self {
-            key,
-            db: db.to_string(),
-            schema: schema.to_string(),
-            tb: tb.to_string(),
-        }
-    }
-}
-
-type StructSqlMap = BTreeMap<StructCheckKey, String>;
 
 pub struct StructCheckerHandle {
     db_type: DbType,
@@ -71,49 +53,51 @@ pub struct StructCheckerHandle {
     global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
     monitor: TaskMonitorHandle,
     monitor_task_id: String,
-    src_sql_map: StructSqlMap,
+    src_sql_map: BTreeMap<StructKey, StructCheckItem>,
     namespaces: HashSet<String>,
     start_time: String,
 }
 
+#[derive(Clone)]
+struct StructCheckItem {
+    source_key: StructCheckKey,
+    target_key: StructCheckKey,
+    sql: String,
+}
+
+impl StructCheckItem {
+    #[cfg(test)]
+    fn unrouted(key: StructKey, sql: &str) -> Self {
+        let key = StructCheckKey::new("", key);
+        Self {
+            source_key: key.clone(),
+            target_key: key,
+            sql: sql.to_string(),
+        }
+    }
+}
+
 fn struct_table_summary(
-    db_type: &DbType,
     key: &StructCheckKey,
+    target_key: &StructCheckKey,
     checked_count: usize,
     miss: bool,
     diff: bool,
 ) -> Option<CheckTableSummaryLog> {
-    let mut parts = key.key.splitn(4, '.');
-    let object_type = parts.next()?;
-    if !matches!(
-        object_type,
-        "table"
-            | "index"
-            | "constraint"
-            | "column_comment"
-            | "table_comment"
-            | "constraint_comment"
-            | "index_comment"
-            | "sequence_owner"
-            | "sequence"
-            | "sequence_comment"
-    ) {
+    if !key.is_table_scoped() && !key.is_sequence() {
         return None;
     }
 
-    let (db, schema, tb) = if matches!(db_type, DbType::Mssql) {
-        (key.db.clone(), key.schema.clone(), key.tb.clone())
-    } else {
-        (
-            String::new(),
-            parts.next()?.to_string(),
-            parts.next()?.to_string(),
-        )
-    };
+    let db_changed = key.db != target_key.db;
+    let target_changed = key.schema != target_key.schema || key.tb != target_key.tb;
+
     Some(CheckTableSummaryLog {
-        db,
-        schema,
-        tb,
+        db: key.db.clone(),
+        schema: key.schema.clone(),
+        tb: key.tb.clone(),
+        target_db: db_changed.then(|| target_key.db.clone()),
+        target_schema: target_changed.then(|| target_key.schema.clone()),
+        target_tb: target_changed.then(|| target_key.tb.clone()),
         checked_count,
         miss_count: usize::from(miss),
         diff_count: usize::from(diff),
@@ -156,85 +140,109 @@ impl StructCheckerHandle {
         }
     }
 
-    fn schema_from_key(key: &str) -> Option<&str> {
-        let mut parts = key.splitn(5, '.');
-        match parts.next()? {
-            "rbac" => (parts.next() == Some("privilege"))
-                .then(|| parts.nth(1))
-                .flatten(),
-            _ => parts.next(),
-        }
-    }
-
-    fn insert_sqls(
-        sql_map: &mut StructSqlMap,
-        sqls: Vec<(String, String)>,
-        side: &str,
-        db: &str,
-        schema: &str,
-        tb: &str,
-    ) -> anyhow::Result<()> {
-        for (key, sql) in sqls {
-            let check_key = StructCheckKey::new(key.clone(), db, schema, tb);
-            if sql_map.insert(check_key, sql).is_some() {
-                bail!(DtError::InvariantViolated(format!(
-                    "duplicate {side} structure key after routing: {key}"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn insert_statement(
-        sql_map: &mut StructSqlMap,
-        mut statement: StructStatement,
-        filter: &RdbFilter,
-        side: &str,
-    ) -> anyhow::Result<()> {
-        let (db, schema, tb) = statement.statement_path();
-        let sqls = statement.to_sqls(filter)?;
-        Self::insert_sqls(sql_map, sqls, side, &db, &schema, &tb)
-    }
-
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
+        let source_db = struct_data.db.clone();
+        let mut source_statement = struct_data.statement.clone();
+        let source_sqls = source_statement.to_sqls(&self.filter)?;
         let routed = if let Some(router) = &self.router {
             router.route_struct(struct_data)
         } else {
             struct_data
         };
+        let target_db = routed.db.clone();
         let mut statement = routed.statement;
-        let (db, schema, tb) = statement.statement_path();
-        let sqls = statement.to_sqls(&self.filter)?;
-        if !sqls.is_empty() {
+        let target_sqls = statement.to_sqls(&self.filter)?;
+        ensure!(
+            source_sqls.len() == target_sqls.len(),
+            "source and routed structure SQL counts differ: source={}, target={}",
+            source_sqls.len(),
+            target_sqls.len()
+        );
+        if !target_sqls.is_empty() {
             self.monitor
                 .add_counter(
                     &self.monitor_task_id,
                     CounterType::RecordCount,
-                    sqls.len() as u64,
+                    target_sqls.len() as u64,
                 )
                 .await;
         }
 
-        for (key, _) in &sqls {
+        for ((source_key, _), (target_key, sql)) in source_sqls.into_iter().zip(target_sqls) {
+            let source_key = StructCheckKey::new(&source_db, source_key);
+            let target_check_key = StructCheckKey::new(&target_db, target_key.clone());
             let namespace = if matches!(self.db_type, DbType::Mssql) {
-                (!db.is_empty()).then_some(db.as_str())
+                &target_check_key.db
             } else {
-                (!schema.is_empty())
-                    .then_some(schema.as_str())
-                    .or_else(|| Self::schema_from_key(key).filter(|schema| !schema.is_empty()))
+                &target_check_key.schema
             };
-            if let Some(namespace) = namespace {
-                self.namespaces.insert(namespace.to_string());
+            if !namespace.is_empty() {
+                self.namespaces.insert(namespace.clone());
             }
+            if self.src_sql_map.contains_key(&target_key) {
+                bail!(DtError::InvariantViolated(format!(
+                    "duplicate source structure key after routing: {target_key}"
+                )));
+            }
+            self.src_sql_map.insert(
+                target_key,
+                StructCheckItem {
+                    source_key,
+                    target_key: target_check_key,
+                    sql,
+                },
+            );
         }
-        Self::insert_sqls(&mut self.src_sql_map, sqls, "source", &db, &schema, &tb)?;
+        Ok(())
+    }
+
+    fn source_key_from_target(
+        target_key: &StructCheckKey,
+        router: Option<&RdbRouter>,
+    ) -> StructCheckKey {
+        let Some(router) = router else {
+            return target_key.clone();
+        };
+        if target_key.is_table_scoped() {
+            let (db, schema, tb) = router.reverse_get_tb_map_with_db(
+                &target_key.db,
+                &target_key.schema,
+                &target_key.tb,
+            );
+            return target_key.with_location(db, schema, tb);
+        }
+        if target_key.key.database().is_some() {
+            let db = router.reverse_get_schema_map(&target_key.db);
+            return target_key.with_location(db, &target_key.schema, &target_key.tb);
+        }
+        if !target_key.schema.is_empty() {
+            let schema = router.reverse_get_schema_map(&target_key.schema);
+            return target_key.with_location(&target_key.db, schema, &target_key.tb);
+        }
+        target_key.clone()
+    }
+
+    fn insert_statement(
+        sql_map: &mut BTreeMap<StructKey, String>,
+        mut statement: StructStatement,
+        filter: &RdbFilter,
+        side: &str,
+    ) -> anyhow::Result<()> {
+        for (key, sql) in statement.to_sqls(filter)? {
+            if sql_map.contains_key(&key) {
+                bail!(DtError::InvariantViolated(format!(
+                    "duplicate {side} structure key after routing: {key}"
+                )));
+            }
+            sql_map.insert(key, sql);
+        }
         Ok(())
     }
 
     async fn build_dst_sql_map(
         &self,
         namespaces: &HashSet<String>,
-    ) -> anyhow::Result<StructSqlMap> {
+    ) -> anyhow::Result<BTreeMap<StructKey, String>> {
         let mut dst_map = BTreeMap::new();
         let target_filter = RdbStructFilter::for_target(self.filter.clone(), self.router.clone());
         match self.db_type {
@@ -384,15 +392,15 @@ impl StructCheckerHandle {
 
     async fn compare_once(
         &self,
-        src_sql_map: &StructSqlMap,
+        src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
         namespaces: &HashSet<String>,
         log_enabled: bool,
     ) -> anyhow::Result<CheckSummaryLog> {
         let dst_map = self.build_dst_sql_map(namespaces).await?;
         Ok(Self::compare_sql_maps(
-            &self.db_type,
             src_sql_map,
             dst_map,
+            self.router.as_ref(),
             &self.start_time,
             log_enabled,
             self.output_revise_sql,
@@ -400,9 +408,9 @@ impl StructCheckerHandle {
     }
 
     fn compare_sql_maps(
-        db_type: &DbType,
-        src_sql_map: &StructSqlMap,
-        mut dst_map: StructSqlMap,
+        src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
+        mut dst_map: BTreeMap<StructKey, String>,
+        router: Option<&RdbRouter>,
         start_time: &str,
         log_enabled: bool,
         output_revise_sql: bool,
@@ -414,11 +422,13 @@ impl StructCheckerHandle {
         };
         let mut sql_count = 0usize;
 
-        for (key, src_sql) in src_sql_map {
-            let dst_sql = dst_map.remove(key);
+        for (target_key, item) in src_sql_map {
+            let dst_sql = dst_map.remove(target_key);
             let is_miss = dst_sql.is_none();
-            let is_diff = dst_sql.as_ref().is_some_and(|dst_sql| dst_sql != src_sql);
-            if let Some(table) = struct_table_summary(db_type, key, 1, is_miss, is_diff) {
+            let is_diff = dst_sql.as_ref().is_some_and(|dst_sql| dst_sql != &item.sql);
+            if let Some(table) =
+                struct_table_summary(&item.source_key, &item.target_key, 1, is_miss, is_diff)
+            {
                 summary.merge_table(table);
             }
             if !is_miss && !is_diff {
@@ -432,7 +442,12 @@ impl StructCheckerHandle {
             }
 
             if log_enabled {
-                let log = StructCheckLog::new(&key.key, Some(src_sql.clone()), dst_sql);
+                let log = StructCheckLog::new(
+                    &item.source_key,
+                    &item.target_key,
+                    Some(item.sql.clone()),
+                    dst_sql,
+                );
                 if let Some(log) = to_json_line(&log) {
                     if is_miss {
                         log_miss!("{}", log);
@@ -441,7 +456,7 @@ impl StructCheckerHandle {
                     }
                 }
                 if output_revise_sql {
-                    log_sql!("{}", src_sql);
+                    log_sql!("{}", item.sql);
                     sql_count += 1;
                 }
             }
@@ -449,11 +464,13 @@ impl StructCheckerHandle {
 
         for (key, dst_sql) in dst_map {
             summary.diff_count += 1;
-            if let Some(table) = struct_table_summary(db_type, &key, 0, false, true) {
+            let target_key = StructCheckKey::new("", key);
+            let source_key = Self::source_key_from_target(&target_key, router);
+            if let Some(table) = struct_table_summary(&source_key, &target_key, 0, false, true) {
                 summary.merge_table(table);
             }
             if log_enabled {
-                let log = StructCheckLog::new(&key.key, None, Some(dst_sql));
+                let log = StructCheckLog::new(&source_key, &target_key, None, Some(dst_sql));
                 if let Some(log) = to_json_line(&log) {
                     log_diff!("{}", log);
                 }
@@ -537,45 +554,247 @@ impl StructCheckerHandle {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::{
+        config::{filter_config::FilterConfig, router_config::RouterConfig},
+        meta::struct_meta::statement::{
+            mssql_comment_statement::MssqlComment,
+            mssql_create_database_statement::MssqlCreateDatabaseStatement,
+            mssql_create_table_statement::{
+                MssqlColumn, MssqlColumnDefinition, MssqlCreateTableStatement, MssqlTable,
+            },
+            struct_statement::StructKeyType,
+        },
+    };
+
     use super::*;
 
-    fn sql_map(entries: &[(&str, &str, &str, &str)]) -> StructSqlMap {
-        let mut sql_map = BTreeMap::new();
-        for (key, schema, tb, sql) in entries {
-            StructCheckerHandle::insert_sqls(
-                &mut sql_map,
-                vec![(key.to_string(), sql.to_string())],
-                "test",
-                "",
-                schema,
-                tb,
-            )
-            .unwrap();
+    fn mssql_router() -> RdbRouter {
+        RdbRouter::from_config(
+            &RouterConfig::Rdb {
+                schema_map: "src_db:dst_db".to_string(),
+                tb_map: "src_db.src_schema.src_tb:dst_db.dst_schema.dst_tb".to_string(),
+                col_map: String::new(),
+                topic_map: String::new(),
+            },
+            &DbType::Mssql,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mssql_routed_objects_keep_source_locations_and_reject_duplicates() {
+        let filter = RdbFilter::from_config(
+            &FilterConfig {
+                do_structures: "table,comment".to_string(),
+                ..Default::default()
+            },
+            &DbType::Mssql,
+        )
+        .unwrap();
+        let mut checker = StructCheckerHandle::new(
+            DbType::Mssql,
+            None,
+            None,
+            None,
+            filter,
+            Some(mssql_router()),
+            false,
+            0,
+            0,
+            None,
+            TaskMonitorHandle::default(),
+            String::new(),
+        );
+        let data = StructData {
+            db: "src_db".to_string(),
+            schema: "src_schema".to_string(),
+            tb: "src_tb".to_string(),
+            statement: StructStatement::MssqlCreateTable(MssqlCreateTableStatement {
+                table: MssqlTable {
+                    database_name: "src_db".to_string(),
+                    schema_name: "src_schema".to_string(),
+                    table_name: "src_tb".to_string(),
+                    is_memory_optimized: false,
+                    durability_desc: String::new(),
+                    columns: vec![MssqlColumn {
+                        column_name: "id".to_string(),
+                        ordinal_position: 1,
+                        definition: MssqlColumnDefinition::Regular {
+                            column_type: "INT".to_string(),
+                            collation_name: String::new(),
+                            is_nullable: false,
+                            identity: None,
+                        },
+                    }],
+                    constraints: Vec::new(),
+                    indexes: Vec::new(),
+                    comments: vec![MssqlComment::Table {
+                        comment: "description".to_string(),
+                    }],
+                },
+            }),
+        };
+        checker.add_src_sqls(data.clone()).await.unwrap();
+        assert_eq!(checker.namespaces, HashSet::from(["dst_db".to_string()]));
+        let table =
+            StructKey::new(StructKeyType::Table, ["dst_schema", "dst_tb"]).with_database("dst_db");
+        let item = &checker.src_sql_map[&table];
+        assert!(item.sql.contains("[dst_db].[dst_schema].[dst_tb]"));
+        let log = StructCheckLog::new(
+            &item.source_key,
+            &item.target_key,
+            Some(item.sql.clone()),
+            None,
+        );
+        assert_eq!(log.key, "table.src_db.src_schema.src_tb");
+        assert_eq!(
+            (log.db.as_str(), log.schema.as_str(), log.tb.as_str()),
+            ("src_db", "src_schema", "src_tb")
+        );
+        assert_eq!(log.target_db.as_deref(), Some("dst_db"));
+        assert_eq!(log.target_schema.as_deref(), Some("dst_schema"));
+        assert_eq!(log.target_tb.as_deref(), Some("dst_tb"));
+
+        let extra = StructKey::new(
+            StructKeyType::Index,
+            ["dst_schema", "dst_tb", "extra.index"],
+        )
+        .with_database("dst_db");
+        let summary = StructCheckerHandle::compare_sql_maps(
+            &checker.src_sql_map,
+            BTreeMap::from([
+                (table, "different table".to_string()),
+                (extra, "extra index".to_string()),
+            ]),
+            checker.router.as_ref(),
+            "start",
+            false,
+            false,
+        );
+        assert_eq!(
+            (
+                summary.checked_count,
+                summary.miss_count,
+                summary.diff_count
+            ),
+            (2, 1, 2)
+        );
+        assert_eq!(summary.tables.len(), 1);
+        let table = &summary.tables[0];
+        assert_eq!(
+            (table.db.as_str(), table.schema.as_str(), table.tb.as_str()),
+            ("src_db", "src_schema", "src_tb")
+        );
+        assert_eq!(table.target_db.as_deref(), Some("dst_db"));
+        assert_eq!(table.target_schema.as_deref(), Some("dst_schema"));
+        assert_eq!(table.target_tb.as_deref(), Some("dst_tb"));
+        assert_eq!(
+            (table.checked_count, table.miss_count, table.diff_count),
+            (2, 1, 2)
+        );
+        assert!(checker.add_src_sqls(data).await.is_err());
+        assert_eq!(checker.src_sql_map.len(), 2);
+    }
+
+    #[test]
+    fn mssql_target_only_objects_reverse_database_and_table_routes() {
+        let router = mssql_router();
+        for (kind, segments) in [
+            (StructKeyType::Database, vec![]),
+            (StructKeyType::DatabaseComment, vec![]),
+            (StructKeyType::Schema, vec!["schema.with.dot"]),
+            (StructKeyType::SchemaComment, vec!["schema.with.dot"]),
+            (
+                StructKeyType::Sequence,
+                vec!["schema.with.dot", "sequence.with.dot"],
+            ),
+            (
+                StructKeyType::SequenceComment,
+                vec!["schema.with.dot", "sequence.with.dot"],
+            ),
+            (
+                StructKeyType::ConstraintComment,
+                vec!["dst_schema", "dst_tb", "constraint.with.dot"],
+            ),
+            (
+                StructKeyType::IndexComment,
+                vec!["dst_schema", "dst_tb", "index.with.dot"],
+            ),
+        ] {
+            let target =
+                StructCheckKey::new("", StructKey::new(kind, segments).with_database("dst_db"));
+            let source = StructCheckerHandle::source_key_from_target(&target, Some(&router));
+            assert_eq!(source.db, "src_db");
+            assert_eq!(source.key.database(), Some("src_db"));
+            if target.is_table_scoped() {
+                assert_eq!(
+                    (source.schema.as_str(), source.tb.as_str()),
+                    ("src_schema", "src_tb")
+                );
+            } else {
+                assert_eq!(
+                    (source.schema.as_str(), source.tb.as_str()),
+                    (target.schema.as_str(), target.tb.as_str())
+                );
+            }
+            let summary = struct_table_summary(&source, &target, 0, false, true);
+            if target.is_sequence() {
+                let summary = summary.unwrap();
+                assert_eq!(summary.schema, "schema.with.dot");
+                assert_eq!(summary.tb, "sequence.with.dot");
+            } else {
+                assert_eq!(summary.is_some(), target.is_table_scoped());
+            }
         }
-        sql_map
+    }
+
+    #[test]
+    fn duplicate_target_statements_are_rejected() {
+        let filter = RdbFilter::from_config(
+            &FilterConfig {
+                do_structures: "database".to_string(),
+                ..Default::default()
+            },
+            &DbType::Mssql,
+        )
+        .unwrap();
+        let statement = StructStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
+            database_name: "db.with.dot".to_string(),
+            collation_name: String::new(),
+            comments: Vec::new(),
+        });
+        let mut map = BTreeMap::new();
+        StructCheckerHandle::insert_statement(&mut map, statement.clone(), &filter, "target")
+            .unwrap();
+        assert!(
+            StructCheckerHandle::insert_statement(&mut map, statement, &filter, "target").is_err()
+        );
+        assert_eq!(map.len(), 1);
     }
 
     #[test]
     fn missing_target_database_and_table_are_reported_as_miss() {
-        let src_sql_map = sql_map(&[
+        let database_key = StructKey::new(StructKeyType::Database, ["test_db"]);
+        let table_key = StructKey::new(StructKeyType::Table, ["test_db", "test_tb"]);
+        let src_sql_map = BTreeMap::from([
             (
-                "database.test_db",
-                "test_db",
-                "",
-                "CREATE DATABASE IF NOT EXISTS `test_db`",
+                database_key.clone(),
+                StructCheckItem::unrouted(database_key, "CREATE DATABASE IF NOT EXISTS `test_db`"),
             ),
             (
-                "table.test_db.test_tb",
-                "test_db",
-                "test_tb",
-                "CREATE TABLE IF NOT EXISTS `test_db`.`test_tb` (`id` int)",
+                table_key.clone(),
+                StructCheckItem::unrouted(
+                    table_key,
+                    "CREATE TABLE IF NOT EXISTS `test_db`.`test_tb` (`id` int)",
+                ),
             ),
         ]);
 
         let summary = StructCheckerHandle::compare_sql_maps(
-            &DbType::Mysql,
             &src_sql_map,
             BTreeMap::new(),
+            None,
             "start",
             false,
             false,
@@ -592,154 +811,38 @@ mod tests {
     }
 
     #[test]
-    fn compare_sql_maps_reports_miss_diff_and_target_only_objects() {
-        let src_sql_map = sql_map(&[
-            ("schema.s1", "s1", "", "create schema s1"),
-            ("table.s1.t1", "s1", "t1", "create table source"),
-            ("table_comment.s1.t1", "s1", "t1", "comment source"),
+    fn keys_with_same_display_but_different_identifier_boundaries_match_independently() {
+        let dotted_schema = StructKey::new(StructKeyType::Table, ["a.b", "c"]);
+        let dotted_table = StructKey::new(StructKeyType::Table, ["a", "b.c"]);
+        assert_eq!(dotted_schema.to_string(), dotted_table.to_string());
+        assert_ne!(dotted_schema, dotted_table);
+
+        let src_sql_map = BTreeMap::from([
+            (
+                dotted_schema.clone(),
+                StructCheckItem::unrouted(dotted_schema.clone(), "CREATE TABLE dotted_schema"),
+            ),
+            (
+                dotted_table.clone(),
+                StructCheckItem::unrouted(dotted_table.clone(), "CREATE TABLE dotted_table"),
+            ),
         ]);
-        let dst_sql_map = sql_map(&[
-            ("schema.s1", "s1", "", "create schema s1"),
-            ("table.s1.t1", "s1", "t1", "create table target"),
-            ("index.s1.extra.i1", "s1", "extra", "create index target"),
+        let dst_sql_map = BTreeMap::from([
+            (dotted_schema, "CREATE TABLE dotted_schema".to_string()),
+            (dotted_table, "CREATE TABLE dotted_table".to_string()),
         ]);
 
         let summary = StructCheckerHandle::compare_sql_maps(
-            &DbType::Pg,
             &src_sql_map,
             dst_sql_map,
+            None,
             "start",
             false,
             false,
         );
 
-        assert!(!summary.is_consistent);
-        assert_eq!(summary.checked_count, 3);
-        assert_eq!(summary.miss_count, 1);
-        assert_eq!(summary.diff_count, 2);
+        assert!(summary.is_consistent);
+        assert_eq!(summary.checked_count, 2);
         assert_eq!(summary.tables.len(), 2);
-        assert_eq!(summary.tables[0].schema, "s1");
-        assert_eq!(summary.tables[0].tb, "extra");
-        assert_eq!(summary.tables[0].checked_count, 0);
-        assert_eq!(summary.tables[0].diff_count, 1);
-        assert_eq!(summary.tables[1].tb, "t1");
-        assert_eq!(summary.tables[1].checked_count, 2);
-        assert_eq!(summary.tables[1].miss_count, 1);
-        assert_eq!(summary.tables[1].diff_count, 1);
-    }
-
-    #[test]
-    fn duplicate_structure_keys_are_rejected() {
-        let mut sql_map = BTreeMap::new();
-        let result = StructCheckerHandle::insert_sqls(
-            &mut sql_map,
-            vec![
-                ("table.s1.t1".to_string(), "sql 1".to_string()),
-                ("table.s1.t1".to_string(), "sql 2".to_string()),
-            ],
-            "source",
-            "",
-            "",
-            "",
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn equal_display_keys_in_different_mssql_paths_do_not_collide() {
-        let mut sql_map = BTreeMap::new();
-        StructCheckerHandle::insert_sqls(
-            &mut sql_map,
-            vec![(
-                "table.test_db.schema.with.dot".to_string(),
-                "sql 1".to_string(),
-            )],
-            "source",
-            "test_db",
-            "schema.with",
-            "dot",
-        )
-        .unwrap();
-        StructCheckerHandle::insert_sqls(
-            &mut sql_map,
-            vec![(
-                "table.test_db.schema.with.dot".to_string(),
-                "sql 2".to_string(),
-            )],
-            "source",
-            "test_db",
-            "schema",
-            "with.dot",
-        )
-        .unwrap();
-
-        assert_eq!(sql_map.len(), 2);
-        let keys = sql_map.keys().collect::<Vec<_>>();
-        assert_eq!(keys[0].schema, "schema");
-        assert_eq!(keys[0].tb, "with.dot");
-        assert_eq!(keys[1].schema, "schema.with");
-        assert_eq!(keys[1].tb, "dot");
-    }
-
-    #[test]
-    fn old_keys_keep_statement_paths() {
-        let mysql_key = StructCheckKey::new(
-            "constraint.db.with.dot.table.with.dot.constraint.with.dot".to_string(),
-            "",
-            "db.with.dot",
-            "table.with.dot",
-        );
-        assert_eq!(
-            mysql_key.key,
-            "constraint.db.with.dot.table.with.dot.constraint.with.dot"
-        );
-        assert_eq!(mysql_key.schema, "db.with.dot");
-        assert_eq!(mysql_key.tb, "table.with.dot");
-
-        let pg_key = StructCheckKey::new(
-            "column_comment.schema.with.dot.table.with.dot.column.with.dot".to_string(),
-            "",
-            "schema.with.dot",
-            "table.with.dot",
-        );
-        assert_eq!(
-            pg_key.key,
-            "column_comment.schema.with.dot.table.with.dot.column.with.dot"
-        );
-        assert_eq!(pg_key.schema, "schema.with.dot");
-        assert_eq!(pg_key.tb, "table.with.dot");
-    }
-
-    #[test]
-    fn non_mssql_summary_uses_legacy_key_path() {
-        for db_type in [DbType::Mysql, DbType::Pg] {
-            let key = StructCheckKey::new(
-                "table.key_schema.key_table".to_string(),
-                "path_db",
-                "path_schema",
-                "path_table",
-            );
-            let summary = struct_table_summary(&db_type, &key, 1, false, false).unwrap();
-            assert!(summary.db.is_empty());
-            assert_eq!(summary.schema, "key_schema");
-            assert_eq!(summary.tb, "key_table");
-        }
-    }
-
-    #[test]
-    fn mssql_sequence_and_comment_use_schema_level_summary() {
-        for object_type in ["sequence", "sequence_comment"] {
-            let key = StructCheckKey::new(
-                format!("{object_type}.test_db.schema.with.dot.sequence.with.dot"),
-                "test_db",
-                "schema.with.dot",
-                "",
-            );
-            let summary = struct_table_summary(&DbType::Mssql, &key, 1, false, false).unwrap();
-            assert_eq!(summary.db, "test_db");
-            assert_eq!(summary.schema, "schema.with.dot");
-            assert!(summary.tb.is_empty());
-        }
     }
 }

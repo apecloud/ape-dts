@@ -76,7 +76,7 @@ impl MysqlDbEngineMetaCenter {
         }
 
         if let Some(ssl) = self.connection_auth.ssl_config() {
-            conn_options = ssl.apply_mysql(conn_options);
+            conn_options = ssl.apply_mysql(conn_options)?;
         }
 
         let conn_pool = MySqlPoolOptions::new()

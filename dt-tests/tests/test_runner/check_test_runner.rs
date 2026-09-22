@@ -314,6 +314,10 @@ impl CheckTestRunner {
 
     pub async fn new(relative_test_dir: &str) -> anyhow::Result<Self> {
         let base = RdbTestRunner::new(relative_test_dir).await?;
+        Self::from_runner(base).await
+    }
+
+    pub async fn from_runner(base: RdbTestRunner) -> anyhow::Result<Self> {
         let version = base.get_dst_mysql_version().await;
         let (expect_check_log_dir, dst_check_log_dir) =
             CheckUtil::get_check_log_dir(&base.base, &version);

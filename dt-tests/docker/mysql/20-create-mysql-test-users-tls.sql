@@ -1,0 +1,5 @@
+-- Purpose: require a trusted client certificate for the MySQL TLS task account.
+-- Run by mysql-tls-{src,dst}'s image entrypoint only when initializing an empty
+-- data directory, before the database becomes ready for E2E tests.
+CREATE USER 'ape_dts'@'%' IDENTIFIED BY '123456' REQUIRE X509;
+GRANT ALL PRIVILEGES ON *.* TO 'ape_dts'@'%';

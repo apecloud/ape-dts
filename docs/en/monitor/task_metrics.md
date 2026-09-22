@@ -13,26 +13,44 @@ level. They are available through two outputs:
 The metrics HTTP address, workers, and constant labels are configured in the
 `[metrics]` section.
 
+Parallel utilization, batch duration, partitioner duration, and the separate
+`pipeline_sink_operations_total` are also logged with the existing counters under
+`pipeline | <pipeline_id>` in `monitor.log`. Snapshot tasks additionally report
+`pipeline | global` aggregates. Task JSON and Prometheus remain task aggregates.
+See [pipeline monitoring](monitor.md#pipeline) for the format and no-sample behavior.
+
 ## Collection and aggregation
 
 - Task metrics are refreshed when `TaskMonitor` is flushed. In the normal
   pipeline flow, the refresh interval is controlled by
   `[pipeline] checkpoint_interval_secs`.
+- Utilization, batch duration, and partitioner duration use time-window counters.
+  `pipeline_sink_operations_total` is cumulative for the current task run.
+  The pipeline monitor remains registered through the final flush.
 - Throughput and response-time metrics use the rolling window configured by
   `[pipeline] counter_time_window_secs`.
 - A time-window counter retains at most
   `[pipeline] counter_max_sub_count` samples. At higher event rates, its
   statistics cover the newest retained samples in the window.
-- The `max`, `min`, and `avg` suffixes describe the maximum, minimum, and
-  arithmetic mean of the per-second values that contain samples in the current
-  window. Seconds without samples are not included in the average.
-- Values are stored as integers. Division therefore discards the fractional
-  part.
-- When a task has multiple component monitors, `max` and `min` are the extrema
-  across those monitors. The current `avg` aggregation combines monitor
-  averages incrementally; it is not a globally weighted average.
+- For throughput and response-time metrics, `max`, `min`, and `avg` describe
+  the maximum, minimum, and arithmetic mean of per-second values containing
+  samples in the current window. Seconds without samples are excluded.
+- Existing metrics use integers and truncate division. Utilization, batch duration,
+  and partitioner duration retain fractional values.
+- Window metrics retain their existing aggregation. Each monitor calculates its
+  own statistics; task metrics take minima/maxima across monitors and combine
+  averages with `(previous + current) / 2`. Sinker RPS/BPS use
+  `RecordsPerQuery`/`DataBytes`, and RT uses `RtPerQuery`.
+- Global window logs add each monitor's statistics, including its averages and
+  maxima. Global per-second window minima retain the existing zero output. Unexpired samples
+  from completed tables still participate in global logs, while task metrics
+  filter completed monitors. These outputs therefore have different aggregation
+  semantics.
+- Samples are timestamped when submitted. Batched submissions can differ from
+  the actual extraction or database request completion times.
 - A task-log field is present only after its source counter has been populated.
-  A registered Prometheus gauge is `0` until a value is published.
+  A registered Prometheus gauge is `0` until a value is published. Existing
+  gauges can retain their last value when a field is absent.
 
 ## Extractor metrics
 
@@ -65,6 +83,32 @@ remain after processing and filtering and are pushed to the pipeline.
 | `pipeline_queue_bytes` | `pipeline_queue_bytes` | bytes             | Current estimated bytes buffered in the pipeline queue.                                                                                    |
 | `timestamp`            | `timestamp`            | Unix milliseconds | Greatest source-position timestamp observed by the pipeline. CDC tasks only. A value of `0` means the position has no parseable timestamp. |
 
+## Partitioner metrics
+
+Currently only `ChunkPartitioner::partition_dml` calls from `SnapshotParallelizer`
+are measured. One sample P covers the wall-clock duration of chunk grouping,
+rebalance, and partition materialization. Input size accounting, sink dispatch,
+mutex waits, writes, and checkpoints are outside this interval.
+
+| Task log / Prometheus field | Unit | Meaning |
+| --- | --- | --- |
+| `partitioner_duration_seconds_latest` | seconds | Duration of the most recent retained partition call in the current window. |
+| `partitioner_duration_seconds_avg` | seconds | Arithmetic mean per retained call in the current window, `sum(P) / partition_call_count`. |
+| `partitioner_duration_seconds_min` | seconds | Minimum retained partition call duration in the current window. |
+| `partitioner_duration_seconds_max` | seconds | Maximum retained partition call duration in the current window. |
+
+These fields are floating-point gauges in seconds, computed from samples retained
+within `counter_time_window_secs`, up to `counter_max_sub_count` samples.
+The internal window call count is independent of `pipeline_sink_operations_total`
+and is not exported. Empty input and error returns record elapsed time; panic
+unwinding produces no sample. A later sink failure does not discard an already
+recorded partition sample. Zero durations participate in the average.
+
+Before the first sample or after all samples expire, all four fields are zero.
+Tasks without measurement omit these JSON fields; registered Snapshot Prometheus
+gauges remain zero. Raw partitioning, other partitioners, and CDC paths are not
+measured yet. Checkpoint recovery does not restore these statistics.
+
 ## Sinker metrics
 
 | Task log field                 | Prometheus metric              | Unit          | Meaning                                                                                                                                                                                                                                                                     |
@@ -85,6 +129,56 @@ remain after processing and filtering and are pushed to the pipeline.
 | `sinker_sinked_records`        | `sinker_sinked_records`        | records       | Cumulative number of records successfully written to the target.                                                                                                                                                                                                            |
 | `sinker_sinked_bytes`          | `sinker_sinked_bytes`          | bytes         | Cumulative estimated bytes successfully written to the target.                                                                                                                                                                                                              |
 | `sinker_ddl_count`             | `sinker_ddl_count`             | operations    | Cumulative number of DDL operations processed by the sink side. CDC tasks only.                                                                                                                                                                                             |
+
+### DML batch utilization and duration
+
+A batch is one `BaseParallelizer::sink_dml` invocation and includes all its
+partitions. A partition can execute multiple SQL requests. Timing starts at
+dispatch, after queue consumption by `drain()`. Existing
+`sinker_workers_per_drain_*` names are retained for compatibility.
+
+These metrics measure successful, nonempty DML batches through
+`BaseParallelizer::sink_dml`, including snapshot, table, partition, and serial
+parallelizers in Snapshot or CDC tasks. Paths that call sinkers directly, such as
+`MergeParallelizer`, are not instrumented yet.
+`K = min(parallel_size, sinkers.len())`, using the concurrency limit passed to
+`BaseParallelizer::sink_dml` (1 for serial execution). Internal W sums the time spent
+inside all nonempty `sink_dml` calls after acquiring the sinker mutex, including
+connection-pool waits, internal retries, and checker waits. D spans dispatch through
+completion of every partition, including mutex waits and scheduling but excluding
+partition/rebalance computation and checkpoints. Each batch has `U = W / (K * D)`.
+
+| Task log / Prometheus field | Unit | Meaning |
+| --- | --- | --- |
+| `pipeline_sink_parallel_utilization_latest` | 0..1 | Utilization U of the most recent retained sink operation in the current window. |
+| `pipeline_sink_parallel_utilization_avg` | 0..1 | Arithmetic mean of U across retained operations in the current window, `sum(U) / window_count`. |
+| `pipeline_sink_parallel_utilization_min` | 0..1 | Minimum retained sink operation utilization in the current window. |
+| `pipeline_sink_parallel_utilization_max` | 0..1 | Maximum retained sink operation utilization in the current window. |
+| `pipeline_sink_duration_seconds_latest` | seconds | Wall-clock duration of the most recent retained sink operation in the current window. |
+| `pipeline_sink_duration_seconds_avg` | seconds | Average retained operation duration in the current window, `sum(D) / window_count`. |
+| `pipeline_sink_duration_seconds_min` | seconds | Minimum retained sink operation duration in the current window. |
+| `pipeline_sink_duration_seconds_max` | seconds | Maximum retained sink operation duration in the current window. |
+| `pipeline_sink_operations_total` | batches | Number of valid pipeline sink operations since task start. |
+
+All fields use Prometheus gauges. Utilization and duration use the common time-window
+counters. `counter_time_window_secs` bounds sample age and `counter_max_sub_count`
+bounds retained samples. Each completed batch has equal weight in the utilization
+average; `latest` reports the most recent retained operation. W is internal and
+is not exported.
+
+`pipeline_sink_operations_total` uses a no-window counter and increments once per
+valid sink operation. Its `pipeline_sink_operations_total | latest=N` log line
+reports the task-run total, which is not the denominator of window averages.
+The task's pipeline monitor remains registered through the final flush. A new
+run starts from zero; checkpoint recovery does not restore these statistics.
+
+Empty, failed, canceled, non-DML, and invalid measurements produce no sample and
+do not increment the total. Enabled window fields report zero when no live samples
+remain; the operation total stays unchanged. Tasks without measurement omit these
+JSON fields; registered Prometheus gauges remain zero.
+For K=4, partitions taking 100/10/10/10 ms give U=0.325; only two 100 ms partitions
+give U=0.5. High utilization can include connection-pool waits, so interpret it
+alongside duration, throughput, and destination latency.
 
 ## Checker metrics
 

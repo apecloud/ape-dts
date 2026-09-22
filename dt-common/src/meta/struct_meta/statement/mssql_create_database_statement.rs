@@ -1,4 +1,7 @@
-use super::mssql_comment_statement::MssqlComment;
+use super::{
+    mssql_comment_statement::MssqlComment,
+    struct_statement::{StructKey, StructKeyType},
+};
 use crate::{
     config::config_enums::DbType, meta::struct_meta::structure::structure_type::StructureType,
     rdb_filter::RdbFilter, utils::sql_util::SqlUtil,
@@ -16,7 +19,7 @@ impl MssqlCreateDatabaseStatement {
         self.database_name = dst_db.to_string();
     }
 
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         if filter.filter_structure(&StructureType::Database) {
             return Ok(Vec::new());
         }
@@ -29,7 +32,8 @@ impl MssqlCreateDatabaseStatement {
         }
         let create_database = create_database.replace('\'', "''");
         let mut sqls = vec![(
-            format!("database.{}", self.database_name),
+            StructKey::new(StructKeyType::Database, [] as [&str; 0])
+                .with_database(&self.database_name),
             format!("IF DB_ID(N'{database_literal}') IS NULL EXEC(N'{create_database}')"),
         )];
         for comment in &self.comments {
@@ -43,7 +47,7 @@ impl MssqlCreateDatabaseStatement {
 
 #[cfg(test)]
 mod tests {
-    use super::MssqlCreateDatabaseStatement;
+    use super::*;
     use crate::{
         config::{config_enums::DbType, filter_config::FilterConfig},
         rdb_filter::RdbFilter,
@@ -68,7 +72,8 @@ mod tests {
         assert_eq!(
             statement.to_sqls(&filter).unwrap(),
             vec![(
-                "database.db]with'quote".to_string(),
+                StructKey::new(StructKeyType::Database, [] as [&str; 0])
+                    .with_database("db]with'quote"),
                 "IF DB_ID(N'db]with''quote') IS NULL EXEC(N'CREATE DATABASE [db]]with''quote]')"
                     .to_string(),
             )]
@@ -94,7 +99,7 @@ mod tests {
         assert_eq!(
             statement.to_sqls(&filter).unwrap(),
             vec![(
-                "database.test_db".to_string(),
+                StructKey::new(StructKeyType::Database, [] as [&str; 0]).with_database("test_db"),
                 "IF DB_ID(N'test_db') IS NULL EXEC(N'CREATE DATABASE [test_db] COLLATE Latin1_General_100_BIN2')".to_string(),
             )]
         );

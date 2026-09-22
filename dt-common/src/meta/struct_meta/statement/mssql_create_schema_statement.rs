@@ -1,4 +1,7 @@
-use super::mssql_comment_statement::MssqlComment;
+use super::{
+    mssql_comment_statement::MssqlComment,
+    struct_statement::{StructKey, StructKeyType},
+};
 use crate::{
     config::config_enums::DbType, meta::struct_meta::structure::structure_type::StructureType,
     rdb_filter::RdbFilter, utils::sql_util::SqlUtil,
@@ -31,11 +34,12 @@ impl MssqlCreateSchemaStatement {
         self.database_name = dst_db.to_string();
     }
 
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if !filter.filter_structure(&StructureType::Database) {
             sqls.push((
-                format!("schema.{}.{}", self.database_name, self.schema_name),
+                StructKey::new(StructKeyType::Schema, [&self.schema_name])
+                    .with_database(&self.database_name),
                 self.create_schema_sql(),
             ));
         }
@@ -43,10 +47,11 @@ impl MssqlCreateSchemaStatement {
         for sequence in &self.sequences {
             if !filter.filter_structure(&StructureType::Sequence) {
                 sqls.push((
-                    format!(
-                        "sequence.{}.{}.{}",
-                        self.database_name, self.schema_name, sequence.sequence_name
-                    ),
+                    StructKey::new(
+                        StructKeyType::Sequence,
+                        [&self.schema_name, &sequence.sequence_name],
+                    )
+                    .with_database(&self.database_name),
                     self.create_sequence_sql(sequence),
                 ));
             }
@@ -198,8 +203,8 @@ mod tests {
     fn sequence_does_not_depend_on_database_structure_filter() {
         let sqls = statement().to_sqls(&filter("sequence,comment")).unwrap();
         assert_eq!(sqls.len(), 2);
-        assert!(sqls[0].0.starts_with("sequence."));
-        assert!(sqls[1].0.starts_with("sequence_comment."));
+        assert!(sqls[0].0.to_string().starts_with("sequence."));
+        assert!(sqls[1].0.to_string().starts_with("sequence_comment."));
     }
 
     #[test]

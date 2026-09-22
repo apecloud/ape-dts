@@ -20,3 +20,4 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 mongodb = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

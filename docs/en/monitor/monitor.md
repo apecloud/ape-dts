@@ -20,7 +20,7 @@ This type of counter is an array of sub-counters. During task execution, wheneve
 
 # No window counter
 
-A simple counter to record accumulated data, such as the number of migrated MySQL records.
+Records accumulated values throughout the task run without expiration, such as migrated records and completed sink operations.
 
 ## Aggregation algorithms
 
@@ -198,6 +198,43 @@ By comparing these two metric groups, you can observe the actual effect of filte
 2024-02-29 01:25:09.554423 | pipeline | sinked_count | latest=13
 ```
 
+The three new metric groups and the separate valid batch count are flushed with
+the existing counters under the same pipeline ID:
+
+```text
+pipeline | f49dc9ee7d863b59 | buffer_size | sum=180 | avg=3 | max=4 | min=1
+pipeline | f49dc9ee7d863b59 | sinker_workers_per_drain | sum=66 | avg=1 | max=2 | min=1
+pipeline | f49dc9ee7d863b59 | sinked_records | latest=141
+pipeline | f49dc9ee7d863b59 | pipeline_sink_parallel_utilization | latest=0.25 | avg=0.625 | min=0.25 | max=1
+pipeline | f49dc9ee7d863b59 | pipeline_sink_duration_seconds | latest=0.4 | avg=0.25 | min=0.1 | max=0.4
+pipeline | f49dc9ee7d863b59 | pipeline_sink_operations_total | latest=2
+pipeline | f49dc9ee7d863b59 | partitioner_duration_seconds | latest=0.0009 | avg=0.0004 | min=0.0001 | max=0.0009
+```
+
+Timestamps are omitted above. Utilization is a ratio from `0` to `1`; durations
+use seconds and preserve fractional values. These three groups use time-window
+counters controlled by `counter_time_window_secs` and `counter_max_sub_count`.
+`pipeline_sink_operations_total` remains a no-window counter: its `latest` field
+is the number of valid sink operations since task start.
+
+One batch is one complete sink dispatch by the parallelizer. Once all partitions
+succeed, it records one utilization sample, one duration sample, and increments
+the operation total. Partitioner duration is sampled separately per partition call.
+`latest` reports the most recent retained sample; `min` and `max` report retained
+sample extrema. Averages divide each window's
+sum by its retained sample count, not by the
+cumulative operation total. Expired samples no longer contribute.
+
+Snapshot tasks also report the existing `pipeline | global` aggregates. Each task
+has one pipeline whose monitor remains registered through the final flush.
+Task JSON and Prometheus read the same pipeline counters. CDC logs individual
+pipeline IDs. Enabled pipeline counters with no live samples report zero;
+global window logs omit counters with no live data.
+
+Statistics reset for a new task run and are not restored from checkpoints.
+Batch metrics cover Snapshot and CDC; partitioner metrics currently cover only
+Snapshot chunk partitioning.
+
 ### counter Description
 
 | Counter | Counter Type | Description |
@@ -205,6 +242,10 @@ By comparing these two metric groups, you can observe the actual effect of filte
 | record_size | time window | Size of a single entry, in bytes |
 | buffer_size | time window | Number of entries cached in pipeline |
 | sinked_count | no window | Total Number of entries handled by task |
+| pipeline_sink_operations_total | no window | Total completed valid pipeline sink operations |
+| pipeline_sink_parallel_utilization | time window | Per-batch utilization: latest, avg, min, max |
+| pipeline_sink_duration_seconds | time window | Batch duration in seconds: latest, avg, min, max |
+| partitioner_duration_seconds | time window | Partition duration in seconds: latest, avg, min, max |
 
 <br/>
 

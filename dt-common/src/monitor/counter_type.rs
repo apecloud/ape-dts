@@ -31,7 +31,17 @@ pub enum CounterType {
     #[strum(serialize = "record_size")]
     RecordSize,
 
+    // time window counter, aggregate by sample
+    #[strum(serialize = "pipeline_sink_parallel_utilization")]
+    PipelineSinkParallelUtilization,
+    #[strum(serialize = "pipeline_sink_duration_seconds")]
+    PipelineSinkDurationSeconds,
+    #[strum(serialize = "partitioner_duration_seconds")]
+    PartitionerDurationSeconds,
+
     // no window counter
+    #[strum(serialize = "pipeline_sink_operations_total")]
+    PipelineSinkOperationsTotal,
     #[strum(serialize = "plan_records")]
     PlanRecordTotal,
     #[strum(serialize = "queued_records")]
@@ -92,9 +102,13 @@ impl CounterType {
             | Self::DataBytes
             | Self::RecordSize
             | Self::ExtractedRecords
-            | Self::ExtractedBytes => WindowType::TimeWindow,
+            | Self::ExtractedBytes
+            | Self::PipelineSinkParallelUtilization
+            | Self::PipelineSinkDurationSeconds
+            | Self::PartitionerDurationSeconds => WindowType::TimeWindow,
 
-            Self::PlanRecordTotal
+            Self::PipelineSinkOperationsTotal
+            | Self::PlanRecordTotal
             | Self::SinkedRecordTotal
             | Self::SinkedByteTotal
             | Self::QueuedRecordCurrent
@@ -110,6 +124,17 @@ impl CounterType {
             WindowType::NoWindow => vec![AggregateType::Latest],
 
             WindowType::TimeWindow => match self {
+                Self::PipelineSinkParallelUtilization
+                | Self::PipelineSinkDurationSeconds
+                | Self::PartitionerDurationSeconds => {
+                    vec![
+                        AggregateType::Latest,
+                        AggregateType::AvgByCount,
+                        AggregateType::MinByCount,
+                        AggregateType::MaxByCount,
+                    ]
+                }
+
                 Self::RecordsPerQuery
                 | Self::RtPerQuery
                 | Self::BufferSize

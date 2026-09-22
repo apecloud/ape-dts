@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Ok};
 use async_recursion::async_recursion;
 use async_std::io::BufReader;
-use async_std::net::TcpStream;
+use async_std::io::Read;
 use async_std::prelude::*;
 use dt_common::error::DtError;
 
@@ -17,7 +17,10 @@ const OK_RESPONSE: &[u8] = &[79, 75];
 
 impl RedisRespReader {
     #[async_recursion]
-    pub async fn decode(&mut self, reader: &mut BufReader<TcpStream>) -> anyhow::Result<Value> {
+    pub async fn decode<R>(&mut self, reader: &mut BufReader<R>) -> anyhow::Result<Value>
+    where
+        R: Read + Unpin + Send,
+    {
         let mut res: Vec<u8> = Vec::new();
         reader.read_until(b'\n', &mut res).await?;
 
