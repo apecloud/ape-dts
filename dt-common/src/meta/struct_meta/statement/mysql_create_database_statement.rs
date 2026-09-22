@@ -1,3 +1,4 @@
+use crate::config::config_enums::DbType;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::{database::Database, structure_type::StructureType};
 use crate::rdb_filter::RdbFilter;
@@ -32,7 +33,11 @@ impl MysqlCreateDatabaseStatement {
             )
         }
 
-        let key = StructKey::new(StructKeyType::Database, [&self.database.name]);
+        let key = StructKey::new(
+            DbType::Mysql,
+            StructKeyType::Database,
+            [&self.database.name],
+        );
         sqls.push((key, sql));
         Ok(sqls)
     }

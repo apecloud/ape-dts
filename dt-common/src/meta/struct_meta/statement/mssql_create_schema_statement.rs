@@ -38,8 +38,11 @@ impl MssqlCreateSchemaStatement {
         let mut sqls = Vec::new();
         if !filter.filter_structure(&StructureType::Database) {
             sqls.push((
-                StructKey::new(StructKeyType::Schema, [&self.schema_name])
-                    .with_database(&self.database_name),
+                StructKey::new(
+                    DbType::Mssql,
+                    StructKeyType::Schema,
+                    [&self.database_name, &self.schema_name],
+                ),
                 self.create_schema_sql(),
             ));
         }
@@ -48,10 +51,14 @@ impl MssqlCreateSchemaStatement {
             if !filter.filter_structure(&StructureType::Sequence) {
                 sqls.push((
                     StructKey::new(
+                        DbType::Mssql,
                         StructKeyType::Sequence,
-                        [&self.schema_name, &sequence.sequence_name],
-                    )
-                    .with_database(&self.database_name),
+                        [
+                            &self.database_name,
+                            &self.schema_name,
+                            &sequence.sequence_name,
+                        ],
+                    ),
                     self.create_sequence_sql(sequence),
                 ));
             }

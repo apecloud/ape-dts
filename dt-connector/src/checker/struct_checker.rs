@@ -637,8 +637,11 @@ mod tests {
         };
         checker.add_src_sqls(data.clone()).await.unwrap();
         assert_eq!(checker.namespaces, HashSet::from(["dst_db".to_string()]));
-        let table =
-            StructKey::new(StructKeyType::Table, ["dst_schema", "dst_tb"]).with_database("dst_db");
+        let table = StructKey::new(
+            DbType::Mssql,
+            StructKeyType::Table,
+            ["dst_db", "dst_schema", "dst_tb"],
+        );
         let item = &checker.src_sql_map[&table];
         assert!(item.sql.contains("[dst_db].[dst_schema].[dst_tb]"));
         let log = StructCheckLog::new(
@@ -657,10 +660,10 @@ mod tests {
         assert_eq!(log.target_tb.as_deref(), Some("dst_tb"));
 
         let extra = StructKey::new(
+            DbType::Mssql,
             StructKeyType::Index,
-            ["dst_schema", "dst_tb", "extra.index"],
-        )
-        .with_database("dst_db");
+            ["dst_db", "dst_schema", "dst_tb", "extra.index"],
+        );
         let summary = StructCheckerHandle::compare_sql_maps(
             &checker.src_sql_map,
             BTreeMap::from([
@@ -722,8 +725,14 @@ mod tests {
                 vec!["dst_schema", "dst_tb", "index.with.dot"],
             ),
         ] {
-            let target =
-                StructCheckKey::new("", StructKey::new(kind, segments).with_database("dst_db"));
+            let target = StructCheckKey::new(
+                "",
+                StructKey::new(
+                    DbType::Mssql,
+                    kind,
+                    std::iter::once("dst_db").chain(segments),
+                ),
+            );
             let source = StructCheckerHandle::source_key_from_target(&target, Some(&router));
             assert_eq!(source.db, "src_db");
             assert_eq!(source.key.database(), Some("src_db"));
@@ -775,8 +784,8 @@ mod tests {
 
     #[test]
     fn missing_target_database_and_table_are_reported_as_miss() {
-        let database_key = StructKey::new(StructKeyType::Database, ["test_db"]);
-        let table_key = StructKey::new(StructKeyType::Table, ["test_db", "test_tb"]);
+        let database_key = StructKey::new(DbType::Mysql, StructKeyType::Database, ["test_db"]);
+        let table_key = StructKey::new(DbType::Mysql, StructKeyType::Table, ["test_db", "test_tb"]);
         let src_sql_map = BTreeMap::from([
             (
                 database_key.clone(),
@@ -812,8 +821,8 @@ mod tests {
 
     #[test]
     fn keys_with_same_display_but_different_identifier_boundaries_match_independently() {
-        let dotted_schema = StructKey::new(StructKeyType::Table, ["a.b", "c"]);
-        let dotted_table = StructKey::new(StructKeyType::Table, ["a", "b.c"]);
+        let dotted_schema = StructKey::new(DbType::Pg, StructKeyType::Table, ["a.b", "c"]);
+        let dotted_table = StructKey::new(DbType::Pg, StructKeyType::Table, ["a", "b.c"]);
         assert_eq!(dotted_schema.to_string(), dotted_table.to_string());
         assert_ne!(dotted_schema, dotted_table);
 

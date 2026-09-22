@@ -32,8 +32,11 @@ impl MssqlCreateDatabaseStatement {
         }
         let create_database = create_database.replace('\'', "''");
         let mut sqls = vec![(
-            StructKey::new(StructKeyType::Database, [] as [&str; 0])
-                .with_database(&self.database_name),
+            StructKey::new(
+                DbType::Mssql,
+                StructKeyType::Database,
+                [self.database_name.as_str()],
+            ),
             format!("IF DB_ID(N'{database_literal}') IS NULL EXEC(N'{create_database}')"),
         )];
         for comment in &self.comments {
@@ -72,8 +75,7 @@ mod tests {
         assert_eq!(
             statement.to_sqls(&filter).unwrap(),
             vec![(
-                StructKey::new(StructKeyType::Database, [] as [&str; 0])
-                    .with_database("db]with'quote"),
+                StructKey::new(DbType::Mssql, StructKeyType::Database, ["db]with'quote"]),
                 "IF DB_ID(N'db]with''quote') IS NULL EXEC(N'CREATE DATABASE [db]]with''quote]')"
                     .to_string(),
             )]
@@ -99,7 +101,7 @@ mod tests {
         assert_eq!(
             statement.to_sqls(&filter).unwrap(),
             vec![(
-                StructKey::new(StructKeyType::Database, [] as [&str; 0]).with_database("test_db"),
+                StructKey::new(DbType::Mssql, StructKeyType::Database, ["test_db"]),
                 "IF DB_ID(N'test_db') IS NULL EXEC(N'CREATE DATABASE [test_db] COLLATE Latin1_General_100_BIN2')".to_string(),
             )]
         );

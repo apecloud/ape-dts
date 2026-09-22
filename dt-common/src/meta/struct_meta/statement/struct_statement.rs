@@ -18,6 +18,7 @@ use super::{
     pg_create_table_statement::PgCreateTableStatement,
 };
 use crate::{
+    config::config_enums::DbType,
     meta::struct_meta::statement::{
         pg_create_udf_statement::PgCreateUdfStatement,
         pg_create_udt_statement::PgCreateUdtStatement,
@@ -78,63 +79,53 @@ pub enum StructKeyType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructKey {
     key_type: StructKeyType,
-    database: Option<String>,
+    db_type: DbType,
     segments: Vec<String>,
 }
 
 impl StructKey {
-    pub fn new<I, S>(key_type: StructKeyType, segments: I) -> Self
+    pub fn new<I, S>(db_type: DbType, key_type: StructKeyType, segments: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         Self {
             key_type,
-            database: None,
+            db_type,
             segments: segments.into_iter().map(Into::into).collect(),
         }
     }
 
-    pub fn with_database(mut self, database: &str) -> Self {
-        self.database = Some(database.to_string());
-        self
-    }
-
     pub fn database(&self) -> Option<&str> {
-        self.database.as_deref()
+        self.segment(self.key_type.database_index(&self.db_type))
     }
 
     pub fn schema(&self) -> &str {
-        self.key_type
-            .schema_index()
-            .and_then(|index| self.segments.get(index))
-            .map(String::as_str)
+        self.segment(self.key_type.schema_index(&self.db_type))
             .unwrap_or_default()
     }
 
     pub fn table(&self) -> &str {
-        self.key_type
-            .table_index()
-            .and_then(|index| self.segments.get(index))
-            .map(String::as_str)
+        self.segment(self.key_type.table_index(&self.db_type))
             .unwrap_or_default()
     }
 
-    pub fn with_location(&self, schema: &str, table: &str) -> Self {
+    fn segment(&self, index: Option<usize>) -> Option<&str> {
+        index
+            .and_then(|index| self.segments.get(index))
+            .map(String::as_str)
+    }
+
+    pub fn with_location(&self, db: &str, schema: &str, table: &str) -> Self {
         let mut key = self.clone();
-        if let Some(segment) = self
-            .key_type
-            .schema_index()
-            .and_then(|i| key.segments.get_mut(i))
-        {
-            *segment = schema.to_string();
-        }
-        if let Some(segment) = self
-            .key_type
-            .table_index()
-            .and_then(|i| key.segments.get_mut(i))
-        {
-            *segment = table.to_string();
+        for (index, value) in [
+            (self.key_type.database_index(&self.db_type), db),
+            (self.key_type.schema_index(&self.db_type), schema),
+            (self.key_type.table_index(&self.db_type), table),
+        ] {
+            if let Some(segment) = index.and_then(|index| key.segments.get_mut(index)) {
+                *segment = value.to_string();
+            }
         }
         key
     }
@@ -154,9 +145,6 @@ impl StructKey {
 impl Display for StructKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.key_type)?;
-        if let Some(database) = &self.database {
-            write!(f, ".{database}")?;
-        }
         for segment in &self.segments {
             write!(f, ".{segment}")?;
         }
@@ -169,7 +157,11 @@ impl Ord for StructKey {
         self.to_string()
             .cmp(&other.to_string())
             .then_with(|| self.key_type.cmp(&other.key_type))
-            .then_with(|| self.database.cmp(&other.database))
+            .then_with(|| {
+                self.db_type
+                    .diagnostic_name()
+                    .cmp(other.db_type.diagnostic_name())
+            })
             .then_with(|| self.segments.cmp(&other.segments))
     }
 }
@@ -181,46 +173,29 @@ impl PartialOrd for StructKey {
 }
 
 impl StructKeyType {
-    pub fn schema_index(self) -> Option<usize> {
-        match self {
-            Self::Database | Self::Schema | Self::SchemaComment => Some(0),
-            Self::DatabaseComment => None,
-            Self::Table
-            | Self::Index
-            | Self::Constraint
-            | Self::Sequence
-            | Self::SequenceOwner
-            | Self::ColumnComment
-            | Self::TableComment
-            | Self::SequenceComment
-            | Self::ConstraintComment
-            | Self::IndexComment
-            | Self::Udt
-            | Self::Udf => Some(0),
-            Self::RbacPrivilegeSchema
-            | Self::RbacPrivilegeTable
-            | Self::RbacPrivilegeColumn
-            | Self::RbacPrivilegeSequence => Some(0),
-            Self::RbacRole | Self::RbacRoleConfig | Self::RbacMember => None,
+    fn database_index(self, db_type: &DbType) -> Option<usize> {
+        match (db_type, self) {
+            (_, Self::RbacRole | Self::RbacRoleConfig | Self::RbacMember) => None,
+            (DbType::Mssql, _) => Some(0),
+            _ => None,
         }
     }
 
-    pub fn table_index(self) -> Option<usize> {
+    fn schema_index(self, db_type: &DbType) -> Option<usize> {
         match self {
-            Self::Table
-            | Self::Index
-            | Self::Constraint
-            | Self::Sequence
-            | Self::SequenceOwner
-            | Self::ColumnComment
-            | Self::TableComment
-            | Self::ConstraintComment
-            | Self::IndexComment
-            | Self::SequenceComment => Some(1),
-            Self::RbacPrivilegeTable | Self::RbacPrivilegeColumn | Self::RbacPrivilegeSequence => {
-                Some(1)
+            Self::Database if matches!(db_type, DbType::Mssql) => None,
+            Self::DatabaseComment | Self::RbacRole | Self::RbacRoleConfig | Self::RbacMember => {
+                None
             }
-            _ => None,
+            _ => Some(usize::from(matches!(db_type, DbType::Mssql))),
+        }
+    }
+
+    fn table_index(self, db_type: &DbType) -> Option<usize> {
+        if self.is_table_scoped() || matches!(self, Self::Sequence | Self::SequenceComment) {
+            self.schema_index(db_type).map(|index| index + 1)
+        } else {
+            None
         }
     }
 
@@ -289,22 +264,108 @@ mod tests {
     #[test]
     fn mssql_keys_preserve_database_and_identifier_boundaries() {
         let keys = [
-            StructKey::new(StructKeyType::Table, ["c", "d"]).with_database("a.b"),
-            StructKey::new(StructKeyType::Table, ["b.c", "d"]).with_database("a"),
-            StructKey::new(StructKeyType::Table, ["b", "c.d"]).with_database("a"),
+            StructKey::new(DbType::Mssql, StructKeyType::Table, ["a.b", "c", "d"]),
+            StructKey::new(DbType::Mssql, StructKeyType::Table, ["a", "b.c", "d"]),
+            StructKey::new(DbType::Mssql, StructKeyType::Table, ["a", "b", "c.d"]),
         ];
         for key in &keys {
             assert_eq!(key.to_string(), "table.a.b.c.d");
         }
         assert_eq!(BTreeSet::from(keys).len(), 3);
 
-        let key = StructKey::new(StructKeyType::Table, ["dbo", "users"]);
-        assert_ne!(key.clone().with_database("db1"), key.with_database("db2"));
+        let key = StructKey::new(DbType::Mssql, StructKeyType::Table, ["db1", "dbo", "users"]);
+        assert_ne!(key, key.with_location("db2", "dbo", "users"));
+    }
+
+    #[test]
+    fn locations_and_routing_follow_database_layout() {
+        let cases = [
+            (
+                DbType::Mysql,
+                StructKeyType::Database,
+                vec!["s"],
+                (None, "s", ""),
+                "database.target_schema",
+            ),
+            (
+                DbType::Mysql,
+                StructKeyType::Table,
+                vec!["s", "t"],
+                (None, "s", "t"),
+                "table.target_schema.target_table",
+            ),
+            (
+                DbType::Pg,
+                StructKeyType::Schema,
+                vec!["s"],
+                (None, "s", ""),
+                "schema.target_schema",
+            ),
+            (
+                DbType::Pg,
+                StructKeyType::RbacRole,
+                vec!["role.with.dot"],
+                (None, "", ""),
+                "rbac.role.role.with.dot",
+            ),
+            (
+                DbType::Pg,
+                StructKeyType::Index,
+                vec!["s", "t", "index.with.dot"],
+                (None, "s", "t"),
+                "index.target_schema.target_table.index.with.dot",
+            ),
+            (
+                DbType::Mssql,
+                StructKeyType::Database,
+                vec!["db"],
+                (Some("db"), "", ""),
+                "database.target_db",
+            ),
+            (
+                DbType::Mssql,
+                StructKeyType::DatabaseComment,
+                vec!["db"],
+                (Some("db"), "", ""),
+                "database_comment.target_db",
+            ),
+            (
+                DbType::Mssql,
+                StructKeyType::Schema,
+                vec!["db", "s"],
+                (Some("db"), "s", ""),
+                "schema.target_db.target_schema",
+            ),
+            (
+                DbType::Mssql,
+                StructKeyType::Index,
+                vec!["db", "s", "t", "index.with.dot"],
+                (Some("db"), "s", "t"),
+                "index.target_db.target_schema.target_table.index.with.dot",
+            ),
+        ];
+        for (db_type, key_type, segments, location, routed_display) in cases {
+            let key = StructKey::new(db_type, key_type, segments);
+            assert_eq!((key.database(), key.schema(), key.table()), location);
+            let routed = key.with_location("target_db", "target_schema", "target_table");
+            assert_eq!(routed.to_string(), routed_display);
+            assert_eq!((key.database(), key.schema(), key.table()), location);
+        }
+    }
+
+    #[test]
+    fn database_type_distinguishes_identical_display_keys() {
+        let mysql = StructKey::new(DbType::Mysql, StructKeyType::Table, ["s", "t"]);
+        let pg = StructKey::new(DbType::Pg, StructKeyType::Table, ["s", "t"]);
+        assert_eq!(mysql.to_string(), pg.to_string());
+        assert_ne!(mysql, pg);
+        assert_eq!(BTreeSet::from([mysql, pg]).len(), 2);
     }
 
     #[test]
     fn struct_key_keeps_identifier_boundaries_and_legacy_display() {
         let key = StructKey::new(
+            DbType::Pg,
             StructKeyType::RbacPrivilegeColumn,
             ["a.b", "t.1", "SELECT", "user.name", "NO"],
         );
@@ -316,8 +377,8 @@ mod tests {
             "rbac.privilege.column.a.b.t.1.SELECT.user.name.NO"
         );
 
-        let sequence = StructKey::new(StructKeyType::Sequence, ["public", "seq"]);
-        let table = StructKey::new(StructKeyType::Table, ["public", "tb"]);
+        let sequence = StructKey::new(DbType::Pg, StructKeyType::Sequence, ["public", "seq"]);
+        let table = StructKey::new(DbType::Pg, StructKeyType::Table, ["public", "tb"]);
         assert!(sequence < table);
     }
 }

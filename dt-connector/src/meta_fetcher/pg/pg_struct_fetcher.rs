@@ -961,7 +961,11 @@ impl PgStructFetcher {
             }
 
             results.push(PgPrivilege {
-                key: StructKey::new(StructKeyType::RbacPrivilegeSchema, [schema_name, grantee]),
+                key: StructKey::new(
+                    DbType::Pg,
+                    StructKeyType::RbacPrivilegeSchema,
+                    [schema_name, grantee],
+                ),
                 origin: grant_command,
             });
         }
@@ -1006,6 +1010,7 @@ impl PgStructFetcher {
 
             results.push(PgPrivilege {
                 key: StructKey::new(
+                    DbType::Pg,
                     StructKeyType::RbacPrivilegeTable,
                     [schema_name, table_name, grantee, is_grantable],
                 ),
@@ -1098,6 +1103,7 @@ impl PgStructFetcher {
 
                 results.push(PgPrivilege {
                     key: StructKey::new(
+                        DbType::Pg,
                         StructKeyType::RbacPrivilegeColumn,
                         [
                             schema.as_str(),
@@ -1189,6 +1195,7 @@ impl PgStructFetcher {
 
             results.push(PgPrivilege {
                 key: StructKey::new(
+                    DbType::Pg,
                     StructKeyType::RbacPrivilegeSequence,
                     [schema, sequence, grantee, is_grantable],
                 ),

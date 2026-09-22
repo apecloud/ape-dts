@@ -129,13 +129,14 @@ impl MssqlCreateTableStatement {
         if table_enabled {
             sqls.push((
                 StructKey::new(
+                    DbType::Mssql,
                     StructKeyType::Table,
                     [
+                        self.table.database_name.as_str(),
                         self.table.schema_name.as_str(),
                         self.table.table_name.as_str(),
                     ],
-                )
-                .with_database(&self.table.database_name),
+                ),
                 self.table_to_sql()?,
             ));
         }
@@ -149,14 +150,15 @@ impl MssqlCreateTableStatement {
             }
             sqls.push((
                 StructKey::new(
+                    DbType::Mssql,
                     StructKeyType::Constraint,
                     [
+                        self.table.database_name.as_str(),
                         self.table.schema_name.as_str(),
                         self.table.table_name.as_str(),
                         constraint.constraint_name.as_str(),
                     ],
-                )
-                .with_database(&self.table.database_name),
+                ),
                 self.constraint_to_sql(constraint)?,
             ));
         }
@@ -167,15 +169,16 @@ impl MssqlCreateTableStatement {
                 };
                 sqls.push((
                     StructKey::new(
+                        DbType::Mssql,
                         StructKeyType::Constraint,
                         [
+                            self.table.database_name.as_str(),
                             self.table.schema_name.as_str(),
                             self.table.table_name.as_str(),
                             constraint.constraint_name.as_str(),
                             state,
                         ],
-                    )
-                    .with_database(&self.table.database_name),
+                    ),
                     sql,
                 ));
             }
@@ -186,29 +189,31 @@ impl MssqlCreateTableStatement {
             for index in &self.table.indexes {
                 sqls.push((
                     StructKey::new(
+                        DbType::Mssql,
                         StructKeyType::Index,
                         [
+                            self.table.database_name.as_str(),
                             self.table.schema_name.as_str(),
                             self.table.table_name.as_str(),
                             index.index_name.as_str(),
                         ],
-                    )
-                    .with_database(&self.table.database_name),
+                    ),
                     self.index_to_sql(index)?,
                 ));
             }
             for index in self.table.indexes.iter().filter(|index| index.is_disabled) {
                 sqls.push((
                     StructKey::new(
+                        DbType::Mssql,
                         StructKeyType::Index,
                         [
+                            self.table.database_name.as_str(),
                             self.table.schema_name.as_str(),
                             self.table.table_name.as_str(),
                             index.index_name.as_str(),
                             "disable",
                         ],
-                    )
-                    .with_database(&self.table.database_name),
+                    ),
                     self.index_disable_sql(index)?,
                 ));
             }

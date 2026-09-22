@@ -48,29 +48,41 @@ impl MssqlComment {
 
         let (key, comment, level1, level2) = match self {
             Self::Database { comment } => (
-                StructKey::new(StructKeyType::DatabaseComment, [] as [&str; 0])
-                    .with_database(database_name),
+                StructKey::new(
+                    DbType::Mssql,
+                    StructKeyType::DatabaseComment,
+                    [database_name],
+                ),
                 comment,
                 None,
                 None,
             ),
             Self::Schema { comment } => (
-                StructKey::new(StructKeyType::SchemaComment, [schema_name])
-                    .with_database(database_name),
+                StructKey::new(
+                    DbType::Mssql,
+                    StructKeyType::SchemaComment,
+                    [database_name, schema_name],
+                ),
                 comment,
                 None,
                 None,
             ),
             Self::Table { comment } => (
-                StructKey::new(StructKeyType::TableComment, [schema_name, object_name])
-                    .with_database(database_name),
+                StructKey::new(
+                    DbType::Mssql,
+                    StructKeyType::TableComment,
+                    [database_name, schema_name, object_name],
+                ),
                 comment,
                 Some(("TABLE", object_name)),
                 None,
             ),
             Self::Sequence { comment } => (
-                StructKey::new(StructKeyType::SequenceComment, [schema_name, object_name])
-                    .with_database(database_name),
+                StructKey::new(
+                    DbType::Mssql,
+                    StructKeyType::SequenceComment,
+                    [database_name, schema_name, object_name],
+                ),
                 comment,
                 Some(("SEQUENCE", object_name)),
                 None,
@@ -80,10 +92,15 @@ impl MssqlComment {
                 comment,
             } => (
                 StructKey::new(
+                    DbType::Mssql,
                     StructKeyType::ColumnComment,
-                    [schema_name, object_name, column_name.as_str()],
-                )
-                .with_database(database_name),
+                    [
+                        database_name,
+                        schema_name,
+                        object_name,
+                        column_name.as_str(),
+                    ],
+                ),
                 comment,
                 Some(("TABLE", object_name)),
                 Some(("COLUMN", column_name.as_str())),
@@ -94,10 +111,15 @@ impl MssqlComment {
                 ..
             } => (
                 StructKey::new(
+                    DbType::Mssql,
                     StructKeyType::ConstraintComment,
-                    [schema_name, object_name, constraint_name.as_str()],
-                )
-                .with_database(database_name),
+                    [
+                        database_name,
+                        schema_name,
+                        object_name,
+                        constraint_name.as_str(),
+                    ],
+                ),
                 comment,
                 Some(("TABLE", object_name)),
                 Some(("CONSTRAINT", constraint_name.as_str())),
@@ -108,10 +130,10 @@ impl MssqlComment {
                 ..
             } => (
                 StructKey::new(
+                    DbType::Mssql,
                     StructKeyType::IndexComment,
-                    [schema_name, object_name, index_name.as_str()],
-                )
-                .with_database(database_name),
+                    [database_name, schema_name, object_name, index_name.as_str()],
+                ),
                 comment,
                 Some(("TABLE", object_name)),
                 Some(("INDEX", index_name.as_str())),
