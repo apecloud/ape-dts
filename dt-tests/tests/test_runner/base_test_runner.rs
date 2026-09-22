@@ -513,67 +513,25 @@ mod tests {
     }
 
     #[test]
-    fn load_sql_file_by_mssql_go_semicolon_preserves_control_blocks() {
-        let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(vec![
-            "USE [app];".to_string(),
-            "GO".to_string(),
-            "IF DB_ID(N'app') IS NOT NULL".to_string(),
-            "BEGIN".to_string(),
-            "    ALTER DATABASE [app] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;".to_string(),
-            "    DROP DATABASE [app];".to_string(),
-            "END;".to_string(),
-            "CREATE TABLE [app].dbo.orders (id int); CREATE INDEX idx_orders ON [app].dbo.orders (id);"
-                .to_string(),
-            "GO".to_string(),
-        ]);
-
-        assert_eq!(sqls.len(), 4);
-        assert_eq!(sqls[0], "USE [app]");
-        assert!(sqls[1].starts_with("IF DB_ID"));
-        assert!(sqls[1].contains("ALTER DATABASE"));
-        assert!(sqls[1].contains("DROP DATABASE"));
-        assert!(sqls[1].ends_with("END"));
-        assert!(sqls[2].starts_with("CREATE TABLE"));
-        assert!(sqls[3].starts_with("CREATE INDEX"));
-    }
-
-    #[test]
-    fn load_sql_file_by_mssql_go_semicolon_preserves_fenced_batch() {
-        let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(vec![
-            "```".to_string(),
-            "DECLARE @i INT = 1;".to_string(),
-            "DECLARE @sql NVARCHAR(MAX);".to_string(),
-            "WHILE @i <= 2".to_string(),
-            "BEGIN".to_string(),
-            "    SET @sql = N'SELECT ' + CONVERT(NVARCHAR(10), @i);".to_string(),
-            "    EXEC sys.sp_executesql @sql;".to_string(),
-            "    SET @i += 1;".to_string(),
-            "END;".to_string(),
-            "```".to_string(),
-            "GO".to_string(),
-            "SELECT 1; SELECT 2;".to_string(),
-        ]);
-
-        assert_eq!(sqls.len(), 3);
-        assert!(sqls[0].starts_with("DECLARE @i"));
-        assert!(sqls[0].contains("WHILE @i <= 2"));
-        assert!(sqls[0].ends_with("END"));
-        assert_eq!(sqls[1], "SELECT 1");
-        assert_eq!(sqls[2], "SELECT 2");
-    }
-
-    #[test]
-    fn load_sql_file_by_mssql_go_semicolon_preserves_fenced_xml_literal() {
-        let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(vec![
-            "```".to_string(),
-            "INSERT INTO dbo.events VALUES (N'<root>text &amp; value</root>');".to_string(),
-            "```".to_string(),
-            "GO".to_string(),
-        ]);
-
-        assert_eq!(
-            sqls,
-            vec!["INSERT INTO dbo.events VALUES (N'<root>text &amp; value</root>')"]
-        );
+    fn mssql_sql_loader_preserves_blocks_and_fenced_batches() {
+        let block = "IF 1 = 1\nBEGIN\nSELECT 1;\nSELECT 2;\nEND";
+        let fenced = "DECLARE @xml XML;\nSELECT N'<root>text &amp; value</root>'";
+        for (name, input, expected) in [
+            (
+                "control block",
+                format!("USE [app];\nGO\n{block};\nSELECT 3; SELECT 4;"),
+                vec!["USE [app]", block, "SELECT 3", "SELECT 4"],
+            ),
+            (
+                "fenced XML batch",
+                format!("SELECT 0;\n```\n{fenced};\n```\nGO\nSELECT 1; SELECT 2;"),
+                vec!["SELECT 0", fenced, "SELECT 1", "SELECT 2"],
+            ),
+        ] {
+            let sqls = BaseTestRunner::load_sql_file_by_mssql_go_semicolon(
+                input.lines().map(str::to_string).collect(),
+            );
+            assert_eq!(sqls, expected, "{name}");
+        }
     }
 }

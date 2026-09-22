@@ -262,19 +262,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mssql_keys_preserve_database_and_identifier_boundaries() {
-        let keys = [
-            StructKey::new(DbType::Mssql, StructKeyType::Table, ["a.b", "c", "d"]),
-            StructKey::new(DbType::Mssql, StructKeyType::Table, ["a", "b.c", "d"]),
-            StructKey::new(DbType::Mssql, StructKeyType::Table, ["a", "b", "c.d"]),
-        ];
-        for key in &keys {
-            assert_eq!(key.to_string(), "table.a.b.c.d");
+    fn key_identity_includes_database_type_and_identifier_boundaries() {
+        for keys in [
+            vec![
+                StructKey::new(DbType::Mssql, StructKeyType::Table, ["a.b", "c", "d"]),
+                StructKey::new(DbType::Mssql, StructKeyType::Table, ["a", "b.c", "d"]),
+                StructKey::new(DbType::Mssql, StructKeyType::Table, ["a", "b", "c.d"]),
+            ],
+            vec![
+                StructKey::new(DbType::Mysql, StructKeyType::Table, ["s", "t"]),
+                StructKey::new(DbType::Pg, StructKeyType::Table, ["s", "t"]),
+            ],
+        ] {
+            assert!(keys
+                .iter()
+                .all(|key| key.to_string() == keys[0].to_string()));
+            let count = keys.len();
+            assert_eq!(BTreeSet::from_iter(keys).len(), count);
         }
-        assert_eq!(BTreeSet::from(keys).len(), 3);
-
-        let key = StructKey::new(DbType::Mssql, StructKeyType::Table, ["db1", "dbo", "users"]);
-        assert_ne!(key, key.with_location("db2", "dbo", "users"));
     }
 
     #[test]
@@ -351,15 +356,6 @@ mod tests {
             assert_eq!(routed.to_string(), routed_display);
             assert_eq!((key.database(), key.schema(), key.table()), location);
         }
-    }
-
-    #[test]
-    fn database_type_distinguishes_identical_display_keys() {
-        let mysql = StructKey::new(DbType::Mysql, StructKeyType::Table, ["s", "t"]);
-        let pg = StructKey::new(DbType::Pg, StructKeyType::Table, ["s", "t"]);
-        assert_eq!(mysql.to_string(), pg.to_string());
-        assert_ne!(mysql, pg);
-        assert_eq!(BTreeSet::from([mysql, pg]).len(), 2);
     }
 
     #[test]

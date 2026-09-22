@@ -183,60 +183,41 @@ mod tests {
     }
 
     #[test]
-    fn to_sqls_preserves_schema_sequence_options_and_comments() {
-        let sqls = statement()
-            .to_sqls(&filter("database,sequence,comment"))
-            .unwrap();
-        assert_eq!(sqls.len(), 4);
-        assert_eq!(
-            sqls[0].1,
-            "EXEC [db]]1].sys.sp_executesql N'IF SCHEMA_ID(N''schema.one'') IS NULL EXEC(N''CREATE SCHEMA [schema.one]'')'"
-        );
-        assert_eq!(
-            sqls[1].1,
-            "EXEC [db]]1].sys.sp_executesql N'CREATE SEQUENCE [schema.one].[seq''name] AS DECIMAL(10, 0) START WITH 100 INCREMENT BY 5 MINVALUE 50 MAXVALUE 1000 CYCLE CACHE 20'"
-        );
-        assert_eq!(
-            sqls[2].1,
-            "EXEC [db]]1].sys.sp_addextendedproperty @name=N'MS_Description', @value=N'sequence''s comment', @level0type=N'SCHEMA', @level0name=N'schema.one', @level1type=N'SEQUENCE', @level1name=N'seq''name'"
-        );
-        assert_eq!(
-            sqls[3].1,
-            "EXEC [db]]1].sys.sp_addextendedproperty @name=N'MS_Description', @value=N'schema''s comment', @level0type=N'SCHEMA', @level0name=N'schema.one'"
-        );
+    fn schema_and_sequence_filters_preserve_sql_and_comments() {
+        let expected = [
+            "EXEC [db]]1].sys.sp_executesql N'IF SCHEMA_ID(N''schema.one'') IS NULL EXEC(N''CREATE SCHEMA [schema.one]'')'",
+            "EXEC [db]]1].sys.sp_executesql N'CREATE SEQUENCE [schema.one].[seq''name] AS DECIMAL(10, 0) START WITH 100 INCREMENT BY 5 MINVALUE 50 MAXVALUE 1000 CYCLE CACHE 20'",
+            "EXEC [db]]1].sys.sp_addextendedproperty @name=N'MS_Description', @value=N'sequence''s comment', @level0type=N'SCHEMA', @level0name=N'schema.one', @level1type=N'SEQUENCE', @level1name=N'seq''name'",
+            "EXEC [db]]1].sys.sp_addextendedproperty @name=N'MS_Description', @value=N'schema''s comment', @level0type=N'SCHEMA', @level0name=N'schema.one'",
+        ];
+        for (structures, expected) in [
+            ("database,sequence,comment", &expected[..]),
+            ("sequence,comment", &expected[1..3]),
+        ] {
+            let sqls = statement().to_sqls(&filter(structures)).unwrap();
+            assert_eq!(
+                sqls.iter().map(|(_, sql)| sql.as_str()).collect::<Vec<_>>(),
+                expected,
+                "{structures}"
+            );
+        }
     }
 
     #[test]
-    fn sequence_does_not_depend_on_database_structure_filter() {
-        let sqls = statement().to_sqls(&filter("sequence,comment")).unwrap();
-        assert_eq!(sqls.len(), 2);
-        assert!(sqls[0].0.to_string().starts_with("sequence."));
-        assert!(sqls[1].0.to_string().starts_with("sequence_comment."));
-    }
-
-    #[test]
-    fn to_sqls_preserves_no_cache() {
-        let statement = MssqlCreateSchemaStatement {
-            database_name: String::new(),
-            schema_name: "dbo".to_string(),
-            sequences: vec![MssqlSequence {
-                sequence_name: "descending".to_string(),
-                data_type: "INT".to_string(),
-                start_value: "-1".to_string(),
-                increment: "-2".to_string(),
-                minimum_value: "-101".to_string(),
-                maximum_value: "-1".to_string(),
-                is_cycling: false,
-                is_cached: false,
-                cache_size: None,
-                comments: Vec::new(),
-            }],
-            comments: Vec::new(),
-        };
-
-        assert_eq!(
-            statement.to_sqls(&filter("sequence")).unwrap()[0].1,
-            "CREATE SEQUENCE [dbo].[descending] AS INT START WITH -1 INCREMENT BY -2 MINVALUE -101 MAXVALUE -1 NO CYCLE NO CACHE"
-        );
+    fn sequence_cycle_and_cache_options() {
+        for (is_cycling, is_cached, expected) in [
+            (false, false, "NO CYCLE NO CACHE"),
+            (true, true, "CYCLE CACHE"),
+        ] {
+            let mut statement = statement();
+            statement.database_name.clear();
+            let sequence = &mut statement.sequences[0];
+            sequence.is_cycling = is_cycling;
+            sequence.is_cached = is_cached;
+            sequence.cache_size = None;
+            let sqls = statement.to_sqls(&filter("sequence")).unwrap();
+            assert_eq!(sqls.len(), 1);
+            assert_eq!(sqls[0].1, format!("CREATE SEQUENCE [schema.one].[seq'name] AS DECIMAL(10, 0) START WITH 100 INCREMENT BY 5 MINVALUE 50 MAXVALUE 1000 {expected}"));
+        }
     }
 }

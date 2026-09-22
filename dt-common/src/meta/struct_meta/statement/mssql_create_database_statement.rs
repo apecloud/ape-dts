@@ -51,59 +51,31 @@ impl MssqlCreateDatabaseStatement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{config_enums::DbType, filter_config::FilterConfig},
-        rdb_filter::RdbFilter,
-    };
+    use crate::config::filter_config::FilterConfig;
 
     #[test]
-    fn to_sqls_escapes_database_name() {
-        let statement = MssqlCreateDatabaseStatement {
-            database_name: "db]with'quote".to_string(),
-            collation_name: String::new(),
-            comments: Vec::new(),
-        };
+    fn database_sql_preserves_escaping_and_collation() {
         let filter = RdbFilter::from_config(
             &FilterConfig {
-                do_structures: "database".to_string(),
+                do_structures: "database".into(),
                 ..Default::default()
             },
             &DbType::Mssql,
         )
         .unwrap();
-
-        assert_eq!(
-            statement.to_sqls(&filter).unwrap(),
-            vec![(
-                StructKey::new(DbType::Mssql, StructKeyType::Database, ["db]with'quote"]),
-                "IF DB_ID(N'db]with''quote') IS NULL EXEC(N'CREATE DATABASE [db]]with''quote]')"
-                    .to_string(),
-            )]
-        );
-    }
-
-    #[test]
-    fn to_sqls_preserves_database_collation() {
-        let statement = MssqlCreateDatabaseStatement {
-            database_name: "test_db".to_string(),
-            collation_name: "Latin1_General_100_BIN2".to_string(),
-            comments: Vec::new(),
-        };
-        let filter = RdbFilter::from_config(
-            &FilterConfig {
-                do_structures: "database".to_string(),
-                ..Default::default()
-            },
-            &DbType::Mssql,
-        )
-        .unwrap();
-
-        assert_eq!(
-            statement.to_sqls(&filter).unwrap(),
-            vec![(
-                StructKey::new(DbType::Mssql, StructKeyType::Database, ["test_db"]),
-                "IF DB_ID(N'test_db') IS NULL EXEC(N'CREATE DATABASE [test_db] COLLATE Latin1_General_100_BIN2')".to_string(),
-            )]
-        );
+        for (name, collation, expected) in [
+            ("db]with'quote", "", "IF DB_ID(N'db]with''quote') IS NULL EXEC(N'CREATE DATABASE [db]]with''quote]')"),
+            ("test_db", "Latin1_General_100_BIN2", "IF DB_ID(N'test_db') IS NULL EXEC(N'CREATE DATABASE [test_db] COLLATE Latin1_General_100_BIN2')"),
+        ] {
+            let statement = MssqlCreateDatabaseStatement {
+                database_name: name.into(),
+                collation_name: collation.into(),
+                comments: Vec::new(),
+            };
+            assert_eq!(statement.to_sqls(&filter).unwrap(), vec![(
+                StructKey::new(DbType::Mssql, StructKeyType::Database, [name]),
+                expected.to_string(),
+            )], "{name}");
+        }
     }
 }

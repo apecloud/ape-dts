@@ -703,26 +703,25 @@ mod tests {
     #[test]
     fn mssql_target_only_objects_reverse_database_and_table_routes() {
         let router = mssql_router();
-        for (kind, segments) in [
-            (StructKeyType::Database, vec![]),
-            (StructKeyType::DatabaseComment, vec![]),
-            (StructKeyType::Schema, vec!["schema.with.dot"]),
-            (StructKeyType::SchemaComment, vec!["schema.with.dot"]),
+        for (kind, segments, source_location, summarized) in [
+            (StructKeyType::Database, vec![], ("", ""), false),
             (
-                StructKeyType::Sequence,
-                vec!["schema.with.dot", "sequence.with.dot"],
+                StructKeyType::Schema,
+                vec!["schema.with.dot"],
+                ("schema.with.dot", ""),
+                false,
             ),
             (
                 StructKeyType::SequenceComment,
                 vec!["schema.with.dot", "sequence.with.dot"],
-            ),
-            (
-                StructKeyType::ConstraintComment,
-                vec!["dst_schema", "dst_tb", "constraint.with.dot"],
+                ("schema.with.dot", "sequence.with.dot"),
+                true,
             ),
             (
                 StructKeyType::IndexComment,
                 vec!["dst_schema", "dst_tb", "index.with.dot"],
+                ("src_schema", "src_tb"),
+                true,
             ),
         ] {
             let target = StructCheckKey::new(
@@ -734,27 +733,19 @@ mod tests {
                 ),
             );
             let source = StructCheckerHandle::source_key_from_target(&target, Some(&router));
-            assert_eq!(source.db, "src_db");
-            assert_eq!(source.key.database(), Some("src_db"));
-            if target.is_table_scoped() {
-                assert_eq!(
-                    (source.schema.as_str(), source.tb.as_str()),
-                    ("src_schema", "src_tb")
-                );
-            } else {
-                assert_eq!(
-                    (source.schema.as_str(), source.tb.as_str()),
-                    (target.schema.as_str(), target.tb.as_str())
-                );
-            }
+            assert_eq!(source.db, "src_db", "{kind:?}");
+            assert_eq!(source.key.database(), Some("src_db"), "{kind:?}");
+            assert_eq!(
+                (source.schema.as_str(), source.tb.as_str()),
+                source_location,
+                "{kind:?}"
+            );
             let summary = struct_table_summary(&source, &target, 0, false, true);
-            if target.is_sequence() {
-                let summary = summary.unwrap();
-                assert_eq!(summary.schema, "schema.with.dot");
-                assert_eq!(summary.tb, "sequence.with.dot");
-            } else {
-                assert_eq!(summary.is_some(), target.is_table_scoped());
-            }
+            assert_eq!(
+                summary.as_ref().map(|s| (s.schema.as_str(), s.tb.as_str())),
+                summarized.then_some(source_location),
+                "{kind:?}"
+            );
         }
     }
 

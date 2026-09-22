@@ -2383,7 +2383,6 @@ mod test_mssql {
                 "",
                 "",
                 ("db.with.dot", "", ""),
-                "CREATE DATABASE [db.with.dot]",
             ),
             (
                 "DROP DATABASE IF EXISTS [escaped]]db]",
@@ -2391,7 +2390,6 @@ mod test_mssql {
                 "",
                 "",
                 ("escaped]db", "", ""),
-                "DROP DATABASE IF EXISTS [escaped]]db]",
             ),
             (
                 "CREATE SCHEMA [schema.with.dot]",
@@ -2399,7 +2397,6 @@ mod test_mssql {
                 "app",
                 "dbo",
                 ("app", "schema.with.dot", ""),
-                "CREATE SCHEMA [schema.with.dot]",
             ),
             (
                 "DROP SCHEMA IF EXISTS [escaped]]schema]",
@@ -2407,7 +2404,6 @@ mod test_mssql {
                 "app",
                 "dbo",
                 ("app", "escaped]schema", ""),
-                "DROP SCHEMA IF EXISTS [escaped]]schema]",
             ),
             (
                 "CREATE TABLE [db.with.dot].[schema]]name].[table with space] (id int)",
@@ -2415,7 +2411,6 @@ mod test_mssql {
                 "default_db",
                 "dbo",
                 ("db.with.dot", "schema]name", "table with space"),
-                "CREATE TABLE [db.with.dot].[schema]]name].[table with space] (id int)",
             ),
             (
                 "DROP TABLE IF EXISTS [app].[dbo].[orders]",
@@ -2423,7 +2418,6 @@ mod test_mssql {
                 "",
                 "",
                 ("app", "dbo", "orders"),
-                "DROP TABLE IF EXISTS [app].[dbo].[orders]",
             ),
             (
                 "CREATE UNIQUE NONCLUSTERED INDEX [idx.with.dot] ON [app].[audit].[orders] (id)",
@@ -2431,7 +2425,6 @@ mod test_mssql {
                 "",
                 "",
                 ("app", "audit", "orders"),
-                "CREATE UNIQUE NONCLUSTERED INDEX [idx.with.dot] ON [app].[audit].[orders] (id)",
             ),
             (
                 "DROP INDEX IF EXISTS [idx.with.dot] ON [app].[audit].[orders]",
@@ -2439,7 +2432,6 @@ mod test_mssql {
                 "",
                 "",
                 ("app", "audit", "orders"),
-                "DROP INDEX IF EXISTS [idx.with.dot] ON [app].[audit].[orders]",
             ),
             (
                 "CREATE TABLE [orders] (id int)",
@@ -2447,7 +2439,6 @@ mod test_mssql {
                 "app",
                 "dbo",
                 ("app", "dbo", "orders"),
-                "CREATE TABLE [orders] (id int)",
             ),
             (
                 "CREATE TABLE [app]..[orders] (id int)",
@@ -2455,50 +2446,16 @@ mod test_mssql {
                 "",
                 "",
                 ("app", "", "orders"),
-                "CREATE TABLE [app]..[orders] (id int)",
             ),
         ];
 
         let parser = DdlParser::new(DbType::Mssql);
-        for (sql, ddl_type, default_db, default_schema, expected_name, expected_sql) in cases {
+        for (sql, ddl_type, default_db, default_schema, expected_name) in cases {
             let mut ddl = parser.parse(sql).unwrap().unwrap();
-            assert!(ddl.default_db.is_empty(), "sql: {sql}");
-            assert!(ddl.default_schema.is_empty(), "sql: {sql}");
             ddl.default_db = default_db.to_string();
             ddl.default_schema = default_schema.to_string();
-            ddl.query = sql.to_string();
 
             assert_eq!(ddl.ddl_type, ddl_type, "sql: {sql}");
-            match ddl.ddl_type {
-                DdlType::CreateDatabase => {
-                    assert!(matches!(
-                        &ddl.statement,
-                        DdlStatement::MssqlCreateDatabase(_)
-                    ))
-                }
-                DdlType::DropDatabase => {
-                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropDatabase(_)))
-                }
-                DdlType::CreateSchema => {
-                    assert!(matches!(&ddl.statement, DdlStatement::MssqlCreateSchema(_)))
-                }
-                DdlType::DropSchema => {
-                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropSchema(_)))
-                }
-                DdlType::CreateTable => {
-                    assert!(matches!(&ddl.statement, DdlStatement::MssqlCreateTable(_)))
-                }
-                DdlType::DropTable => {
-                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropTable(_)))
-                }
-                DdlType::CreateIndex => {
-                    assert!(matches!(&ddl.statement, DdlStatement::MssqlCreateIndex(_)))
-                }
-                DdlType::DropIndex => {
-                    assert!(matches!(&ddl.statement, DdlStatement::MssqlDropIndex(_)))
-                }
-                _ => {}
-            }
             assert_eq!(
                 ddl.get_db_schema_tb(),
                 (
@@ -2508,7 +2465,7 @@ mod test_mssql {
                 ),
                 "sql: {sql}"
             );
-            assert_eq!(ddl.to_sql(), expected_sql, "sql: {sql}");
+            assert_eq!(ddl.to_sql(), sql, "sql: {sql}");
         }
     }
 

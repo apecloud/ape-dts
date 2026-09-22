@@ -55,69 +55,56 @@ mod tests {
 
     use super::*;
 
-    fn filter(config: FilterConfig) -> RdbFilter {
-        RdbFilter::from_config(&config, &DbType::Pg).unwrap()
-    }
-
-    fn router() -> RdbRouter {
-        let config = RouterConfig::Rdb {
-            schema_map: "src_schema:dst_schema".to_string(),
-            tb_map: "src_schema.src_table:dst_schema.dst_table".to_string(),
-            col_map: String::new(),
-            topic_map: String::new(),
-        };
-        RdbRouter::from_config(&config, &DbType::Pg)
-            .unwrap()
-            .unwrap()
-    }
-
     #[test]
-    fn target_filter_matches_routed_schema_and_table_by_source_names() {
-        let filter = filter(FilterConfig {
-            do_schemas: "src_schema".to_string(),
-            ..Default::default()
-        });
-        let target_filter = RdbStructFilter::for_target(filter, Some(router()));
-
-        assert!(!target_filter.filter_schema("dst_schema"));
-        assert!(!target_filter.filter_tb("dst_schema", "dst_table"));
-        assert!(target_filter.filter_schema("other_schema"));
-    }
-
-    #[test]
-    fn target_filter_preserves_source_table_rules_after_routing() {
-        let filter = filter(FilterConfig {
-            do_tbs: "src_schema.src_table,src_schema.ignored_table".to_string(),
-            ignore_tbs: "src_schema.ignored_table".to_string(),
-            ..Default::default()
-        });
-        let target_filter = RdbStructFilter::for_target(filter, Some(router()));
-
-        assert!(!target_filter.filter_tb("dst_schema", "dst_table"));
-        assert!(target_filter.filter_tb("dst_schema", "ignored_table"));
-    }
-
-    #[test]
-    fn target_filter_evaluates_patterns_in_the_source_namespace() {
-        let filter = filter(FilterConfig {
-            do_tbs: "src_*.src_*".to_string(),
-            ..Default::default()
-        });
-        let target_filter = RdbStructFilter::for_target(filter, Some(router()));
-
-        assert!(!target_filter.filter_tb("dst_schema", "dst_table"));
-    }
-
-    #[test]
-    fn source_filter_does_not_reverse_names() {
-        let filter = filter(FilterConfig {
-            do_schemas: "src_schema".to_string(),
-            ..Default::default()
-        });
-        let source_filter = RdbStructFilter::for_source(filter);
-
-        assert!(!source_filter.filter_schema("src_schema"));
-        assert!(source_filter.filter_schema("dst_schema"));
+    fn pg_filters_use_source_names_before_and_after_routing() {
+        let router = RdbRouter::from_config(
+            &RouterConfig::Rdb {
+                schema_map: "src_schema:dst_schema".into(),
+                tb_map: "src_schema.src_table:dst_schema.dst_table".into(),
+                col_map: String::new(),
+                topic_map: String::new(),
+            },
+            &DbType::Pg,
+        )
+        .unwrap()
+        .unwrap();
+        for (do_schemas, do_tbs, ignore_tbs, exclude_ignored_table) in [
+            ("src_schema", "", "", false),
+            (
+                "",
+                "src_schema.src_table,src_schema.ignored_table",
+                "src_schema.ignored_table",
+                true,
+            ),
+            ("", "src_*.src_*", "", true),
+        ] {
+            let filter = RdbFilter::from_config(
+                &FilterConfig {
+                    do_schemas: do_schemas.into(),
+                    do_tbs: do_tbs.into(),
+                    ignore_tbs: ignore_tbs.into(),
+                    ..Default::default()
+                },
+                &DbType::Pg,
+            )
+            .unwrap();
+            let source_filter = RdbStructFilter::for_source(filter.clone());
+            let target_filter = RdbStructFilter::for_target(filter, Some(router.clone()));
+            assert!(!source_filter.filter_tb("src_schema", "src_table"));
+            assert!(source_filter.filter_tb("dst_schema", "dst_table"));
+            assert!(!target_filter.filter_tb("dst_schema", "dst_table"));
+            assert_eq!(
+                target_filter.filter_tb("dst_schema", "ignored_table"),
+                exclude_ignored_table,
+                "{do_schemas}/{do_tbs}/{ignore_tbs}"
+            );
+            if !do_schemas.is_empty() {
+                assert!(!source_filter.filter_schema("src_schema"));
+                assert!(source_filter.filter_schema("dst_schema"));
+                assert!(!target_filter.filter_schema("dst_schema"));
+                assert!(target_filter.filter_schema("other_schema"));
+            }
+        }
     }
 
     #[test]

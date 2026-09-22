@@ -2192,11 +2192,24 @@ parallel_size=2
     }
 
     #[test]
-    fn mssql_struct_config_is_loaded() {
-        let config = load_temp_task_config(
-            r#"[extractor]
+    fn mssql_struct_task_modes() {
+        for (extract_type, sink_type, expected) in [
+            (
+                "struct",
+                "struct",
+                Some(TaskType::new(TaskKind::Struct, None)),
+            ),
+            (
+                "struct",
+                "check",
+                Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone))),
+            ),
+            ("snapshot", "check", None),
+        ] {
+            let input = format!(
+                r#"[extractor]
 db_type=mssql
-extract_type=struct
+extract_type={extract_type}
 url=server=tcp:127.0.0.1,1433;database=ape_dts
 username=sa
 password=Password123!
@@ -2205,99 +2218,46 @@ db_batch_size=11
 
 [sinker]
 db_type=mssql
-sink_type=struct
+sink_type={sink_type}
 url=server=tcp:127.0.0.1,1434;database=ape_dts
 username=sa
 password=Password123!
 ssl_mode=disable
 conflict_policy=ignore
-"#,
-        )
-        .expect("MSSQL struct config should be accepted");
-
-        assert_eq!(
-            config.task_type(),
-            Some(TaskType::new(TaskKind::Struct, None))
-        );
-        assert!(matches!(
-            config.extractor,
-            ExtractorConfig::MssqlStruct {
-                db_batch_size: 11,
-                ..
+"#
+            );
+            let result = load_temp_task_config(&input);
+            let Some(expected) = expected else {
+                assert!(result
+                    .err()
+                    .expect("snapshot check must be rejected")
+                    .to_string()
+                    .contains("checker is not supported"));
+                continue;
+            };
+            let config =
+                result.unwrap_or_else(|error| panic!("{extract_type}/{sink_type}: {error}"));
+            assert_eq!(config.task_type(), Some(expected), "{sink_type}");
+            assert!(matches!(
+                config.extractor,
+                ExtractorConfig::MssqlStruct {
+                    db_batch_size: 11,
+                    ..
+                }
+            ));
+            if sink_type == "struct" {
+                assert!(matches!(
+                    config.sinker,
+                    SinkerConfig::MssqlStruct {
+                        conflict_policy: ConflictPolicyEnum::Ignore,
+                        ..
+                    }
+                ));
+            } else {
+                assert_eq!(config.checker_target().unwrap().db_type, DbType::Mssql);
+                assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
             }
-        ));
-        assert!(matches!(
-            config.sinker,
-            SinkerConfig::MssqlStruct {
-                conflict_policy: ConflictPolicyEnum::Ignore,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn mssql_struct_check_config_is_loaded() {
-        let config = load_temp_task_config(
-            r#"[extractor]
-db_type=mssql
-extract_type=struct
-url=server=tcp:127.0.0.1,1433;database=ape_dts
-username=sa
-password=Password123!
-ssl_mode=disable
-
-[sinker]
-db_type=mssql
-sink_type=check
-url=server=tcp:127.0.0.1,1434;database=ape_dts
-username=sa
-password=Password123!
-ssl_mode=disable
-app_name=mssql-struct-check
-connection_timeout_secs=9
-max_connections=3
-"#,
-        )
-        .expect("MSSQL standalone struct check config should be accepted");
-
-        assert_eq!(
-            config.task_type(),
-            Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone)))
-        );
-        assert_eq!(
-            config.checker_target().expect("checker target").db_type,
-            DbType::Mssql
-        );
-        assert!(config.checker.is_some());
-        assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
-    }
-
-    #[test]
-    fn mssql_snapshot_check_config_remains_unsupported() {
-        let result = load_temp_task_config(
-            r#"[extractor]
-db_type=mssql
-extract_type=snapshot
-url=sqlserver://127.0.0.1:1433?database=ape_dts
-username=sa
-password=Password123!
-ssl_mode=disable
-
-[sinker]
-db_type=mssql
-sink_type=check
-url=server=tcp:127.0.0.1,1434;database=ape_dts
-username=sa
-password=Password123!
-ssl_mode=disable
-
-[parallelizer]
-parallel_type=snapshot
-parallel_size=1
-"#,
-        );
-
-        assert!(result.is_err());
+        }
     }
 
     #[test]
