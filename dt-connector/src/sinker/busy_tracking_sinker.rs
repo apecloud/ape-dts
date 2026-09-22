@@ -26,7 +26,7 @@ impl BusyTrackingSinker {
 #[async_trait]
 impl Sinker for BusyTrackingSinker {
     async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
-        let _guard = self.recorder.enter();
+        let _guard = self.recorder.enter_with_timer();
         self.inner
             .sink_dml(data, batch)
             .await

@@ -1,10 +1,12 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 
+use super::counter::Counter;
 use super::counter_type::CounterType;
 use super::monitor::Monitor;
+use super::task_metrics::TaskMetricValue;
 use super::time_window_counter::WindowCounterStatistics;
 use super::FlushableMonitor;
 use crate::log_monitor;
@@ -15,7 +17,7 @@ pub struct GroupMonitor {
     name: String,
     description: String,
     monitors: DashMap<String, Arc<Monitor>>,
-    no_window_counter_statistics_map: DashMap<CounterType, DashMap<AggregateType, u64>>,
+    no_window_counter_statistics_map: DashMap<CounterType, Counter>,
 }
 
 #[async_trait]
@@ -45,16 +47,22 @@ impl GroupMonitor {
     }
 
     pub fn settle_no_window_monitor(&self, monitor: &Arc<Monitor>) {
-        Self::refresh_no_window_counter_statistics_map(
-            &self.no_window_counter_statistics_map,
-            monitor,
-        );
+        for entry in monitor.no_window_counters.iter() {
+            self.no_window_counter_statistics_map
+                .entry(entry.key().clone())
+                .and_modify(|counter| counter.merge(entry.value()))
+                .or_insert_with(|| entry.value().clone());
+        }
     }
 
     pub async fn flush(&self) {
         let window_counter_statistics_map: DashMap<CounterType, Vec<WindowCounterStatistics>> =
             DashMap::new();
-        let no_window_counter_statistics_map = self.no_window_counter_statistics_map.clone();
+        let mut no_window_counter_statistics_map: HashMap<CounterType, Counter> = self
+            .no_window_counter_statistics_map
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
 
         let monitors: Vec<Arc<Monitor>> = self
             .monitors
@@ -86,27 +94,31 @@ impl GroupMonitor {
                 }
             }
 
-            // Tombstoned monitors already settle their no-window counters during unregister.
+            // Completed monitors have already settled their cumulative counters.
             if !monitor.is_tombstone() {
-                Self::refresh_no_window_counter_statistics_map(
-                    &no_window_counter_statistics_map,
-                    &monitor,
-                );
+                for counter in monitor.no_window_counters.iter() {
+                    no_window_counter_statistics_map
+                        .entry(counter.key().clone())
+                        .and_modify(|total| total.merge(counter.value()))
+                        .or_insert_with(|| counter.value().clone());
+                }
             }
         }
 
         for (counter_type, statistics_vec) in window_counter_statistics_map {
             let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
             for aggregate_type in counter_type.get_aggregate_types() {
-                let mut aggregate_value = 0;
+                let mut aggregate_value = TaskMetricValue::default();
                 for statistics in statistics_vec.iter() {
                     aggregate_value += match aggregate_type {
+                        AggregateType::Latest => statistics.latest,
                         AggregateType::AvgByCount => statistics.avg_by_count,
                         AggregateType::AvgBySec => statistics.avg_by_sec,
                         AggregateType::Sum => statistics.sum,
                         AggregateType::MaxBySec => statistics.max_by_sec,
                         AggregateType::MaxByCount => statistics.max,
-                        AggregateType::Count => statistics.count,
+                        AggregateType::MinByCount => statistics.min,
+                        AggregateType::Count => statistics.count.into(),
                         _ => continue,
                     };
                 }
@@ -115,46 +127,11 @@ impl GroupMonitor {
             log_monitor!("{}", log);
         }
 
-        for entry in no_window_counter_statistics_map.iter() {
-            let (counter_type, aggregate_value_map) = entry.pair();
-            let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
-            for aggregate_type in counter_type.get_aggregate_types().iter() {
-                if let Some(aggregate_value) = aggregate_value_map.get(aggregate_type).map(|v| *v) {
-                    log = format!("{} | {}={}", log, aggregate_type, aggregate_value);
-                } else {
-                    log = format!("{} | {}={}", log, aggregate_type, 0);
-                }
-            }
-            log_monitor!("{}", log);
-        }
-    }
-
-    fn refresh_no_window_counter_statistics_map(
-        no_window_counter_statistics_map: &DashMap<CounterType, DashMap<AggregateType, u64>>,
-        monitor: &Arc<Monitor>,
-    ) {
-        let no_window_counter_types = monitor
-            .no_window_counters
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect::<Vec<_>>();
-        for counter_type in no_window_counter_types {
-            if let Some(counter) = monitor.no_window_counters.get(&counter_type) {
-                for aggregate_type in counter_type.get_aggregate_types().iter() {
-                    let aggregate_value = match aggregate_type {
-                        AggregateType::Latest => counter.value,
-                        AggregateType::AvgByCount => counter.avg_by_count(),
-                        _ => continue,
-                    };
-
-                    no_window_counter_statistics_map
-                        .entry(counter_type.to_owned())
-                        .or_default()
-                        .entry(aggregate_type.to_owned())
-                        .and_modify(|v| *v += aggregate_value)
-                        .or_insert(aggregate_value);
-                }
-            }
+        for (counter_type, counter) in no_window_counter_statistics_map {
+            log_monitor!(
+                "{}",
+                counter.log_line(&self.name, &self.description, &counter_type)
+            );
         }
     }
 }

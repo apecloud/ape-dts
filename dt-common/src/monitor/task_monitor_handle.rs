@@ -6,8 +6,8 @@ use crate::{
     monitor::{
         counter_type::CounterType,
         monitor::Monitor,
-        sinker_worker_metrics::SinkerWorkerMetrics,
-        task_metrics::TaskMetricsType,
+        sinker_worker_metrics::{PipelineSinkMetricsGuard, SinkerWorkerMetrics},
+        task_metrics::{TaskMetricValue, TaskMetricsType},
         task_monitor::{MonitorType, TaskMonitor},
     },
     utils::limit_queue::LimitedQueue,
@@ -78,9 +78,57 @@ impl TaskMonitorHandle {
             .unwrap_or_default()
     }
 
+    pub fn pipeline_sink_monitor(&self) -> Option<Arc<Monitor>> {
+        let monitor = self.pipeline_monitor()?;
+        for counter_type in [
+            CounterType::PipelineSinkOperationsTotal,
+            CounterType::PipelineSinkParallelUtilization,
+            CounterType::PipelineSinkDurationSeconds,
+        ] {
+            monitor.init_counter(counter_type);
+        }
+        Some(monitor)
+    }
+
+    /// Record one successful sink operation after all its workers have completed.
+    pub async fn record_pipeline_sink_metrics(monitor: &Monitor, guard: PipelineSinkMetricsGuard) {
+        let Some((duration, utilization)) = guard.finish() else {
+            return;
+        };
+        monitor
+            .add_counter(CounterType::PipelineSinkParallelUtilization, utilization)
+            .await;
+        monitor
+            .add_counter(
+                CounterType::PipelineSinkDurationSeconds,
+                duration.as_secs_f64(),
+            )
+            .await;
+        monitor
+            .add_counter(CounterType::PipelineSinkOperationsTotal, 1)
+            .await;
+    }
+
     pub fn is_snapshot_task(&self) -> bool {
         self.task_type()
             .is_some_and(|task_type| task_type.kind == TaskKind::Snapshot)
+    }
+
+    pub fn partitioner_monitor(&self) -> Option<Arc<Monitor>> {
+        if !self.is_snapshot_task() {
+            return None;
+        }
+        let monitor = self.pipeline_monitor()?;
+        monitor.init_counter(CounterType::PartitionerDurationSeconds);
+        Some(monitor)
+    }
+
+    fn pipeline_monitor(&self) -> Option<Arc<Monitor>> {
+        // TaskRunner registers the pipeline before starting workers and keeps it
+        // registered through the final flush.
+        self.task_monitor
+            .as_ref()?
+            .get_monitor(&self.default_task_id, &MonitorType::Pipeline)
     }
 
     pub fn task_id_from_db_schema_tb(db: &str, schema: &str, tb: &str) -> String {
@@ -146,7 +194,12 @@ impl TaskMonitorHandle {
         &self.default_task_id
     }
 
-    pub async fn add_counter(&self, task_id: &str, counter_type: CounterType, value: u64) -> &Self {
+    pub async fn add_counter(
+        &self,
+        task_id: &str,
+        counter_type: CounterType,
+        value: impl Into<TaskMetricValue> + Send,
+    ) -> &Self {
         if let Some(task_monitor) = &self.task_monitor {
             task_monitor
                 .add_counter(task_id, self.monitor_type.clone(), counter_type, value)
@@ -155,7 +208,12 @@ impl TaskMonitorHandle {
         self
     }
 
-    pub fn set_counter(&self, task_id: &str, counter_type: CounterType, value: u64) -> &Self {
+    pub fn set_counter(
+        &self,
+        task_id: &str,
+        counter_type: CounterType,
+        value: impl Into<TaskMetricValue> + Send,
+    ) -> &Self {
         if let Some(task_monitor) = &self.task_monitor {
             task_monitor.set_counter(task_id, self.monitor_type.clone(), counter_type, value);
         }
@@ -166,7 +224,7 @@ impl TaskMonitorHandle {
         &self,
         task_id: &str,
         counter_type: CounterType,
-        value: u64,
+        value: impl Into<TaskMetricValue> + Send,
         count: u64,
     ) -> &Self {
         if let Some(task_monitor) = &self.task_monitor {
