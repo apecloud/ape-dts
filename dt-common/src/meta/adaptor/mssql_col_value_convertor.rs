@@ -10,7 +10,7 @@ use tiberius::{
 
 use crate::{
     config::config_enums::DbType,
-    error::DtError,
+    error::{DtError, DtResultExt},
     meta::{col_value::ColValue, mssql::mssql_col_type::MssqlColType},
 };
 
@@ -25,6 +25,7 @@ pub(super) enum MssqlColValueKind {
     Double,
     Decimal,
     String,
+    Spatial,
     Blob,
     Date,
     Time,
@@ -44,6 +45,7 @@ impl MssqlColValueKind {
             Self::Double => "Double",
             Self::Decimal => "Decimal",
             Self::String => "String",
+            Self::Spatial => "Spatial",
             Self::Blob => "Blob",
             Self::Date => "Date",
             Self::Time => "Time",
@@ -64,6 +66,7 @@ impl MssqlColValueKind {
                 | (Self::Double, ColValue::Double(_))
                 | (Self::Decimal, ColValue::Decimal(_))
                 | (Self::String, ColValue::String(_))
+                | (Self::Spatial, ColValue::Spatial { .. })
                 | (Self::Blob, ColValue::Blob(_))
                 | (Self::Date, ColValue::Date(_))
                 | (Self::Time, ColValue::Time(_))
@@ -217,6 +220,7 @@ impl MssqlColValueConvertor {
                     Self::try_get_as::<&str>(row, index, |value| ColValue::String(value.to_owned()))
                 }
             },
+            MssqlColValueKind::Spatial => Self::try_get_and_then::<&str>(row, index, parse_spatial),
             MssqlColValueKind::Blob => {
                 Self::try_get_as::<&[u8]>(row, index, |value| ColValue::Blob(value.to_vec()))
             }
@@ -249,6 +253,20 @@ impl MssqlColValueConvertor {
         Ok(value.map(map).unwrap_or(ColValue::None))
     }
 
+    fn try_get_and_then<'a, T>(
+        row: &'a Row,
+        index: usize,
+        map: impl FnOnce(T) -> anyhow::Result<ColValue>,
+    ) -> anyhow::Result<ColValue>
+    where
+        T: FromSql<'a>,
+    {
+        match row.try_get::<T, _>(index)? {
+            Some(value) => map(value),
+            None => Ok(ColValue::None),
+        }
+    }
+
     pub fn from_str(col_type: &MssqlColType, value: &str) -> anyhow::Result<ColValue> {
         let parsed = match col_value_kind(col_type) {
             MssqlColValueKind::Bool => ColValue::Bool(parse_bool(value).ok_or_else(|| {
@@ -269,6 +287,7 @@ impl MssqlColValueConvertor {
                 MssqlColType::Xml => ColValue::String(XmlData::new(value).to_string()),
                 _ => ColValue::String(value.to_string()),
             },
+            MssqlColValueKind::Spatial => parse_spatial(value)?,
             MssqlColValueKind::Blob => ColValue::Blob(hex::decode(value)?),
             MssqlColValueKind::Date => ColValue::Date(
                 NaiveDate::parse_from_str(value, "%Y-%m-%d")?
@@ -319,6 +338,9 @@ impl MssqlColValueConvertor {
                 MssqlColType::Xml => Self::column_data_as(value, parse_xml),
                 _ => Self::column_data_as(value, as_text),
             },
+            MssqlColValueKind::Spatial => bail!(DtError::InvariantViolated(
+                "MSSQL spatial values require separate WKT and SRID query parameters".to_string()
+            )),
             MssqlColValueKind::Blob => Self::column_data_as(value, as_binary),
             MssqlColValueKind::Date => Self::column_data_as(value, parse_date),
             MssqlColValueKind::Time => Self::column_data_as(value, parse_time),
@@ -389,10 +411,13 @@ pub(super) fn col_value_kind(col_type: &MssqlColType) -> MssqlColValueKind {
         | MssqlColType::Text
         | MssqlColType::NText
         | MssqlColType::Guid
-        | MssqlColType::Xml => MssqlColValueKind::String,
-        MssqlColType::BigVarBin | MssqlColType::BigBinary | MssqlColType::Image => {
-            MssqlColValueKind::Blob
-        }
+        | MssqlColType::Xml
+        | MssqlColType::HierarchyId => MssqlColValueKind::String,
+        MssqlColType::Geometry | MssqlColType::Geography => MssqlColValueKind::Spatial,
+        MssqlColType::BigVarBin
+        | MssqlColType::BigBinary
+        | MssqlColType::Image
+        | MssqlColType::AssemblyUdt => MssqlColValueKind::Blob,
         MssqlColType::Daten => MssqlColValueKind::Date,
         MssqlColType::Timen => MssqlColValueKind::Time,
         MssqlColType::Datetime4
@@ -401,6 +426,29 @@ pub(super) fn col_value_kind(col_type: &MssqlColType) -> MssqlColValueKind {
         | MssqlColType::Datetime2 => MssqlColValueKind::DateTime,
         MssqlColType::DatetimeOffsetn => MssqlColValueKind::Timestamp,
     }
+}
+
+fn parse_spatial(value: &str) -> anyhow::Result<ColValue> {
+    let (srid, wkt) = value.split_once('|').ok_or_else(|| {
+        DtError::DatabaseInvariant(
+            DbType::Mssql,
+            format!("spatial transfer value is missing the SRID separator: {value}"),
+        )
+    })?;
+    if wkt.is_empty() {
+        bail!(DtError::DatabaseInvariant(
+            DbType::Mssql,
+            "spatial transfer value has empty WKT".to_string()
+        ));
+    }
+    let srid = srid.parse::<i32>().dt_error(DtError::DatabaseInvariant(
+        DbType::Mssql,
+        format!("spatial transfer value has invalid SRID {srid}"),
+    ))?;
+    Ok(ColValue::Spatial {
+        srid,
+        wkt: wkt.to_string(),
+    })
 }
 
 pub(super) fn invalid_value(
@@ -694,6 +742,37 @@ mod tests {
         assert_eq!(
             col_value_kind(&MssqlColType::Datetimen),
             MssqlColValueKind::DateTime
+        );
+        for col_type in [MssqlColType::Geometry, MssqlColType::Geography] {
+            assert_eq!(col_value_kind(&col_type), MssqlColValueKind::Spatial);
+        }
+        assert_eq!(
+            col_value_kind(&MssqlColType::HierarchyId),
+            MssqlColValueKind::String
+        );
+        assert_eq!(
+            col_value_kind(&MssqlColType::AssemblyUdt),
+            MssqlColValueKind::Blob
+        );
+    }
+
+    #[test]
+    fn parses_spatial_transfer_values() {
+        let expected = ColValue::Spatial {
+            srid: 4326,
+            wkt: "POINT (1.25 -2.5 3.5 4.5)".to_string(),
+        };
+        assert_eq!(
+            MssqlColValueConvertor::from_str(
+                &MssqlColType::Geometry,
+                "4326|POINT (1.25 -2.5 3.5 4.5)"
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(MssqlColValueConvertor::from_str(&MssqlColType::Geography, "4326").is_err());
+        assert!(
+            MssqlColValueConvertor::from_str(&MssqlColType::Geography, "x|POINT (0 0)").is_err()
         );
     }
 

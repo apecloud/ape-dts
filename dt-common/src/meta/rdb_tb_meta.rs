@@ -7,6 +7,14 @@ use crate::{
     meta::{col_value::ColValue, foreign_key::ForeignKey, order_key::OrderKey, position::Position},
 };
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, strum::Display)]
+#[strum(serialize_all = "UPPERCASE")]
+pub enum SortDirection {
+    #[default]
+    Asc,
+    Desc,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RdbTbMeta {
     /// Physical database. Empty until database-aware metadata lookup is enabled.
@@ -20,6 +28,7 @@ pub struct RdbTbMeta {
     pub col_origin_type_map: HashMap<String, String>,
     pub key_map: HashMap<String, Vec<String>>,
     pub order_cols: Vec<String>,
+    pub order_col_attrs: HashMap<String, SortDirection>,
     pub partition_col: String,
     pub id_cols: Vec<String>,
     pub foreign_keys: Vec<ForeignKey>,

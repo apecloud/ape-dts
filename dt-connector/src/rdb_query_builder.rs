@@ -13,6 +13,7 @@ use dt_common::{
         col_value::ColValue,
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
         pg::pg_tb_meta::PgTbMeta,
+        rdb_meta_manager::RDB_PRIMARY_KEY,
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
         row_type::RowType,
@@ -366,7 +367,7 @@ impl RdbQueryBuilder<'_> {
         key_cols: &HashSet<&String>,
     ) -> anyhow::Result<RdbQueryInfo<'a>> {
         let mut query_info = self.get_insert_query(row_data, placeholder)?;
-        let primary_key_cols = self.rdb_tb_meta.key_map.get("primary");
+        let primary_key_cols = self.rdb_tb_meta.key_map.get(RDB_PRIMARY_KEY);
         let after = row_data.require_after()?;
         let mut index = query_info.cols.len() + 1;
         let mut set_pairs = Vec::new();
@@ -724,7 +725,7 @@ impl RdbQueryBuilder<'_> {
                     .context("mysql table meta missing when building mysql extract cols")?
                     .get_col_type(col)?;
                 let extract_col = if col_type.is_spatial() {
-                    SqlUtil::mysql_spatial_as_wkb_expr(&self.escape(col), &self.escape(col))
+                    SqlUtil::mysql_spatial_as_text_expr(&self.escape(col), &self.escape(col))
                 } else {
                     self.escape(col)
                 };
@@ -864,6 +865,9 @@ impl RdbQueryBuilder<'_> {
             .as_ref()
             .context("mysql table meta missing while formatting mysql sql value")?;
         let col_type = mysql_meta.get_col_type(col)?;
+        if let ColValue::Spatial { srid, wkt } = col_value {
+            return Ok(SqlUtil::mysql_spatial_from_text_expr(wkt, *srid));
+        }
         let (value, is_hex_str) = match col_value {
             // varchar, char, tinytext, mediumtext, longtext, text
             ColValue::RawString(v) => SqlUtil::binary_to_str(v),
@@ -881,14 +885,10 @@ impl RdbQueryBuilder<'_> {
         };
 
         if is_hex_str {
-            if col_type.is_spatial() {
-                return Ok(SqlUtil::mysql_spatial_from_wkb_hex_expr(&value));
-            }
             return Ok(format!("x'{}'", value));
         }
 
         let is_str = match col_type {
-            col_type if col_type.is_spatial() => false,
             MysqlColType::DateTime { .. }
             | MysqlColType::Time { .. }
             | MysqlColType::Date { .. }
@@ -925,7 +925,7 @@ impl RdbQueryBuilder<'_> {
 
         if let Some(tb_meta) = self.mysql_tb_meta {
             if tb_meta.get_col_type(col)?.is_spatial() {
-                return Ok(SqlUtil::mysql_spatial_from_wkb_placeholder_expr());
+                return Ok(SqlUtil::mysql_spatial_from_text_placeholder_expr());
             }
         }
 
@@ -950,7 +950,7 @@ impl RdbQueryBuilder<'_> {
     }
 
     fn check_primary_key_changed(&self, row_data: &RowData) -> anyhow::Result<bool> {
-        let Some(primary_key_cols) = self.rdb_tb_meta.key_map.get("primary") else {
+        let Some(primary_key_cols) = self.rdb_tb_meta.key_map.get(RDB_PRIMARY_KEY) else {
             return Ok(false);
         };
         if self.rdb_tb_meta.id_cols.len() != primary_key_cols.len()
@@ -974,12 +974,13 @@ impl RdbQueryBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     use dt_common::meta::{
         col_value::ColValue,
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
         pg::{pg_col_type::PgColType, pg_tb_meta::PgTbMeta, pg_value_type::PgValueType},
+        rdb_meta_manager::RDB_PRIMARY_KEY,
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
         row_type::RowType,
@@ -1028,26 +1029,30 @@ mod tests {
 
         MysqlTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
-                key_map: HashMap::new(),
                 order_cols: vec!["id".to_string()],
                 partition_col: "id".to_string(),
                 id_cols: vec!["id".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             col_type_map,
         }
     }
 
+    fn build_mysql_spatial_tb_meta() -> MysqlTbMeta {
+        let mut tb_meta = build_mysql_tb_meta();
+        tb_meta.basic.cols.push("shape".to_string());
+        tb_meta
+            .col_type_map
+            .insert("shape".to_string(), MysqlColType::Point);
+        tb_meta
+    }
+
     fn build_pg_tb_meta() -> PgTbMeta {
         let mut key_map = HashMap::new();
-        key_map.insert("primary".to_string(), vec!["id".to_string()]);
+        key_map.insert(RDB_PRIMARY_KEY.to_string(), vec!["id".to_string()]);
         key_map.insert("uk_code".to_string(), vec!["code".to_string()]);
 
         let mut col_type_map = HashMap::new();
@@ -1057,18 +1062,14 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
                 key_map,
                 order_cols: vec!["id".to_string()],
                 partition_col: "id".to_string(),
                 id_cols: vec!["id".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 1,
             col_type_map,
@@ -1086,18 +1087,14 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
                 key_map,
                 order_cols: vec!["code".to_string()],
                 partition_col: "code".to_string(),
                 id_cols: vec!["code".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 1,
             col_type_map,
@@ -1118,18 +1115,12 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "t1".to_string(),
                 cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                col_origin_type_map: HashMap::new(),
-                key_map: HashMap::new(),
-                order_cols: vec![],
                 partition_col: "id".to_string(),
                 id_cols: vec!["id".to_string(), "code".to_string(), "name".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 1,
             col_type_map,
@@ -1142,18 +1133,12 @@ mod tests {
 
         PgTbMeta {
             basic: RdbTbMeta {
-                db: String::new(),
                 schema: "public".to_string(),
                 tb: "bit_t1".to_string(),
                 cols: vec!["bits".to_string()],
-                col_origin_type_map: HashMap::new(),
-                key_map: HashMap::new(),
-                order_cols: vec![],
                 partition_col: "bits".to_string(),
                 id_cols: vec!["bits".to_string()],
-                foreign_keys: vec![],
-                ref_by_foreign_keys: vec![],
-                nullable_cols: HashSet::new(),
+                ..Default::default()
             },
             oid: 2,
             col_type_map,
@@ -1187,6 +1172,18 @@ mod tests {
                 Some(after),
             )
         }
+    }
+
+    fn build_spatial_insert_row_data() -> RowData {
+        let mut row_data = build_insert_row_data(false);
+        row_data.require_after_mut().unwrap().insert(
+            "shape".to_string(),
+            ColValue::Spatial {
+                srid: 4326,
+                wkt: "POINT(1 2)".to_string(),
+            },
+        );
+        row_data
     }
 
     fn build_bit_insert_row_data() -> RowData {
@@ -1388,6 +1385,45 @@ mod tests {
         assert_eq!(select_query_info.cols, tb_meta.basic.id_cols);
         assert_eq!(select_query_info.binds.len(), 2);
         let _ = builder.create_mysql_query(&select_query_info).unwrap();
+    }
+
+    #[test]
+    fn test_mysql_spatial_queries_preserve_srid() {
+        let tb_meta = build_mysql_spatial_tb_meta();
+        let builder = RdbQueryBuilder::new_for_mysql(&tb_meta, None);
+        let row_data = build_spatial_insert_row_data();
+
+        assert_eq!(
+            builder.build_extract_cols_str().unwrap(),
+            "`id`,`code`,`name`,CONCAT(ST_SRID(`shape`), '|', ST_AsText(`shape`)) AS `shape`"
+        );
+
+        let query_info = builder.get_query_info(&row_data, false).unwrap();
+        assert_eq!(
+            query_info.sql,
+            "INSERT INTO `public`.`t1`(`id`,`code`,`name`,`shape`) VALUES(?,?,?,ST_GeomFromText(?, ?))"
+        );
+        assert_eq!(query_info.binds.len(), 4);
+        let _ = builder.create_mysql_query(&query_info).unwrap();
+
+        assert_eq!(
+            builder.get_query_sql(&row_data, false).unwrap(),
+            "INSERT INTO `public`.`t1`(`id`,`code`,`name`,`shape`) VALUES(1,'xx','n1',ST_GeomFromText('POINT(1 2)', 4326));"
+        );
+
+        let data = vec![
+            build_spatial_insert_row_data(),
+            build_spatial_insert_row_data(),
+        ];
+        let (query_info, _) = builder
+            .get_batch_insert_query(&data, 0, data.len(), false)
+            .unwrap();
+        assert_eq!(
+            query_info.sql,
+            "INSERT INTO `public`.`t1`(`id`,`code`,`name`,`shape`) VALUES(?,?,?,ST_GeomFromText(?, ?)),(?,?,?,ST_GeomFromText(?, ?))"
+        );
+        assert_eq!(query_info.binds.len(), 8);
+        let _ = builder.create_mysql_query(&query_info).unwrap();
     }
 
     #[test]

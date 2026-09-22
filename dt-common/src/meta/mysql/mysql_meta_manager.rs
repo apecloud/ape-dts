@@ -16,6 +16,24 @@ pub struct MysqlMetaManager {
 }
 
 impl MysqlMetaManager {
+    pub fn get_key_scores(tb_meta: &MysqlTbMeta) -> anyhow::Result<HashMap<String, u32>> {
+        let mut scores = HashMap::new();
+        for (key, cols) in &tb_meta.basic.key_map {
+            if cols.is_empty() {
+                continue;
+            }
+            let mut score = Some(0);
+            for col in cols {
+                let weight = tb_meta.get_col_type(col)?.order_key_weight();
+                score = score.zip(weight).map(|(total, weight)| total + weight);
+            }
+            if let Some(score) = score {
+                scores.insert(key.clone(), score);
+            }
+        }
+        Ok(scores)
+    }
+
     pub async fn new(conn_pool: Pool<MySql>) -> anyhow::Result<Self> {
         Self::new_mysql_compatible(conn_pool, DbType::Mysql).await
     }

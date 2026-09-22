@@ -1,3 +1,6 @@
+USE [ape_dts_col_value_conversion_source];
+GO
+
 INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[bit_value] VALUES
     (1, 0), (2, 1), (3, 1), (4, NULL);
 INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[tinyint_value] VALUES
@@ -129,4 +132,24 @@ INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[offset_value] VALUES
     (4, NULL);
 INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[rowversion_value] ([case_id]) VALUES
     (1), (2), (3), (4);
+INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[geometry_value] VALUES
+    (1, geometry::STGeomFromText(N'POINT (1.25 -2.5 3.5 4.5)', 4326)),
+    (2, geometry::STGeomFromText(N'LINESTRING (0 0, 3 4, -5 6)', 0)),
+    (3, geometry::STGeomFromText(N'POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))', 3857)),
+    (4, NULL);
+INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[geography_value] VALUES
+    (1, geography::STGeomFromText(N'POINT (-122.360 47.656 3.5 4.5)', 4326)),
+    (2, geography::STGeomFromText(N'LINESTRING (-122.360 47.656, -122.343 47.656)', 4326)),
+    (3, geography::STGeomFromText(N'POINT (0 0)', 4326)),
+    (4, NULL);
+INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[hierarchyid_value] VALUES
+    (1, hierarchyid::Parse(N'/1/2/')),
+    (2, hierarchyid::Parse(N'/1/2.5/3/')),
+    (3, hierarchyid::Parse(N'/9/')),
+    (4, NULL);
+INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[bigvariant_value] VALUES
+    (1, dbo.BigVariantFromString(N'BigVariant Unicode 中文')),
+    (2, dbo.BigVariantFromBinary(0x000102030405FEFF)),
+    (3, dbo.BigVariantFromVariant(CONVERT(sql_variant, CONVERT(decimal(20, 6), '-12345678901234.123456')))),
+    (4, NULL);
 GO

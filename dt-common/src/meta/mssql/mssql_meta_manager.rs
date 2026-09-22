@@ -13,8 +13,8 @@ use crate::{
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
         ddl_meta::ddl_data::DdlData,
-        rdb_meta_manager::{RdbMetaManager, RDB_PRIMARY_KEY_FLAG},
-        rdb_tb_meta::RdbTbMeta,
+        rdb_meta_manager::{RdbMetaManager, RDB_PRIMARY_KEY},
+        rdb_tb_meta::{RdbTbMeta, SortDirection},
         row_data::RowData,
     },
     utils::sql_util::SqlUtil,
@@ -37,11 +37,14 @@ SELECT
     c.is_nullable,
     c.is_identity,
     c.is_computed,
-    c.generated_always_type
+    c.generated_always_type,
+    user_type.is_assembly_type,
+    user_type_schema.name AS user_type_schema_name
 FROM {catalog}sys.tables AS t
 JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
 JOIN {catalog}sys.columns AS c ON c.object_id = t.object_id
 JOIN {catalog}sys.types AS user_type ON user_type.user_type_id = c.user_type_id
+JOIN {catalog}sys.schemas AS user_type_schema ON user_type_schema.schema_id = user_type.schema_id
 LEFT JOIN {catalog}sys.types AS system_type
   ON system_type.system_type_id = c.system_type_id
  AND system_type.user_type_id = system_type.system_type_id
@@ -55,6 +58,7 @@ const TABLE_KEYS_SQL: &str = r#"
 SELECT
     i.name AS index_name,
     i.is_primary_key,
+    ic.is_descending_key,
     c.name AS column_name
 FROM {catalog}sys.tables AS t
 JOIN {catalog}sys.schemas AS s ON s.schema_id = t.schema_id
@@ -149,33 +153,27 @@ impl MssqlMetaManager {
                 return Err(Self::table_not_found(db, schema, tb));
             }
 
-            let key_map = self.parse_keys(db, schema, tb).await?;
-            let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
-            self.cache.insert(
-                cache_key.clone(),
-                MssqlTbMeta {
-                    basic: RdbTbMeta {
-                        db: db.to_string(),
-                        schema: schema.to_string(),
-                        tb: tb.to_string(),
-                        cols,
-                        nullable_cols,
-                        col_origin_type_map,
-                        key_map,
-                        order_cols,
-                        partition_col,
-                        id_cols,
-                        foreign_keys: vec![],
-                        ref_by_foreign_keys: vec![],
-                    },
-                    col_type_map,
-                    identity_col,
-                    computed_cols,
-                    generated_always_type_map,
-                    rowversion_cols,
+            let (key_map, key_col_attrs) = self.parse_keys(db, schema, tb).await?;
+            let mut tb_meta = MssqlTbMeta {
+                basic: RdbTbMeta {
+                    db: db.to_string(),
+                    schema: schema.to_string(),
+                    tb: tb.to_string(),
+                    cols,
+                    nullable_cols,
+                    col_origin_type_map,
+                    key_map,
+                    ..Default::default()
                 },
-            );
+                col_type_map,
+                identity_col,
+                computed_cols,
+                generated_always_type_map,
+                rowversion_cols,
+            };
+            let key_scores = Self::get_key_scores(&tb_meta)?;
+            RdbMetaManager::set_order_cols(&mut tb_meta.basic, &key_scores, key_col_attrs)?;
+            self.cache.insert(cache_key.clone(), tb_meta);
         }
 
         self.cache
@@ -312,6 +310,8 @@ impl MssqlMetaManager {
                 MssqlColValueConvertor::from_query_required_string(&row, "user_type_name")?;
             let system_type_name =
                 MssqlColValueConvertor::from_query_required_string(&row, "system_type_name")?;
+            let user_type_schema_name =
+                MssqlColValueConvertor::from_query_required_string(&row, "user_type_schema_name")?;
             let max_length = MssqlColValueConvertor::from_query_required_i16(&row, "max_length")?;
             let is_nullable =
                 MssqlColValueConvertor::from_query_required_bool(&row, "is_nullable")?;
@@ -321,15 +321,31 @@ impl MssqlMetaManager {
                 MssqlColValueConvertor::from_query_required_bool(&row, "is_computed")?;
             let generated_always_type =
                 MssqlColValueConvertor::from_query_required_u8(&row, "generated_always_type")?;
-            let col_type = parse_mssql_col_type_with_length(&system_type_name, max_length)
-                .map_err(|error| {
-                    DtError::DatabaseUnsupportedTableStructure(
+            let is_assembly_type =
+                MssqlColValueConvertor::from_query_required_bool(&row, "is_assembly_type")?;
+            // Tiberius 0.12.3 does not decode TDS Udt values. Built-in CLR types use stable
+            // text representations; custom CLR types retain their serialized bytes and
+            // therefore require compatible assemblies on both servers.
+            // https://github.com/prisma/tiberius/blob/v0.12.3/src/tds/codec/token/token_col_metadata.rs#L170
+            let col_type = if is_assembly_type {
+                match (
+                    user_type_schema_name.to_ascii_lowercase().as_str(),
+                    user_type_name.to_ascii_lowercase().as_str(),
+                ) {
+                    ("sys", "geometry") => MssqlColType::Geometry,
+                    ("sys", "geography") => MssqlColType::Geography,
+                    ("sys", "hierarchyid") => MssqlColType::HierarchyId,
+                    _ => MssqlColType::AssemblyUdt,
+                }
+            } else {
+                parse_mssql_col_type_with_length(&system_type_name, max_length)
+                    .dt_error(DtError::DatabaseUnsupportedTableStructure(
                         DbType::Mssql,
                         format!(
                             "column {schema}.{tb}.{col} uses unsupported type {user_type_name} \
-                             (system type {system_type_name}): {error}"
+                             (system type {system_type_name})"
                         ),
-                    )
+                    ))
                     .message("An MSSQL source column type is not supported")
                     .hint("Exclude or convert the reported source column before retrying the task.")
                     .object(ErrorObject {
@@ -337,8 +353,8 @@ impl MssqlMetaManager {
                         table: Some(tb.to_string()),
                         column: Some(col.clone()),
                         ..Default::default()
-                    })
-                })?;
+                    })?
+            };
 
             cols.push(col.clone());
             col_origin_type_map.insert(col.clone(), user_type_name);
@@ -373,12 +389,54 @@ impl MssqlMetaManager {
         })
     }
 
+    pub fn get_key_scores(tb_meta: &MssqlTbMeta) -> anyhow::Result<HashMap<String, u32>> {
+        let mut scores = HashMap::new();
+        for (key, cols) in &tb_meta.basic.key_map {
+            if cols.is_empty() {
+                continue;
+            }
+            let mut score = Some(0);
+            for col in cols {
+                let weight = tb_meta.get_col_type(col)?.order_key_weight();
+                score = score.zip(weight).map(|(total, weight)| total + weight);
+            }
+            if let Some(score) = score {
+                scores.insert(key.clone(), score);
+            }
+        }
+        Ok(scores)
+    }
+
+    // Example (exercised by snapshot/order_key_test):
+    // CREATE TABLE [order_key_src].[dbo].[parse_keys_example] (
+    //     id int NOT NULL, value int NOT NULL,
+    //     CONSTRAINT some_pk_name PRIMARY KEY (id DESC, value ASC),
+    //     CONSTRAINT some_uk_name UNIQUE (value DESC)
+    // );
+    // CREATE UNIQUE INDEX uk_example ON [order_key_src].[dbo].[parse_keys_example] (value ASC, id DESC);
+    // CREATE INDEX non_unique_key ON [order_key_src].[dbo].[parse_keys_example] (id);
+    // TABLE_KEYS_SQL returns these rows (shown grouped by key):
+    // index_name   | is_primary_key | is_descending_key | column_name
+    // some_pk_name | 1              | 1                 | id
+    // some_pk_name | 1              | 0                 | value
+    // some_uk_name | 0              | 1                 | value
+    // uk_example   | 0              | 0                 | value
+    // uk_example   | 0              | 1                 | id
+    // key_map = {RDB_PRIMARY_KEY: [id, value], some_uk_name: [value], uk_example: [value, id]}
+    // key_col_attrs = {RDB_PRIMARY_KEY: {id: Desc, value: Asc},
+    //                  some_uk_name: {value: Desc}, uk_example: {value: Asc, id: Desc}}
+    // is_primary_key identifies named primary keys; key_ordinal preserves column
+    // order. Non-unique, filtered, disabled and hypothetical indexes are excluded;
+    // INCLUDE columns do not become key columns (covered by catalog_key in the test).
     async fn parse_keys(
         &self,
         db: &str,
         schema: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
+    ) -> anyhow::Result<(
+        HashMap<String, Vec<String>>,
+        HashMap<String, HashMap<String, SortDirection>>,
+    )> {
         let mut query = Query::new(Self::catalog_sql(TABLE_KEYS_SQL, db));
         query.bind(schema);
         query.bind(tb);
@@ -392,6 +450,7 @@ impl MssqlMetaManager {
             .object(Self::table_object(schema, tb))?;
 
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut key_col_attrs: HashMap<String, HashMap<String, SortDirection>> = HashMap::new();
         for row in rows {
             let index_name =
                 MssqlColValueConvertor::from_query_required_string(&row, "index_name")?;
@@ -399,13 +458,23 @@ impl MssqlMetaManager {
                 MssqlColValueConvertor::from_query_required_bool(&row, "is_primary_key")?;
             let col = MssqlColValueConvertor::from_query_required_string(&row, "column_name")?;
             let key_name = if is_primary_key {
-                RDB_PRIMARY_KEY_FLAG.to_string()
+                RDB_PRIMARY_KEY.to_string()
             } else {
                 index_name
             };
+            let direction =
+                if MssqlColValueConvertor::from_query_required_bool(&row, "is_descending_key")? {
+                    SortDirection::Desc
+                } else {
+                    SortDirection::Asc
+                };
+            key_col_attrs
+                .entry(key_name.clone())
+                .or_default()
+                .insert(col.clone(), direction);
             key_map.entry(key_name).or_default().push(col);
         }
-        Ok(key_map)
+        Ok((key_map, key_col_attrs))
     }
 
     fn catalog_sql(template: &str, db: &str) -> String {

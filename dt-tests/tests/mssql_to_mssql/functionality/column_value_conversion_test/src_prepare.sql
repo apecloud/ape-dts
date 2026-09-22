@@ -74,4 +74,12 @@ CREATE TABLE [ape_dts_col_value_conversion_source].[dbo].[offset_value]
     ([case_id] tinyint NOT NULL PRIMARY KEY, [value] datetimeoffset(7) NULL);
 CREATE TABLE [ape_dts_col_value_conversion_source].[dbo].[rowversion_value]
     ([case_id] tinyint NOT NULL PRIMARY KEY, [value] rowversion NOT NULL);
+CREATE TABLE [ape_dts_col_value_conversion_source].[dbo].[geometry_value]
+    ([case_id] tinyint NOT NULL PRIMARY KEY, [value] geometry NULL);
+CREATE TABLE [ape_dts_col_value_conversion_source].[dbo].[geography_value]
+    ([case_id] tinyint NOT NULL PRIMARY KEY, [value] geography NULL);
+CREATE TABLE [ape_dts_col_value_conversion_source].[dbo].[hierarchyid_value]
+    ([case_id] tinyint NOT NULL PRIMARY KEY, [value] hierarchyid NULL);
+CREATE TABLE [ape_dts_col_value_conversion_source].[dbo].[bigvariant_value]
+    ([case_id] tinyint NOT NULL PRIMARY KEY, [value] [dbo].[BigVariant] NULL);
 GO

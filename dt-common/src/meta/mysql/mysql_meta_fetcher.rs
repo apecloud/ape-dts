@@ -4,13 +4,19 @@ use anyhow::{bail, Ok};
 use futures::TryStreamExt;
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
-use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
+use super::{
+    mysql_col_type::MysqlColType, mysql_meta_manager::MysqlMetaManager, mysql_tb_meta::MysqlTbMeta,
+};
 use crate::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, DtOptionExt, DtResultExt, ErrorObject},
     meta::{
-        ddl_meta::ddl_data::DdlData, foreign_key::ForeignKey, rdb_meta_manager::RdbMetaManager,
-        rdb_meta_manager::RDB_PRIMARY_KEY_FLAG, rdb_tb_meta::RdbTbMeta, row_data::RowData,
+        ddl_meta::ddl_data::DdlData,
+        foreign_key::ForeignKey,
+        rdb_meta_manager::RdbMetaManager,
+        rdb_meta_manager::RDB_PRIMARY_KEY,
+        rdb_tb_meta::{RdbTbMeta, SortDirection},
+        row_data::RowData,
     },
     utils::sql_util::SqlUtil,
 };
@@ -86,33 +92,27 @@ impl MysqlMetaFetcher {
         if !self.cache.contains_key(&full_name) {
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
-            let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+            let (key_map, key_col_attrs) = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             // disable get_foreign_keys since we don't support foreign key check,
             // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
-            let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
             // let (foreign_keys, ref_by_foreign_keys) =
             //     Self::get_foreign_keys(&self.conn_pool, &self.db_type, schema, tb).await?;
 
             let basic = RdbTbMeta {
-                db: String::new(),
                 schema: schema.to_string(),
                 tb: tb.to_string(),
                 cols,
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
-                order_cols,
-                partition_col,
-                id_cols,
-                foreign_keys,
-                ref_by_foreign_keys,
+                ..Default::default()
             };
-            let tb_meta = MysqlTbMeta {
+            let mut tb_meta = MysqlTbMeta {
                 basic,
                 col_type_map,
             };
+            let key_scores = MysqlMetaManager::get_key_scores(&tb_meta)?;
+            RdbMetaManager::set_order_cols(&mut tb_meta.basic, &key_scores, key_col_attrs)?;
             self.cache.insert(full_name.clone(), tb_meta);
         }
         self.cache
@@ -345,45 +345,87 @@ impl MysqlMetaFetcher {
         row.try_get_unchecked::<u64, &str>(col).unwrap_or_default()
     }
 
+    // Example (MySQL 8.0; exercised by snapshot/order_key_test):
+    // CREATE TABLE order_key_src.parse_keys_example (
+    //     id int NOT NULL, value int NOT NULL,
+    //     PRIMARY KEY some_pk_name (id DESC, value ASC),
+    //     UNIQUE KEY some_uk_name (value DESC)
+    // );
+    // CREATE UNIQUE INDEX uk_example ON order_key_src.parse_keys_example (value ASC, id DESC);
+    // CREATE INDEX non_unique_key ON order_key_src.parse_keys_example (id);
+    // SHOW INDEXES FROM order_key_src.parse_keys_example;
+    // Relevant fields (other SHOW INDEXES fields omitted):
+    // Non_unique | Key_name       | Seq_in_index | Column_name | Collation
+    // 0          | PRIMARY        | 1            | id          | D
+    // 0          | PRIMARY        | 2            | value       | A
+    // 0          | some_uk_name   | 1            | value       | D
+    // 0          | uk_example     | 1            | value       | A
+    // 0          | uk_example     | 2            | id          | D
+    // 1          | non_unique_key | 1            | id          | A
+    // MySQL reports PRIMARY even when the primary key was declared with a name.
+    // key_map = {RDB_PRIMARY_KEY: [id, value], some_uk_name: [value], uk_example: [value, id]}
+    // key_col_attrs = {RDB_PRIMARY_KEY: {id: Desc, value: Asc},
+    //                  some_uk_name: {value: Desc}, uk_example: {value: Asc, id: Desc}}
+    // Seq_in_index preserves composite-key order; non-unique indexes are excluded.
+    // A functional index has a NULL Column_name for its expression: exclude the
+    // entire index, including any ordinary columns in the same index.
     async fn parse_keys(
         conn_pool: &Pool<MySql>,
         schema: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
-        let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
-        // let mut prefixed_keys = HashSet::new();
-        let sql = format!("SHOW INDEXES FROM `{}`.`{}`", schema, tb);
+    ) -> anyhow::Result<(
+        HashMap<String, Vec<String>>,
+        HashMap<String, HashMap<String, SortDirection>>,
+    )> {
+        let mut keys: HashMap<String, Vec<(u64, String, SortDirection)>> = HashMap::new();
+        let mut invalid_keys = HashSet::new();
+        let sql = format!(
+            "SHOW INDEXES FROM {}.{}",
+            SqlUtil::escape_by_db_type(schema, &DbType::Mysql),
+            SqlUtil::escape_by_db_type(tb, &DbType::Mysql)
+        );
         let mut rows = sqlx::raw_sql(&sql).fetch(conn_pool);
         while let Some(row) = rows.try_next().await? {
             let non_unique: i8 = row.try_get("Non_unique")?;
             if non_unique == 1 {
                 continue;
             }
-
-            // the key name for primary key is always "PRIMARY" even if created with a name
-            // create table test_db_1.a(id int, value int,
-            //      primary key some_pk_name(id, value),
-            //      unique key some_uk_name(value));
-            // mysql> SHOW INDEXES FROM test_db_1.a;
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            // | Table | Non_unique | Key_name     | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment |
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            // | a     |          0 | PRIMARY      |            1 | id          | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            let mut key_name = SqlUtil::try_get_mysql_string(&row, "Key_name")?;
-            if key_name == "PRIMARY" {
-                key_name = RDB_PRIMARY_KEY_FLAG.to_string();
+            let mut key = SqlUtil::try_get_mysql_string(&row, "Key_name")?;
+            if key == "PRIMARY" {
+                key = RDB_PRIMARY_KEY.to_string();
             }
-            let col_name = SqlUtil::try_get_mysql_string(&row, "Column_name")?;
-            if let Some(key_cols) = key_map.get_mut(&key_name) {
-                key_cols.push(col_name);
-            } else {
-                key_map.insert(key_name, vec![col_name]);
-            }
+            // Reject the whole functional index, not just its expression columns.
+            let Some(col) = SqlUtil::try_get_mysql_optional_string(&row, "Column_name")? else {
+                invalid_keys.insert(key);
+                continue;
+            };
+            let ordinal: u64 = row.try_get_unchecked("Seq_in_index")?;
+            let direction =
+                match SqlUtil::try_get_mysql_optional_string(&row, "Collation")?.as_deref() {
+                    Some("D") => SortDirection::Desc,
+                    _ => SortDirection::Asc,
+                };
+            keys.entry(key).or_default().push((ordinal, col, direction));
         }
-        Ok(key_map)
+        let mut key_map = HashMap::new();
+        let mut key_col_attrs = HashMap::new();
+        for (key, mut cols) in keys {
+            if invalid_keys.contains(&key) {
+                continue;
+            }
+            cols.sort_by_key(|(ordinal, _, _)| *ordinal);
+            key_map.insert(
+                key.clone(),
+                cols.iter().map(|(_, col, _)| col.clone()).collect(),
+            );
+            key_col_attrs.insert(
+                key,
+                cols.into_iter()
+                    .map(|(_, col, direction)| (col, direction))
+                    .collect(),
+            );
+        }
+        Ok((key_map, key_col_attrs))
     }
 
     #[allow(dead_code)]
