@@ -421,6 +421,8 @@ service_wait_mode() {
 suite_wait_timeout_secs() {
   local suite="$1"
   case "${suite}" in
+    # This suite initializes five MySQL data directories concurrently.
+    mysql_to_mysql) echo "${MYSQL_WAIT_TIMEOUT_SECS:-120}" ;;
     mongo_to_mongo | mongo_to_mongo_precheck) echo "${MONGO_SHARDING_WAIT_TIMEOUT_SECS:-120}" ;;
     mssql_to_mssql) echo "${MSSQL_WAIT_TIMEOUT_SECS:-120}" ;;
     tls) echo "${MSSQL_WAIT_TIMEOUT_SECS:-120}" ;;

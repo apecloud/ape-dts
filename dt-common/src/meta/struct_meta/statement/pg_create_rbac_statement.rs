@@ -1,3 +1,4 @@
+use crate::config::config_enums::DbType;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::{
     rbac::PgPrivilege, rbac::PgRole, rbac::PgRoleMember, structure_type::StructureType,
@@ -71,7 +72,10 @@ impl PgCreateRbacStatement {
                 sql = format!("{} WITH {}", sql, options.join(" "));
             }
 
-            sqls.push((StructKey::new(StructKeyType::RbacRole, [&role.name]), sql));
+            sqls.push((
+                StructKey::new(DbType::Pg, StructKeyType::RbacRole, [&role.name]),
+                sql,
+            ));
 
             if !role.rol_configs.is_empty() {
                 for config in &role.rol_configs {
@@ -85,6 +89,7 @@ impl PgCreateRbacStatement {
                             format!("ALTER ROLE \"{}\" SET {} TO '{}'", role.name, param, value);
                         sqls.push((
                             StructKey::new(
+                                DbType::Pg,
                                 StructKeyType::RbacRoleConfig,
                                 [role.name.clone(), param.to_string()],
                             ),
@@ -103,6 +108,7 @@ impl PgCreateRbacStatement {
                 }
                 sqls.push((
                     StructKey::new(
+                        DbType::Pg,
                         StructKeyType::RbacMember,
                         [
                             member.role.clone(),
@@ -403,6 +409,7 @@ mod tests {
 
         let privilege = PgPrivilege {
             key: StructKey::new(
+                DbType::Pg,
                 StructKeyType::RbacPrivilegeTable,
                 ["public", "test_table", "test_role", "NO"],
             ),

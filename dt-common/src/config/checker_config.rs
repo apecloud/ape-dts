@@ -11,7 +11,7 @@ pub const DEFAULT_CDC_CHECK_LOG_INTERVAL_SECS: u64 = 30;
 /// Common checker settings.
 ///
 /// Standalone snapshot/struct/check-log tasks use `[sinker] sink_type=check`; the checker target
-/// connection is loaded through the regular MySQL/PostgreSQL/MongoDB sinker configuration.
+/// connection is loaded through the regular MySQL/PostgreSQL/MSSQL/MongoDB sinker configuration.
 /// `[checker_output]` owns result output settings. CDC inline check is enabled separately through
 /// `[checker_cdc] is_enabled=true`.
 #[derive(Clone, Debug)]

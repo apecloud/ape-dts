@@ -68,12 +68,16 @@ impl PgCreateTableStatement {
 
         if !filter.filter_structure(&StructureType::Table) {
             for i in self.sequences.iter() {
-                let key =
-                    StructKey::new(StructKeyType::Sequence, [&i.schema_name, &i.sequence_name]);
+                let key = StructKey::new(
+                    DbType::Pg,
+                    StructKeyType::Sequence,
+                    [&i.schema_name, &i.sequence_name],
+                );
                 sqls.push((key, Self::sequence_to_sql(i)));
             }
 
             let key = StructKey::new(
+                DbType::Pg,
                 StructKeyType::Table,
                 [&self.table.schema_name, &self.table.table_name],
             );
@@ -81,6 +85,7 @@ impl PgCreateTableStatement {
 
             for i in self.sequence_owners.iter() {
                 let key = StructKey::new(
+                    DbType::Pg,
                     StructKeyType::SequenceOwner,
                     [&i.schema_name, &i.table_name, &i.sequence_name],
                 );
@@ -89,6 +94,7 @@ impl PgCreateTableStatement {
 
             for i in self.column_comments.iter() {
                 let key = StructKey::new(
+                    DbType::Pg,
                     StructKeyType::ColumnComment,
                     [&i.schema_name, &i.table_name, &i.column_name],
                 );
@@ -96,8 +102,11 @@ impl PgCreateTableStatement {
             }
 
             for i in self.table_comments.iter() {
-                let key =
-                    StructKey::new(StructKeyType::TableComment, [&i.schema_name, &i.table_name]);
+                let key = StructKey::new(
+                    DbType::Pg,
+                    StructKeyType::TableComment,
+                    [&i.schema_name, &i.table_name],
+                );
                 sqls.push((key, Self::comment_to_sql(i)));
             }
         }
@@ -117,6 +126,7 @@ impl PgCreateTableStatement {
             }
 
             let key = StructKey::new(
+                DbType::Pg,
                 StructKeyType::Constraint,
                 [&i.schema_name, &i.table_name, &i.constraint_name],
             );
@@ -138,6 +148,7 @@ impl PgCreateTableStatement {
             }
 
             let key = StructKey::new(
+                DbType::Pg,
                 StructKeyType::Index,
                 [&i.schema_name, &i.table_name, &i.index_name],
             );

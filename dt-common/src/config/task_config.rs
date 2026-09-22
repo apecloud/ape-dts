@@ -296,7 +296,7 @@ impl TaskConfig {
             }
         } else {
             match (kind, sink_type, target_db_type) {
-                (TaskKind::Struct, SinkType::Check, DbType::Mysql | DbType::Pg) => {
+                (TaskKind::Struct, SinkType::Check, DbType::Mysql | DbType::Pg | DbType::Mssql) => {
                     Some(CheckMode::Standalone)
                 }
                 (
@@ -541,6 +541,25 @@ impl TaskConfig {
                         )?,
                         batch_size,
                         partition_cols: loader.get_optional(EXTRACTOR, PARTITION_COLS)?,
+                    }
+                }
+                ExtractType::Struct => {
+                    Self::validate_mssql_connection(
+                        EXTRACTOR,
+                        &url,
+                        &connection_auth,
+                        basic.app_name.as_deref(),
+                        max_connections,
+                    )?;
+                    ExtractorConfig::MssqlStruct {
+                        url,
+                        connection_auth,
+                        dbs: Vec::new(),
+                        db_batch_size: loader.get_with_default(
+                            EXTRACTOR,
+                            "db_batch_size",
+                            DEFAULT_DB_BATCH_SIZE,
+                        )?,
                     }
                 }
                 _ => bail! { not_supported_err },
@@ -811,7 +830,7 @@ impl TaskConfig {
             },
 
             DbType::Mssql => match sink_type {
-                SinkType::Write => {
+                SinkType::Write | SinkType::Check => {
                     Self::validate_mssql_connection(
                         SINKER,
                         &url,
@@ -824,6 +843,20 @@ impl TaskConfig {
                         connection_auth,
                         batch_size,
                         replace: loader.get_with_default(SINKER, REPLACE, true)?,
+                    }
+                }
+                SinkType::Struct => {
+                    Self::validate_mssql_connection(
+                        SINKER,
+                        &url,
+                        &connection_auth,
+                        basic.app_name.as_deref(),
+                        max_connections,
+                    )?;
+                    SinkerConfig::MssqlStruct {
+                        url,
+                        connection_auth,
+                        conflict_policy,
                     }
                 }
                 _ => bail! { not_supported_err },
@@ -1475,8 +1508,8 @@ mod tests {
     };
 
     use super::{
-        CheckMode, DbType, ExtractorConfig, ParallelType, RdbParallelType, SinkerConfig,
-        TaskConfig, TaskKind, TaskType,
+        CheckMode, ConflictPolicyEnum, DbType, ExtractorConfig, ParallelType, RdbParallelType,
+        SinkerConfig, TaskConfig, TaskKind, TaskType,
     };
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
@@ -2156,6 +2189,75 @@ parallel_size=2
             config.sinker,
             SinkerConfig::Mssql { replace: false, .. }
         ));
+    }
+
+    #[test]
+    fn mssql_struct_task_modes() {
+        for (extract_type, sink_type, expected) in [
+            (
+                "struct",
+                "struct",
+                Some(TaskType::new(TaskKind::Struct, None)),
+            ),
+            (
+                "struct",
+                "check",
+                Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone))),
+            ),
+            ("snapshot", "check", None),
+        ] {
+            let input = format!(
+                r#"[extractor]
+db_type=mssql
+extract_type={extract_type}
+url=server=tcp:127.0.0.1,1433;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+db_batch_size=11
+
+[sinker]
+db_type=mssql
+sink_type={sink_type}
+url=server=tcp:127.0.0.1,1434;database=ape_dts
+username=sa
+password=Password123!
+ssl_mode=disable
+conflict_policy=ignore
+"#
+            );
+            let result = load_temp_task_config(&input);
+            let Some(expected) = expected else {
+                assert!(result
+                    .err()
+                    .expect("snapshot check must be rejected")
+                    .to_string()
+                    .contains("checker is not supported"));
+                continue;
+            };
+            let config =
+                result.unwrap_or_else(|error| panic!("{extract_type}/{sink_type}: {error}"));
+            assert_eq!(config.task_type(), Some(expected), "{sink_type}");
+            assert!(matches!(
+                config.extractor,
+                ExtractorConfig::MssqlStruct {
+                    db_batch_size: 11,
+                    ..
+                }
+            ));
+            if sink_type == "struct" {
+                assert!(matches!(
+                    config.sinker,
+                    SinkerConfig::MssqlStruct {
+                        conflict_policy: ConflictPolicyEnum::Ignore,
+                        ..
+                    }
+                ));
+            } else {
+                assert_eq!(config.checker_target().unwrap().db_type, DbType::Mssql);
+                assert!(matches!(config.sinker, SinkerConfig::Mssql { .. }));
+            }
+        }
     }
 
     #[test]

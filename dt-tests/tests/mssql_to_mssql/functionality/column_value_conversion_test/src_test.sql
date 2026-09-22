@@ -95,11 +95,13 @@ INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[uuid_value] VALUES
     (2, 'ffffffff-ffff-ffff-ffff-ffffffffffff'),
     (3, '550e8400-e29b-41d4-a716-446655440000'),
     (4, NULL);
+```
 INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[xml_value] VALUES
     (1, CONVERT(xml, N'<a/>')),
     (2, CONVERT(xml, N'<根 属性="边界">中文😀</根>')),
     (3, CONVERT(xml, N'<root><child>text &amp; value</child></root>')),
     (4, NULL);
+```
 INSERT INTO [ape_dts_col_value_conversion_source].[dbo].[date_value] VALUES
     (1, CONVERT(date, '00010101')),
     (2, CONVERT(date, '99991231')),

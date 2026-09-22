@@ -27,29 +27,77 @@ impl DdlData {
     }
 
     pub fn get_schema_tb(&self) -> (String, String) {
-        let (mut schema, tb) = self.statement.get_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone()
+        let (db, schema, tb) = self.get_db_schema_tb();
+        match self.ddl_type {
+            DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {
+                (db, String::new())
+            }
+            DdlType::CreateSchema | DdlType::DropSchema | DdlType::AlterSchema => {
+                (schema, String::new())
+            }
+            _ => (schema, tb),
         }
-        (schema, tb)
     }
 
     pub fn get_db_schema_tb(&self) -> (String, String, String) {
-        let (schema, tb) = self.get_schema_tb();
-        (self.default_db.clone(), schema, tb)
+        let (mut db, mut schema, tb) = self.statement.get_db_schema_tb();
+        match self.ddl_type {
+            DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {
+                return (db, String::new(), String::new());
+            }
+            DdlType::CreateSchema | DdlType::DropSchema | DdlType::AlterSchema => {
+                if db.is_empty() {
+                    db = self.default_db.clone();
+                }
+                return (db, schema, String::new());
+            }
+            _ => {}
+        }
+
+        if db.is_empty() {
+            db = self.default_db.clone();
+        }
+        if schema.is_empty() {
+            schema = self.default_schema.clone();
+        }
+        (db, schema, tb)
     }
 
     pub fn get_rename_to_schema_tb(&self) -> (String, String) {
-        let (mut schema, tb) = self.statement.get_rename_to_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone()
-        }
+        let (_, schema, tb) = self.get_rename_to_db_schema_tb();
         (schema, tb)
     }
 
     pub fn get_rename_to_db_schema_tb(&self) -> (String, String, String) {
-        let (schema, tb) = self.get_rename_to_schema_tb();
-        (self.default_db.clone(), schema, tb)
+        let (mut db, mut schema, tb) = self.statement.get_rename_to_db_schema_tb();
+        if tb.is_empty() {
+            return (String::new(), String::new(), String::new());
+        }
+
+        let (src_db, src_schema, _) = self.get_db_schema_tb();
+        if db.is_empty() {
+            db = src_db;
+        }
+        if schema.is_empty() {
+            schema = src_schema;
+        }
+        (db, schema, tb)
+    }
+
+    pub fn route(&mut self, dst_db: String, dst_schema: String, dst_tb: String) {
+        self.statement
+            .route_db_schema_tb(dst_db, dst_schema, dst_tb);
+    }
+
+    pub fn route_rename(
+        &mut self,
+        dst_schema: String,
+        dst_tb: String,
+        dst_new_schema: String,
+        dst_new_tb: String,
+    ) {
+        self.statement
+            .route_rename(dst_schema, dst_tb, dst_new_schema, dst_new_tb);
     }
 
     pub fn split_to_multi(self) -> Vec<DdlData> {

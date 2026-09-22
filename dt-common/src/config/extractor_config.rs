@@ -27,6 +27,13 @@ pub enum ExtractorConfig {
         db_batch_size: usize,
     },
 
+    MssqlStruct {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        dbs: Vec<String>,
+        db_batch_size: usize,
+    },
+
     MysqlSnapshot {
         url: String,
         connection_auth: ConnectionAuthConfig,

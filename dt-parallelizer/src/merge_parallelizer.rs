@@ -280,8 +280,10 @@ mod tests {
 
     #[tokio::test]
     async fn sink_dml_adaptive_caps_parallelism_to_available_sinkers() {
-        let mut sinker_basic_config = BasicSinkerConfig::default();
-        sinker_basic_config.batch_size = 1;
+        let sinker_basic_config = BasicSinkerConfig {
+            batch_size: 1,
+            ..Default::default()
+        };
         let mut parallelizer =
             MergeParallelizer::for_mongo(BaseParallelizer::default(), 2, sinker_basic_config);
         let row = || {

@@ -1,3 +1,4 @@
+use crate::config::config_enums::DbType;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::{schema::Schema, structure_type::StructureType};
 use crate::rdb_filter::RdbFilter;
@@ -18,7 +19,7 @@ impl PgCreateSchemaStatement {
             return Ok(sqls);
         }
 
-        let key = StructKey::new(StructKeyType::Schema, [&self.schema.name]);
+        let key = StructKey::new(DbType::Pg, StructKeyType::Schema, [&self.schema.name]);
         let sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, self.schema.name);
         sqls.push((key, sql));
         Ok(sqls)

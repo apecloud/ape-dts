@@ -57,7 +57,7 @@ impl PrecheckTestRunner {
                         expected,
                         result.is_validate
                     );
-                    assert!(false)
+                    panic!("precheck result mismatch")
                 }
             } else {
                 // by default, is_validate == true
@@ -68,7 +68,7 @@ impl PrecheckTestRunner {
                         result.check_type_name,
                         result.error_msg
                     );
-                    assert!(false)
+                    panic!("precheck failed")
                 }
             }
         };
