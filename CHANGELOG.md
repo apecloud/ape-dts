@@ -7,23 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.0.26.1] - 2026-09-29
+
+This release builds on 2.0.26 with fixes and features we believe needed to be delivered promptly.
 
 ### Added
 
 #### Redis
 
-- support RDB type byte 26 (`RDB_TYPE_STREAM_LISTPACKS_4`), including the trailing IDMP (Idempotent Message Producer) section, when extracting streams from an RDB snapshot
+- [[587]](https://github.com/apecloud/ape-dts/pull/587), [[593]](https://github.com/apecloud/ape-dts/pull/593) - support TLS connections with CA and hostname verification for command connections, PSYNC replication streams, and automatically discovered Redis Cluster nodes
+- [[564]](https://github.com/apecloud/ape-dts/pull/564) - support RDB stream type 26 (`RDB_TYPE_STREAM_LISTPACKS_4`), including parsing the trailing IDMP section; IDMP deduplication state is not migrated
+
+#### MongoDB
+
+- [[593]](https://github.com/apecloud/ape-dts/pull/593) - support explicit TLS configuration for task and checkpoint connections, with integration coverage for replica sets and sharded clusters; `verify_ca` and `verify_full` both verify the certificate chain and hostname/IP with the current driver backend
+
+### Changed
+
+#### General and Platform
+
+- [[588]](https://github.com/apecloud/ape-dts/pull/588) - add source schema/table fields and routed target locations to structure-check logs and table summaries while preserving the existing string keys
+- [[588]](https://github.com/apecloud/ape-dts/pull/588) - ignore standalone structure objects that exist only on the target; target-only child objects under source-selected tables, such as indexes, remain differences
+- [[568]](https://github.com/apecloud/ape-dts/pull/568), [[588]](https://github.com/apecloud/ape-dts/pull/588) - extend `check_log_max_rows` limits to non-CDC `diff.log` and `miss.log` output
 
 ### Fixed
 
 #### General and Platform
 
-- exit with a non-zero status code when the task panics, instead of leaving the process hanging
+- [[606]](https://github.com/apecloud/ape-dts/pull/606) - avoid false data-check differences when integer values are equal but their widths or signedness differ
+- [[568]](https://github.com/apecloud/ape-dts/pull/568) - report missing target objects as missing results in snapshot and structure checks instead of aborting on missing target metadata; CDC checks retain error propagation
+- [[575]](https://github.com/apecloud/ape-dts/pull/575) - preserve the `is_origin` marker when merging relational UPDATE events
+- [[572]](https://github.com/apecloud/ape-dts/pull/572) - enable TCP keepalive for MySQL and PostgreSQL SQLx connections, including shared connection pools and DDL sinker connections
+
+#### MySQL
+
+- [[598]](https://github.com/apecloud/ape-dts/pull/598) - fix incorrect quoting of `CURRENT_TIMESTAMP(n)` defaults on `DATETIME(n)` and `TIMESTAMP(n)` columns during structure migration
 
 #### Redis
 
-- fail the task on unsupported RDB type bytes; the entry length of an unknown type can not be determined, so the parser previously desynchronized and silently produced partial data
+- [[564]](https://github.com/apecloud/ape-dts/pull/564) - fail on unsupported RDB type bytes instead of continuing with a desynchronized parser and silently producing partial data
+- [[603]](https://github.com/apecloud/ape-dts/pull/603) - return descriptive errors instead of panicking when Redis Cluster slot-to-node or node-to-sinker mappings are missing
 
 ---
 
