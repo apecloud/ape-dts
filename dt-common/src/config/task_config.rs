@@ -78,8 +78,6 @@ const SINKER: &str = "sinker";
 const PIPELINE: &str = "pipeline";
 const PARALLELIZER: &str = "parallelizer";
 const RUNTIME: &str = "runtime";
-const FILTER: &str = "filter";
-const ROUTER: &str = "router";
 const RESUMER: &str = "resumer";
 const DATA_MARKER: &str = "data_marker";
 const PROCESSOR: &str = "processor";
@@ -135,7 +133,6 @@ const LEGACY_CHECKER_ENABLE: &str = "enable";
 
 // default values
 pub const APE_DTS: &str = "APE_DTS";
-const ASTRISK: &str = "*";
 const RESUMER_CONNECTION_LIMIT_DEFAULT: usize = 5;
 
 impl TaskConfig {
@@ -149,8 +146,8 @@ impl TaskConfig {
         let runtime = Self::load_runtime_config(loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(loader)?;
         let (extractor_basic, extractor) = Self::load_extractor_config(loader, &pipeline)?;
-        let filter = Self::load_filter_config(loader)?;
-        let router = Self::load_router_config(loader)?;
+        let filter = FilterConfig::from_ini(&loader.ini);
+        let router = RouterConfig::from_ini(&loader.ini);
         let parallelizer = Self::load_parallelizer_config(loader, &sinker_basic, &pipeline)?;
         let checker =
             Self::load_checker_config(loader, &extractor_basic.extract_type, &sinker_basic)?;
@@ -1228,34 +1225,6 @@ impl TaskConfig {
         })
     }
 
-    fn load_filter_config(loader: &IniLoader) -> anyhow::Result<FilterConfig> {
-        // The public configuration uses db/tb. It currently maps db to the common schema field;
-        // the common physical db field remains empty.
-        Ok(FilterConfig {
-            do_schemas: loader.get_optional(FILTER, "do_dbs")?,
-            ignore_schemas: loader.get_optional(FILTER, "ignore_dbs")?,
-            do_tbs: loader.get_optional(FILTER, "do_tbs")?,
-            ignore_tbs: loader.get_optional(FILTER, "ignore_tbs")?,
-            ignore_cols: loader.get_optional(FILTER, "ignore_cols")?,
-            do_events: loader.get_with_default(FILTER, "do_events", ASTRISK.to_string())?,
-            do_ddls: loader.get_optional(FILTER, "do_ddls")?,
-            do_dcls: loader.get_optional(FILTER, "do_dcls")?,
-            do_structures: loader.get_with_default(FILTER, "do_structures", ASTRISK.to_string())?,
-            ignore_cmds: loader.get_optional(FILTER, "ignore_cmds")?,
-            where_conditions: loader.get_optional(FILTER, "where_conditions")?,
-        })
-    }
-
-    fn load_router_config(loader: &IniLoader) -> anyhow::Result<RouterConfig> {
-        // Keep db_map as the public key while routing on the common schema namespace internally.
-        Ok(RouterConfig::Rdb {
-            schema_map: loader.get_optional(ROUTER, "db_map")?,
-            tb_map: loader.get_optional(ROUTER, "tb_map")?,
-            col_map: loader.get_optional(ROUTER, "col_map")?,
-            topic_map: loader.get_optional(ROUTER, "topic_map")?,
-        })
-    }
-
     fn load_resumer_config(
         loader: &IniLoader,
         runtime: &RuntimeConfig,
@@ -1600,6 +1569,8 @@ tb_map=source_namespace.source_tb:target_namespace.target_tb
         assert_eq!(config.filter.do_schemas, "source_namespace");
         assert_eq!(config.filter.ignore_schemas, "ignored_namespace");
         assert_eq!(config.filter.do_tbs, "source_namespace.*");
+        assert_eq!(config.filter.do_events, "*");
+        assert_eq!(config.filter.do_structures, "*");
 
         let RouterConfig::Rdb {
             schema_map, tb_map, ..
