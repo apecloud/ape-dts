@@ -1,10 +1,9 @@
 use anyhow::{ensure, Context, Result};
-use configparser::ini::Ini;
 use serde::Deserialize;
 
 use super::{base::RouteOutput, BaseRouter};
 use crate::{
-    config::config_enums::DbType,
+    config::{config_enums::DbType, router_config::TopicRouterConfig},
     resource::{config, resource_kind, resource_levels, validate_rid, ResourceKind, ToRid, RID},
 };
 
@@ -41,10 +40,9 @@ impl TopicRouter {
         &self.dst_db_type
     }
 
-    pub fn from_ini(ini: &Ini, src_db_type: DbType) -> Result<Self> {
-        config::base_configs(ini, &src_db_type)?;
-        let old = ini.get("router", "topic_map").unwrap_or_default();
-        let new = ini.get("router", "dispatch");
+    pub fn from_config(config: &TopicRouterConfig, src_db_type: DbType) -> Result<Self> {
+        let old = &config.topic_map;
+        let new = config.dispatch.as_deref();
         let parse = |value: &str, legacy: bool| -> Result<Self> {
             let mut router = Self::new(src_db_type.clone());
             if !legacy && value.trim().starts_with("json:") {
@@ -80,9 +78,9 @@ impl TopicRouter {
             }
             Ok(router)
         };
-        let old_router = parse(&old, true).context("[router].topic_map")?;
+        let old_router = parse(old, true).context("[router].topic_map")?;
         if let Some(new) = new {
-            let new_router = parse(&new, false).context("[router].dispatch")?;
+            let new_router = parse(new, false).context("[router].dispatch")?;
             ensure!(
                 old.trim().is_empty() || old_router.routers == new_router.routers,
                 "conflicting topic_map and dispatch"
@@ -144,8 +142,14 @@ impl TopicRouter {
 
 #[cfg(test)]
 mod tests {
+    use configparser::ini::Ini;
+
     use super::*;
     use crate::rid;
+
+    fn load_router(ini: &Ini, src: DbType) -> Result<TopicRouter> {
+        TopicRouter::from_config(&TopicRouterConfig::from_ini(ini, &src)?, src)
+    }
 
     fn ini(text: &str) -> Ini {
         let mut ini = Ini::new();
@@ -191,7 +195,7 @@ mod tests {
             router.dispatch(&rid!("other")).unwrap(),
             rid!("default.topic")
         );
-        let legacy = TopicRouter::from_ini(
+        let legacy = load_router(
             &ini("[router]\ntopic_map=*.*:old,*.*:new,db.*:first,db.*:last"),
             DbType::Mysql,
         )
@@ -205,7 +209,7 @@ mod tests {
 
     #[test]
     fn topic_dispatch_uses_exact_prefix_default_and_keeps_dotted_topics() {
-        let router = TopicRouter::from_ini(&ini("[router]\ndispatch=*.*:default.topic,inventory.*:inventory.topic,inventory.order:order.topic"), DbType::Mysql).unwrap();
+        let router = load_router(&ini("[router]\ndispatch=*.*:default.topic,inventory.*:inventory.topic,inventory.order:order.topic"), DbType::Mysql).unwrap();
         for (source, target) in [
             (rid!("inventory", "order"), rid!("order.topic")),
             (rid!("inventory", "other"), rid!("inventory.topic")),
@@ -218,16 +222,14 @@ mod tests {
         assert!(TopicRouter::new(DbType::Mysql)
             .dispatch(&rid!("db", "table"))
             .is_err());
-        assert!(
-            TopicRouter::from_ini(&ini("[router]\ndispatch=*.t:topic"), DbType::Mysql).is_err()
-        );
-        let quoted = TopicRouter::from_ini(
+        assert!(load_router(&ini("[router]\ndispatch=*.t:topic"), DbType::Mysql).is_err());
+        let quoted = load_router(
             &ini("[router]\ntopic_map=*.*:`a.b`\ndispatch=*.*:a.b"),
             DbType::Mysql,
         )
         .unwrap();
         assert_eq!(quoted.dispatch(&rid!("db", "t")).unwrap(), rid!("a.b"));
-        let structured = TopicRouter::from_ini(&ini(r#"[router]
+        let structured = load_router(&ini(r#"[router]
     dispatch=json:[{"from":null,"to":["default.topic"]},{"from":["inventory"],"descendants":true,"to":["inventory.topic"]},{"from":["inventory","order"],"to":["order.topic"]}]
     "#), DbType::Mysql).unwrap();
         for source in [
@@ -244,9 +246,9 @@ mod tests {
             "[filter.topic]\ndispatch=*.*:topic",
             "[router]\ndispatch=json:[{\"from\":null,\"descendants\":true,\"to\":[\"topic\"]}]",
         ] {
-            assert!(TopicRouter::from_ini(&ini(text), DbType::Mysql).is_err());
+            assert!(load_router(&ini(text), DbType::Mysql).is_err());
         }
-        assert!(TopicRouter::from_ini(
+        assert!(load_router(
             &ini("[router]\ntopic_map=inventory.order:topic"),
             DbType::Mssql
         )
