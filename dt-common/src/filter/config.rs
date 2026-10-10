@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
-use configparser::ini::Ini;
 use serde::Deserialize;
 
 use super::{pattern::MatcherSet, BaseFilter, DtFilter, IdPattern, ValueFilter};
@@ -12,6 +11,7 @@ use crate::{
     config::{
         config_enums::DbType,
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
+        filter_config::{BaseFilterConfig, FilterConfig},
     },
     meta::{
         dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
@@ -68,11 +68,12 @@ fn merge(
     Ok(new)
 }
 
-fn category<T: FromStr>(ini: &Ini, key: &str, default: &str) -> Result<ValueFilter> {
-    let value = ini
-        .get("filter", key)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| default.into());
+fn category<T: FromStr>(value: &str, key: &str, default: &str) -> Result<ValueFilter> {
+    let value = if value.trim().is_empty() {
+        default
+    } else {
+        value
+    };
     let mut values = HashSet::new();
     if !value.trim().is_empty() {
         for name in value.split(',').map(str::trim) {
@@ -116,21 +117,33 @@ struct IgnoreColumns {
 }
 
 impl DtFilter {
-    /// Parses a standalone configuration without changing TaskConfig or the existing filter.
-    /// Only base filters use child sections; WHERE and category options remain in [filter].
-    pub fn from_ini(ini: &Ini, db_type: DbType) -> Result<Self> {
-        let bases = config::base_configs(ini, &db_type)?;
+    /// Compile resource strings independently of their configuration source.
+    /// `options` retains [filter] common options and legacy rules for compatibility.
+    pub fn from_config(
+        bases: &HashMap<ResourceKind, BaseFilterConfig>,
+        options: &FilterConfig,
+        db_type: DbType,
+    ) -> Result<Self> {
+        for kind in bases.keys() {
+            ensure!(
+                resource_depth(&db_type, *kind).is_some(),
+                "unsupported {kind:?} for {db_type}"
+            );
+        }
         if matches!(db_type, DbType::Kafka) {
-            for key in ["do_dbs", "ignore_dbs"] {
+            for (key, value) in [
+                ("do_dbs", &options.do_schemas),
+                ("ignore_dbs", &options.ignore_schemas),
+            ] {
                 ensure!(
-                    ini.get("filter", key).unwrap_or_default().trim().is_empty(),
+                    value.trim().is_empty(),
                     "[filter].{key} is not supported by {db_type}; use [filter.topic]"
                 );
             }
         }
         let mut filter = Self::new(db_type.clone());
         let mut old_columns = MatcherSet::default();
-        let ignore_cols = ini.get("filter", "ignore_cols").unwrap_or_default();
+        let ignore_cols = &options.ignore_cols;
         if !ignore_cols.trim().is_empty() {
             ensure!(
                 resource_depth(&db_type, ResourceKind::Column).is_some(),
@@ -138,7 +151,7 @@ impl DtFilter {
             );
             let mut tables = HashMap::new();
             for row in
-                config::json::<Vec<IgnoreColumns>>(&ignore_cols).context("[filter].ignore_cols")?
+                config::json::<Vec<IgnoreColumns>>(ignore_cols).context("[filter].ignore_cols")?
             {
                 let table = config::legacy_json_table(&row.db, &row.tb, &db_type)?;
                 tables.insert(table, row.ignore_cols);
@@ -149,11 +162,25 @@ impl DtFilter {
                 }
             }
         }
-        for (index, (&kind, base)) in resource_levels(&db_type).iter().zip(bases).enumerate() {
+        let empty_base = BaseFilterConfig::default();
+        for (index, &kind) in resource_levels(&db_type).iter().enumerate() {
+            let base = bases.get(&kind).unwrap_or(&empty_base);
             let legacy_keys = if index == 0 {
-                Some(("do_dbs", "ignore_dbs", false))
+                Some((
+                    "do_dbs",
+                    &options.do_schemas,
+                    "ignore_dbs",
+                    &options.ignore_schemas,
+                    false,
+                ))
             } else if matches!(kind, ResourceKind::Table | ResourceKind::Collection) {
-                Some(("do_tbs", "ignore_tbs", true))
+                Some((
+                    "do_tbs",
+                    &options.do_tbs,
+                    "ignore_tbs",
+                    &options.ignore_tbs,
+                    true,
+                ))
             } else {
                 None
             };
@@ -161,14 +188,12 @@ impl DtFilter {
             let mut old_ignore = MatcherSet::default();
             let mut do_present = false;
             let mut ignore_present = false;
-            if let Some((do_key, ignore_key, table)) = legacy_keys {
-                let do_value = ini.get("filter", do_key).unwrap_or_default();
-                let ignore_value = ini.get("filter", ignore_key).unwrap_or_default();
+            if let Some((do_key, do_value, ignore_key, ignore_value, table)) = legacy_keys {
                 do_present = !do_value.trim().is_empty();
                 ignore_present = !ignore_value.trim().is_empty();
-                old_do = patterns(&do_value, &db_type, true, table)
+                old_do = patterns(do_value, &db_type, true, table)
                     .with_context(|| format!("[filter].{do_key}"))?;
-                old_ignore = patterns(&ignore_value, &db_type, true, table)
+                old_ignore = patterns(ignore_value, &db_type, true, table)
                     .with_context(|| format!("[filter].{ignore_key}"))?;
             }
             if kind == ResourceKind::Column {
@@ -190,28 +215,32 @@ impl DtFilter {
         }
         // Do not silently swallow table options on engines which have no tables.
         if matches!(db_type, DbType::Redis | DbType::Kafka) {
-            for key in ["do_tbs", "ignore_tbs"] {
+            for (key, value) in [
+                ("do_tbs", &options.do_tbs),
+                ("ignore_tbs", &options.ignore_tbs),
+            ] {
                 ensure!(
-                    ini.get("filter", key).unwrap_or_default().trim().is_empty(),
+                    value.trim().is_empty(),
                     "[filter].{key} is not supported by {db_type}"
                 );
             }
         }
-        filter.events = category::<RowType>(ini, "do_events", "*")?;
-        filter.ddls = category::<DdlType>(ini, "do_ddls", "")?;
-        filter.dcls = category::<DclType>(ini, "do_dcls", "")?;
-        filter.structures = category::<StructureType>(ini, "do_structures", "*")?;
-        let commands = ini.get("filter", "ignore_cmds").unwrap_or_default();
+        filter.events = category::<RowType>(&options.do_events, "do_events", "*")?;
+        filter.ddls = category::<DdlType>(&options.do_ddls, "do_ddls", "")?;
+        filter.dcls = category::<DclType>(&options.do_dcls, "do_dcls", "")?;
+        filter.structures =
+            category::<StructureType>(&options.do_structures, "do_structures", "*")?;
+        let commands = &options.ignore_cmds;
         filter.ignore_cmds = commands
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(String::from)
             .collect();
-        let conditions = ini.get("filter", "where_conditions").unwrap_or_default();
+        let conditions = &options.where_conditions;
         if !conditions.trim().is_empty() {
             for rule in
-                config::json::<Vec<WhereRule>>(&conditions).context("[filter].where_conditions")?
+                config::json::<Vec<WhereRule>>(conditions).context("[filter].where_conditions")?
             {
                 match rule {
                     WhereRule::Resource(ResourceWhere { id, condition }) => {
@@ -232,8 +261,15 @@ impl DtFilter {
 
 #[cfg(test)]
 mod tests {
+    use configparser::ini::Ini;
+
     use super::*;
     use crate::rid;
+
+    fn load_filter(ini: &Ini, db_type: DbType) -> Result<DtFilter> {
+        let bases = BaseFilterConfig::from_ini(ini, &db_type)?;
+        DtFilter::from_config(&bases, &FilterConfig::from_ini(ini), db_type)
+    }
 
     fn ini(text: &str) -> Ini {
         let mut ini = Ini::new();
@@ -243,7 +279,63 @@ mod tests {
     }
 
     fn filter(text: &str) -> DtFilter {
-        DtFilter::from_ini(&ini(text), DbType::Mysql).unwrap()
+        load_filter(&ini(text), DbType::Mysql).unwrap()
+    }
+
+    #[test]
+    fn from_config_accepts_resource_maps_and_checks_direct_callers() {
+        let mut bases = HashMap::from([
+            (
+                ResourceKind::Table,
+                BaseFilterConfig {
+                    ignore_rules: Some("market.inventory.secret".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                ResourceKind::Schema,
+                BaseFilterConfig {
+                    do_rules: Some("market.inventory".into()),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let options = FilterConfig {
+            do_events: "insert".into(),
+            ..Default::default()
+        };
+        let filter = DtFilter::from_config(&bases, &options, DbType::Mssql).unwrap();
+        assert!(!filter
+            .filter_event(&rid!("market", "inventory", "order"), &RowType::Insert)
+            .unwrap());
+        assert!(filter
+            .filter_event(&rid!("market", "inventory", "order"), &RowType::Update)
+            .unwrap());
+        assert!(filter
+            .filter(&rid!("market", "inventory", "secret"))
+            .unwrap());
+        assert!(filter.filter(&rid!("other", "inventory", "order")).unwrap());
+        // Direct maps must not silently drop unsupported kinds.
+        bases.insert(
+            ResourceKind::Collection,
+            BaseFilterConfig {
+                do_rules: Some("db.c".into()),
+                ..Default::default()
+            },
+        );
+        assert!(DtFilter::from_config(&bases, &options, DbType::Mssql).is_err());
+        // A missing field inherits legacy rules; an explicitly empty field conflicts.
+        let mut bases = HashMap::from([(ResourceKind::Table, BaseFilterConfig::default())]);
+        let options = FilterConfig {
+            do_tbs: "db.t".into(),
+            ..Default::default()
+        };
+        assert!(!DtFilter::from_config(&bases, &options, DbType::Mysql)
+            .unwrap()
+            .filter(&rid!("db", "t"))
+            .unwrap());
+        bases.get_mut(&ResourceKind::Table).unwrap().do_rules = Some(String::new());
+        assert!(DtFilter::from_config(&bases, &options, DbType::Mysql).is_err());
     }
 
     #[test]
@@ -329,16 +421,16 @@ mod tests {
 
     #[test]
     fn aliases_legacy_mssql_and_mixed_rules_are_checked() {
-        let f = DtFilter::from_ini(&ini("[filter]\ndo_tbs=market.orders"), DbType::Mssql).unwrap();
+        let f = load_filter(&ini("[filter]\ndo_tbs=market.orders"), DbType::Mssql).unwrap();
         assert!(!f.filter(&rid!("market", "dbo", "orders")).unwrap());
         assert!(f.filter(&rid!("market", "other", "orders")).unwrap());
-        let f = DtFilter::from_ini(&ini("[filter.db]\ndo=inventory"), DbType::Pg).unwrap();
+        let f = load_filter(&ini("[filter.db]\ndo=inventory"), DbType::Pg).unwrap();
         assert!(!f.filter(&rid!("inventory", "order")).unwrap());
-        let f = DtFilter::from_ini(&ini("[filter.document]\ndo=db.c"), DbType::Mongo).unwrap();
+        let f = load_filter(&ini("[filter.document]\ndo=db.c"), DbType::Mongo).unwrap();
         assert!(!f.filter(&rid!("db", "c")).unwrap());
         let f = filter("[filter]\ndo_tbs=db.t2,db.t1\n[filter.table]\ndo=db.t1,db.t2");
         assert!(!f.filter(&rid!("db", "t1")).unwrap());
-        assert!(DtFilter::from_ini(
+        assert!(load_filter(
             &ini("[filter]\ndo_tbs=db.t1\n[filter.table]\ndo=db.t2"),
             DbType::Mysql
         )
@@ -358,8 +450,7 @@ mod tests {
                 &db_type,
             )
             .unwrap();
-            let new =
-                DtFilter::from_ini(&ini(&format!("[filter]\ndo_dbs={do_dbs}")), db_type).unwrap();
+            let new = load_filter(&ini(&format!("[filter]\ndo_dbs={do_dbs}")), db_type).unwrap();
             for name in ["db", "name", "db.name", "store12", "inventory", "other"] {
                 assert_eq!(
                     new.filter(&RID::new([name]).unwrap()).unwrap(),
@@ -392,38 +483,33 @@ mod tests {
                 rid!("other"),
             ),
         ] {
-            let f = DtFilter::from_ini(&ini(text), db_type).unwrap();
+            let f = load_filter(&ini(text), db_type).unwrap();
             assert!(!f.filter_event(&selected, &RowType::Insert).unwrap());
             assert!(f.filter(&excluded).unwrap());
         }
-        assert!(DtFilter::from_ini(&ini("[filter]\ndo_dbs=topic"), DbType::Kafka).is_err());
+        assert!(load_filter(&ini("[filter]\ndo_dbs=topic"), DbType::Kafka).is_err());
     }
 
     #[test]
-    fn malformed_or_misplaced_rules_fail_during_loading() {
+    fn malformed_rules_fail_during_compilation() {
         for text in [
-            "[filter.table]\nwhere_conditions=",
-            "[filter.dcl]\ndo=grant",
             "[filter.table]\ndo=db",
             "[filter.table]\ndo=db..table",
             "[filter.table]\ndo=db.table,",
             "[filter.table]\ndo=`db.table",
             "[filter.table]\ndo=db.r#[#",
-            "[filter.topic]\ndo=topic",
             "[filter.table]\ndo=db.t\n[filter]\ndo_events=typo",
-            "[filter.topic]\ndispatch=*.*:topic",
             r#"[filter]
     where_conditions=json:[{"id":["db","t"],"db":"other","tb":"t","condition":"id > 1"}]"#,
         ] {
+            let ini = ini(text);
+            let bases = BaseFilterConfig::from_ini(&ini, &DbType::Mysql).unwrap();
             assert!(
-                DtFilter::from_ini(&ini(text), DbType::Mysql).is_err(),
+                DtFilter::from_config(&bases, &FilterConfig::from_ini(&ini), DbType::Mysql)
+                    .is_err(),
                 "{text}"
             );
         }
-        assert!(DtFilter::from_ini(&ini("[filter.database]\ndo=db"), DbType::Pg).is_err());
-        assert!(
-            DtFilter::from_ini(&ini("[filter.column]\nignore=db.c.field"), DbType::Mongo).is_err()
-        );
         assert!(filter("").filter(&rid!("db", "t")).unwrap());
     }
 }

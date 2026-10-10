@@ -215,7 +215,16 @@ mod tests {
     use configparser::ini::Ini;
 
     use super::*;
-    use crate::{filter::DtFilter, rid};
+    use crate::{
+        config::filter_config::{BaseFilterConfig, FilterConfig},
+        filter::DtFilter,
+        rid,
+    };
+
+    fn load_filter(ini: &Ini, db_type: DbType) -> Result<DtFilter> {
+        let bases = BaseFilterConfig::from_ini(ini, &db_type)?;
+        DtFilter::from_config(&bases, &FilterConfig::from_ini(ini), db_type)
+    }
 
     fn ini(text: &str) -> Ini {
         let mut ini = Ini::new();
@@ -225,7 +234,7 @@ mod tests {
     }
 
     fn filter(text: &str) -> DtFilter {
-        DtFilter::from_ini(&ini(text), DbType::Mysql).unwrap()
+        load_filter(&ini(text), DbType::Mysql).unwrap()
     }
 
     #[test]
@@ -246,7 +255,7 @@ mod tests {
         ] {
             assert!(f.filter(&id).unwrap(), "{id}");
         }
-        let mssql = DtFilter::from_ini(
+        let mssql = load_filter(
             &ini("[filter.table]\ndo=[a.b].[inv]]entory].[ord.er]"),
             DbType::Mssql,
         )

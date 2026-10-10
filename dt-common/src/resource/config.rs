@@ -1,69 +1,9 @@
-//! Shared configuration boundaries for the standalone filter and router.
+//! Shared rule tokenization and RID decoding for filter/router compilation.
 
 use anyhow::{ensure, Context, Result};
-use configparser::ini::Ini;
 
-use super::{resource_levels, ResourceKind, RID};
+use super::{ResourceKind, RID};
 use crate::{config::config_enums::DbType, utils::sql_util::SqlUtil};
-
-pub const BASE_FILTER_SECTIONS: &[(ResourceKind, &str)] = &[
-    (ResourceKind::Database, "filter.database"),
-    (ResourceKind::Schema, "filter.schema"),
-    (ResourceKind::Table, "filter.table"),
-    (ResourceKind::Column, "filter.column"),
-    (ResourceKind::Collection, "filter.collection"),
-    (ResourceKind::Topic, "filter.topic"),
-];
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct BaseConfig {
-    pub do_rules: Option<String>,
-    pub ignore_rules: Option<String>,
-    pub router: Option<String>,
-}
-
-pub(crate) fn base_configs(ini: &Ini, db_type: &DbType) -> Result<Vec<BaseConfig>> {
-    let levels = resource_levels(db_type);
-    let mut result = vec![BaseConfig::default(); levels.len()];
-    for (section, fields) in ini.get_map_ref() {
-        if !section.starts_with("filter.") {
-            continue;
-        }
-        let kind = match section.as_str() {
-            "filter.db" if !matches!(db_type, DbType::Kafka) => levels[0],
-            "filter.document" => ResourceKind::Collection,
-            _ => BASE_FILTER_SECTIONS.iter().find(|(_, name)| name == section).map(|(kind, _)| *kind)
-                .ok_or_else(|| anyhow::anyhow!("unknown resource section [{section}]; WHERE and category options belong in [filter]"))?,
-        };
-        for key in fields.keys() {
-            ensure!(["do", "ignore", "router"].contains(&key.as_str()), "unsupported [{section}].{key}; resource sections only accept do/ignore/router; WHERE and categories belong in [filter]");
-        }
-        let Some(index) = levels.iter().position(|level| *level == kind) else {
-            ensure!(
-                fields
-                    .values()
-                    .all(|v| v.as_deref().unwrap_or("").trim().is_empty()),
-                "[{section}] is not supported by {db_type}"
-            );
-            continue;
-        };
-        let base = &mut result[index];
-        for (key, slot) in [
-            ("do", &mut base.do_rules),
-            ("ignore", &mut base.ignore_rules),
-            ("router", &mut base.router),
-        ] {
-            if let Some(value) = fields.get(key) {
-                let value = value.as_deref().unwrap_or("").trim().to_string();
-                if let Some(previous) = slot.as_ref() {
-                    ensure!(previous == &value, "conflicting aliases for {kind:?}.{key}");
-                }
-                *slot = Some(value);
-            }
-        }
-    }
-    Ok(result)
-}
 
 /// Scan delimiters while preserving quoted/regex tokens. Both endpoint dialects are
 /// used to locate boundaries; decoding still validates each token with its own dialect.

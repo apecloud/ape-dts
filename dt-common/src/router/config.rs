@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
 use anyhow::{ensure, Context, Result};
-use configparser::ini::Ini;
 use serde::Deserialize;
 
 use super::Router;
 use crate::{
-    config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
+    config::{
+        config_enums::DbType,
+        config_token_parser::ConfigTokenParser,
+        router_config::{BaseRouterConfig, RouterConfig},
+    },
     resource::{config, resource_depth, resource_levels, validate_rid, ResourceKind, RID},
 };
 
@@ -106,53 +109,63 @@ struct ColumnRule {
 }
 
 impl Router {
-    pub fn from_ini(ini: &Ini, src: DbType, dst: DbType) -> Result<Self> {
-        let bases = config::base_configs(ini, &src)?;
+    /// Compile raw resource routing rules and optional legacy [router] mappings.
+    pub fn from_config(
+        bases: &HashMap<ResourceKind, BaseRouterConfig>,
+        legacy: &RouterConfig,
+        src: DbType,
+        dst: DbType,
+    ) -> Result<Self> {
+        for kind in bases.keys() {
+            ensure!(
+                resource_depth(&src, *kind).is_some(),
+                "unsupported {kind:?} for {src}"
+            );
+        }
+        let RouterConfig::Rdb {
+            schema_map,
+            tb_map,
+            col_map,
+            ..
+        } = legacy;
         if matches!(src, DbType::Kafka) {
             ensure!(
-                ini.get("router", "db_map")
-                    .unwrap_or_default()
-                    .trim()
-                    .is_empty(),
+                schema_map.trim().is_empty(),
                 "Kafka does not support [router].db_map; use [filter.topic].router"
             );
         }
         let mut rules = Vec::new();
-        for (index, (&kind, base)) in resource_levels(&src).iter().zip(&bases).enumerate() {
+        for (index, &kind) in resource_levels(&src).iter().enumerate() {
             if kind == ResourceKind::Column {
                 continue;
             }
             let key = if index == 0 {
-                Some("db_map")
+                Some(("db_map", schema_map))
             } else if matches!(kind, ResourceKind::Table | ResourceKind::Collection) {
-                Some("tb_map")
+                Some(("tb_map", tb_map))
             } else {
                 None
             };
-            let old = if let Some(key) = key {
-                routes(
-                    &ini.get("router", key).unwrap_or_default(),
-                    &src,
-                    &dst,
-                    true,
-                    key == "tb_map",
-                )
-                .with_context(|| format!("[router].{key}"))?
+            let old = if let Some((key, value)) = key {
+                routes(value, &src, &dst, true, key == "tb_map")
+                    .with_context(|| format!("[router].{key}"))?
             } else {
                 Vec::new()
             };
-            rules.extend(resolve(old, base.router.as_deref(), kind, &src, &dst)?);
+            rules.extend(resolve(
+                old,
+                bases.get(&kind).and_then(|base| base.router.as_deref()),
+                kind,
+                &src,
+                &dst,
+            )?);
         }
         if matches!(src, DbType::Redis | DbType::Kafka) {
             ensure!(
-                ini.get("router", "tb_map")
-                    .unwrap_or_default()
-                    .trim()
-                    .is_empty(),
+                tb_map.trim().is_empty(),
                 "{src} does not support [router].tb_map"
             );
         }
-        let col_map = ini.get("router", "col_map").unwrap_or_default();
         let mut old_columns = Vec::new();
         if !col_map.trim().is_empty() {
             ensure!(
@@ -161,7 +174,7 @@ impl Router {
             );
             let parent_router = Self::new(src.clone(), dst.clone(), rules.clone())?;
             let mut tables = HashMap::new();
-            for entry in config::json::<Vec<ColumnRule>>(&col_map).context("[router].col_map")? {
+            for entry in config::json::<Vec<ColumnRule>>(col_map).context("[router].col_map")? {
                 let source_table = config::legacy_json_table(&entry.db, &entry.tb, &src)?;
                 tables.insert(source_table, entry.col_map);
             }
@@ -172,10 +185,12 @@ impl Router {
                 }
             }
         }
-        if let Some(depth) = resource_depth(&src, ResourceKind::Column) {
+        if resource_depth(&src, ResourceKind::Column).is_some() {
             rules.extend(resolve(
                 old_columns,
-                bases[depth - 1].router.as_deref(),
+                bases
+                    .get(&ResourceKind::Column)
+                    .and_then(|base| base.router.as_deref()),
                 ResourceKind::Column,
                 &src,
                 &dst,
@@ -187,8 +202,15 @@ impl Router {
 
 #[cfg(test)]
 mod tests {
+    use configparser::ini::Ini;
+
     use super::*;
     use crate::rid;
+
+    fn load_router(ini: &Ini, src: DbType, dst: DbType) -> Result<Router> {
+        let bases = BaseRouterConfig::from_ini(ini, &src)?;
+        Router::from_config(&bases, &RouterConfig::from_ini(ini), src, dst)
+    }
 
     fn ini(text: &str) -> Ini {
         let mut ini = Ini::new();
@@ -198,8 +220,64 @@ mod tests {
     }
 
     #[test]
+    fn from_config_validates_resource_maps_and_compiles_columns_after_parents() {
+        let mut bases = HashMap::from([
+            (
+                ResourceKind::Column,
+                BaseRouterConfig {
+                    router: Some("db.t.id:archive.orders.order_id".into()),
+                },
+            ),
+            (
+                ResourceKind::Table,
+                BaseRouterConfig {
+                    router: Some("db.t:archive.orders".into()),
+                },
+            ),
+        ]);
+        let legacy = RouterConfig::Rdb {
+            schema_map: String::new(),
+            tb_map: String::new(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        let router = Router::from_config(&bases, &legacy, DbType::Mysql, DbType::Pg).unwrap();
+        assert_eq!(
+            router.route(&rid!("db", "t", "id")).unwrap(),
+            rid!("archive", "orders", "order_id")
+        );
+        assert_eq!(
+            router.route(&rid!("db", "t", "other")).unwrap(),
+            rid!("archive", "orders", "other")
+        );
+        bases.insert(
+            ResourceKind::Schema,
+            BaseRouterConfig {
+                router: Some("db.schema:archive".into()),
+            },
+        );
+        assert!(Router::from_config(&bases, &legacy, DbType::Mysql, DbType::Pg).is_err());
+        let mut bases = HashMap::from([(ResourceKind::Table, BaseRouterConfig::default())]);
+        let legacy = RouterConfig::Rdb {
+            schema_map: String::new(),
+            tb_map: "db.t:archive.orders".into(),
+            col_map: String::new(),
+            topic_map: String::new(),
+        };
+        assert_eq!(
+            Router::from_config(&bases, &legacy, DbType::Mysql, DbType::Pg)
+                .unwrap()
+                .route(&rid!("db", "t"))
+                .unwrap(),
+            rid!("archive", "orders")
+        );
+        bases.get_mut(&ResourceKind::Table).unwrap().router = Some(String::new());
+        assert!(Router::from_config(&bases, &legacy, DbType::Mysql, DbType::Pg).is_err());
+    }
+
+    #[test]
     fn ini_handles_endpoint_dialects_json_and_legacy_column_parents() {
-        let r = Router::from_ini(
+        let r = load_router(
             &ini("[filter.table]\nrouter=`a.b`.`order`:\"archive\".\"order.2026\""),
             DbType::Mysql,
             DbType::Pg,
@@ -209,7 +287,7 @@ mod tests {
             r.route(&rid!("a.b", "order")).unwrap(),
             rid!("archive", "order.2026")
         );
-        let r = Router::from_ini(
+        let r = load_router(
             &ini(r#"[filter.table]
     router=json:[{"from":["a.b","order"],"to":["archive","order.2026"]}]
     "#),
@@ -221,7 +299,7 @@ mod tests {
             r.route(&rid!("a.b", "order")).unwrap(),
             rid!("archive", "order.2026")
         );
-        let r = Router::from_ini(
+        let r = load_router(
             &ini(r#"[router]
     db_map=market:archive
     tb_map=market.order:archive.history.order_2026
@@ -239,7 +317,7 @@ mod tests {
             r.route(&rid!("market", "dbo", "order", "value")).unwrap(),
             rid!("archive", "history", "order_2026", "value")
         );
-        let dotted = Router::from_ini(
+        let dotted = load_router(
             &ini("[router]\ndb_map=source.db:target.db"),
             DbType::Mssql,
             DbType::Mssql,
@@ -255,8 +333,16 @@ mod tests {
             "[filter.table]\nrouter=a.t:b.t,",
             "[router]\ntb_map=a.t:b.t\n[filter.table]\nrouter=a.t:c.t",
         ] {
+            let ini = ini(text);
+            let bases = BaseRouterConfig::from_ini(&ini, &DbType::Mysql).unwrap();
             assert!(
-                Router::from_ini(&ini(text), DbType::Mysql, DbType::Mysql).is_err(),
+                Router::from_config(
+                    &bases,
+                    &RouterConfig::from_ini(&ini),
+                    DbType::Mysql,
+                    DbType::Mysql
+                )
+                .is_err(),
                 "{text}"
             );
         }

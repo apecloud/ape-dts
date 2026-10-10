@@ -9,7 +9,7 @@ use dashmap::DashMap;
 pub use pattern::IdPattern;
 use pattern::MatcherSet;
 
-pub use crate::resource::config::BASE_FILTER_SECTIONS;
+pub use crate::config::filter_config::BASE_FILTER_SECTIONS;
 use crate::{
     config::config_enums::DbType,
     meta::{
@@ -219,7 +219,15 @@ mod tests {
     use configparser::ini::Ini;
 
     use super::*;
-    use crate::rid;
+    use crate::{
+        config::filter_config::{BaseFilterConfig, FilterConfig},
+        rid,
+    };
+
+    fn load_filter(ini: &Ini, db_type: DbType) -> Result<DtFilter> {
+        let bases = BaseFilterConfig::from_ini(ini, &db_type)?;
+        DtFilter::from_config(&bases, &FilterConfig::from_ini(ini), db_type)
+    }
 
     fn ini(text: &str) -> Ini {
         let mut ini = Ini::new();
@@ -229,7 +237,7 @@ mod tests {
     }
 
     fn filter(text: &str) -> DtFilter {
-        DtFilter::from_ini(&ini(text), DbType::Mysql).unwrap()
+        load_filter(&ini(text), DbType::Mysql).unwrap()
     }
 
     #[test]
@@ -250,7 +258,7 @@ mod tests {
 
     #[test]
     fn three_level_scope_and_cache_updates_keep_databases_isolated() {
-        let mut f = DtFilter::from_ini(&ini("[filter.schema]\ndo=a.inventory,b.inventory\nignore=a.audit\n[filter.table]\nignore=b.inventory.order"), DbType::Mssql).unwrap();
+        let mut f = load_filter(&ini("[filter.schema]\ndo=a.inventory,b.inventory\nignore=a.audit\n[filter.table]\nignore=b.inventory.order"), DbType::Mssql).unwrap();
         assert!(!f.filter(&rid!("a", "inventory", "order")).unwrap());
         assert!(f.filter(&rid!("b", "inventory", "order")).unwrap());
         f.add_ignore(&rid!("a")).unwrap();
