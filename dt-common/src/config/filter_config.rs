@@ -49,7 +49,8 @@ impl BaseFilterConfig {
 
 impl FilterConfig {
     /// Load [filter] as strings, including legacy resource rules and common options.
-    /// Default event/structure selection and rule validation belong to DtFilter.
+    /// Missing or empty event/structure options select all, as in legacy task loading.
+    /// Rule compilation and validation remain in the concrete filter.
     pub fn from_ini(ini: &Ini) -> Self {
         Self {
             do_schemas: ini.get("filter", "do_dbs").unwrap_or_default(),
@@ -57,8 +58,14 @@ impl FilterConfig {
             do_tbs: ini.get("filter", "do_tbs").unwrap_or_default(),
             ignore_tbs: ini.get("filter", "ignore_tbs").unwrap_or_default(),
             ignore_cols: ini.get("filter", "ignore_cols").unwrap_or_default(),
-            do_events: ini.get("filter", "do_events").unwrap_or_default(),
-            do_structures: ini.get("filter", "do_structures").unwrap_or_default(),
+            do_events: ini
+                .get("filter", "do_events")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "*".into()),
+            do_structures: ini
+                .get("filter", "do_structures")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "*".into()),
             do_ddls: ini.get("filter", "do_ddls").unwrap_or_default(),
             do_dcls: ini.get("filter", "do_dcls").unwrap_or_default(),
             ignore_cmds: ini.get("filter", "ignore_cmds").unwrap_or_default(),
@@ -138,6 +145,26 @@ mod tests {
         ini.set_inline_comment_symbols(Some(&Vec::new()));
         ini.read(text.into()).unwrap();
         ini
+    }
+
+    #[test]
+    fn legacy_selection_defaults_survive_config_loading() {
+        for (text, events, structures) in [
+            ("", "*", "*"),
+            ("[filter]\ndo_events=\ndo_structures=", "*", "*"),
+            ("[filter]\ndo_events\ndo_structures", "*", "*"),
+            (
+                "[filter]\ndo_events=insert\ndo_structures=table",
+                "insert",
+                "table",
+            ),
+        ] {
+            let config = FilterConfig::from_ini(&ini(text));
+            assert_eq!(config.do_events, events);
+            assert_eq!(config.do_structures, structures);
+            assert!(config.do_ddls.is_empty());
+            assert!(config.do_dcls.is_empty());
+        }
     }
 
     #[test]
