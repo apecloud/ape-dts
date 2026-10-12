@@ -48,6 +48,9 @@ pub struct RdbFilter {
 
 impl RdbFilter {
     pub fn from_config(config: &FilterConfig, db_type: &DbType) -> anyhow::Result<Self> {
+        let FilterConfig::Legacy(config) = config else {
+            anyhow::bail!("RdbFilter only supports Legacy configuration");
+        };
         Ok(Self {
             db_type: db_type.to_owned(),
             do_schemas: Self::parse_single_tokens(&config.do_schemas, db_type)?,
@@ -460,6 +463,7 @@ impl RdbFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::filter_config::LegacyFilterConfig;
 
     #[test]
     fn test_parse_ignore_cols() {
@@ -796,15 +800,27 @@ mod tests {
     }
 
     #[test]
+    fn legacy_filter_rejects_basic_configuration() {
+        let mut ini = configparser::ini::Ini::new();
+        ini.read("[filter]\ndo_tbs=legacy.t\ndo_events=insert\n[rules.table]\ndo=db.t".into())
+            .unwrap();
+        let config = FilterConfig::from_ini(&ini).unwrap();
+        assert!(RdbFilter::from_config(&config, &DbType::Mysql).is_err());
+        let resource = crate::filter::DtFilter::from_config(&config, DbType::Mysql).unwrap();
+        assert!(!resource.filter(&crate::rid!("db", "t")).unwrap());
+        assert!(resource.filter(&crate::rid!("legacy", "t")).unwrap());
+    }
+
+    #[test]
     fn test_rdb_filter_ignore_tbs_without_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "*".to_string(),
             do_tbs: "*.*".to_string(),
             ignore_tbs: "*.b*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_event("a", "bcd", &RowType::Insert));
         assert!(rdb_filter.filter_event("b", "b", &RowType::Insert));
@@ -815,13 +831,13 @@ mod tests {
     #[test]
     fn test_rdb_filter_ignore_tbs_with_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "*".to_string(),
             do_tbs: "*.*".to_string(),
             ignore_tbs: "*.`b*`,*.c*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_event("a", "b*", &RowType::Insert));
         assert!(rdb_filter.filter_event("b", "b*", &RowType::Insert));
@@ -834,11 +850,11 @@ mod tests {
     #[test]
     fn test_rdb_filter_ignore_tbs_with_escapes_2() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_tbs: "`db_test_position.aaa`.`b.bbb,.b`,`db_test_position.aaa`.c".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_event("db_test_position.aaa", "b.bbb,.b", &RowType::Insert));
         assert!(!rdb_filter.filter_event("db_test_position.aaa", "c", &RowType::Insert));
@@ -846,11 +862,11 @@ mod tests {
 
     #[test]
     fn test_mssql_filter_with_escaped_right_delimiters() {
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_tbs: "[db]]name].[schema]]name].[table]]name]".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &DbType::Mssql).unwrap();
 
         assert!(!rdb_filter.filter_event_with_db(
@@ -870,13 +886,13 @@ mod tests {
     #[test]
     fn test_rdb_filter_ignore_dbs_without_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "*".to_string(),
             ignore_schemas: "a*".to_string(),
             do_tbs: "*.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_event("abc", "bcd", &RowType::Insert));
         assert!(rdb_filter.filter_event("a", "bcd", &RowType::Insert));
@@ -887,13 +903,13 @@ mod tests {
     #[test]
     fn test_rdb_filter_ignore_dbs_with_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "*".to_string(),
             ignore_schemas: "`a*`,b*".to_string(),
             do_tbs: "*.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_event("abc", "bcd", &RowType::Insert));
         assert!(!rdb_filter.filter_event("a", "bcd", &RowType::Insert));
@@ -904,13 +920,13 @@ mod tests {
     #[test]
     fn test_rdb_filter_do_dbs_without_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "b*".to_string(),
             ignore_schemas: "a*".to_string(),
             do_tbs: "aaaaaaa.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_event("a", "bcd", &RowType::Insert));
         assert!(rdb_filter.filter_event("c", "bcd", &RowType::Insert));
@@ -921,13 +937,13 @@ mod tests {
     #[test]
     fn test_rdb_filter_do_dbs_with_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "`b*`,abc,bcd*,cde".to_string(),
             ignore_schemas: "a*".to_string(),
             do_tbs: "aaaaaaa.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_event("a", "bcd", &RowType::Insert));
         assert!(rdb_filter.filter_event("c", "bcd", &RowType::Insert));
@@ -943,12 +959,12 @@ mod tests {
     #[test]
     fn test_rdb_filter_do_tbs_without_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "b*".to_string(),
             do_tbs: "a*.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_event("bcd", "bcd", &RowType::Insert));
         assert!(rdb_filter.filter_event("cde", "bcd", &RowType::Insert));
@@ -959,12 +975,12 @@ mod tests {
     #[test]
     fn test_rdb_filter_do_tbs_with_escapes() {
         let db_type = DbType::Mysql;
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "b*".to_string(),
             do_tbs: "a*.*,`c*`.`*`".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_event("bcd", "bcd", &RowType::Insert));
         assert!(rdb_filter.filter_event("cde", "bcd", &RowType::Insert));
@@ -980,105 +996,105 @@ mod tests {
     fn test_rdb_filter_db_without_escapes() {
         let db_type = DbType::Mysql;
         // keep by do_dbs, Not filtered by ignore_dbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_*".to_string(),
             ignore_schemas: "test_db_2".to_string(),
 
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_dbs, filtered by ignore_dbs exactly
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_*".to_string(),
             ignore_schemas: "test_db_1".to_string(),
 
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_dbs, filtered by ignore_dbs wildchar
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_1".to_string(),
             ignore_schemas: "*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_dbs, NOT all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_*".to_string(),
             ignore_tbs: "test_db_1.a*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_dbs, all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_*".to_string(),
             ignore_tbs: "test_db_1.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_tbs, NOT all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_tbs: "test_db_1.one_pk_multi_uk".to_string(),
             ignore_tbs: "test_db_*.a*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_tbs, all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "b*".to_string(),
             do_tbs: "test_db_1.one_pk_multi_uk".to_string(),
             ignore_tbs: "test_db_*.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_tbs, NOT filtered by ignore_dbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "test_db_2".to_string(),
             do_tbs: "test_db_1.one_pk_multi_uk".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_tbs, filtered by ignore_dbs exactly
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "test_db_1".to_string(),
             do_tbs: "test_db_1.one_pk_multi_uk".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_1"));
 
         // keep by do_tbs, filtered by ignore_dbs wildchar
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "test_db_*".to_string(),
             do_tbs: "test_db_1.one_pk_multi_uk".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_1"));
     }
@@ -1087,112 +1103,112 @@ mod tests {
     fn test_rdb_filter_db_with_escapes() {
         let db_type = DbType::Mysql;
         // keep by do_dbs, Not filtered by ignore_dbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "`test_db_*`".to_string(),
             ignore_schemas: "`test_db_2`".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_dbs, filtered by ignore_dbs exactly
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_*".to_string(),
             ignore_schemas: "`test_db_*`".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_dbs, filtered by ignore_dbs wildchar
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "`test_db_*`".to_string(),
             ignore_schemas: "test_db*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_dbs, NOT all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "`test_db_*`".to_string(),
             ignore_tbs: "`test_db_*`.a*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_dbs, all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "`test_db_*`".to_string(),
             ignore_tbs: "`test_db_*`.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_tbs, NOT all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_tbs: "`test_db_*`.one_pk_multi_uk".to_string(),
             ignore_tbs: "`test_db_*`.a*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_tbs, all tables filtered by ignore_tbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "b*".to_string(),
             do_tbs: "`test_db_*`.one_pk_multi_uk".to_string(),
             ignore_tbs: "`test_db_*`.*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_tbs, NOT filtered by ignore_dbs
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "test_db_2".to_string(),
             do_tbs: "`test_db_*`.one_pk_multi_uk".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_tbs, filtered by ignore_dbs exactly
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "`test_db_*`".to_string(),
             do_tbs: "test_db_*.one_pk_multi_uk".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_*"));
 
         // keep by do_tbs, filtered by ignore_dbs wildchar
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_schemas: "test_db*".to_string(),
             do_tbs: "`test_db_*`.one_pk_multi_uk".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_*"));
 
         // ignore some tbs in db, but not all tbs in db filtered
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             ignore_tbs: "test_db_*.test_tb_*".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(rdb_filter.filter_schema("test_db_*"));
     }
@@ -1202,24 +1218,24 @@ mod tests {
         let db_type = DbType::Mysql;
 
         // keep do_events empty
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_*".to_string(),
             ignore_schemas: "test_db_2".to_string(),
             do_events: "*".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Insert));
         assert!(!rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Update));
         assert!(!rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Delete));
 
         // explicitly set do_events
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "test_db_*".to_string(),
             ignore_schemas: "test_db_2".to_string(),
             do_events: "insert".to_string(),
             ..Default::default()
-        };
+        });
         let rdb_filter = RdbFilter::from_config(&config, &db_type).unwrap();
         assert!(!rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Insert));
         assert!(rdb_filter.filter_event("test_db_1", "aaaa", &RowType::Update));
@@ -1228,10 +1244,10 @@ mod tests {
 
     #[test]
     fn table_filter_cache_is_isolated_by_db() {
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_events: "*".to_string(),
             ..Default::default()
-        };
+        });
         let mut filter = RdbFilter::from_config(&config, &DbType::Mssql).unwrap();
         filter.do_schemas.insert("*".to_string());
         filter.add_ignore_tb_with_db("db1", "schema1", "tb1");
@@ -1243,11 +1259,11 @@ mod tests {
     #[test]
     fn configured_tables_use_empty_physical_db() {
         for db_type in [DbType::Mysql, DbType::Pg] {
-            let config = FilterConfig {
+            let config = FilterConfig::Legacy(LegacyFilterConfig {
                 do_tbs: "schema1.tb1".to_string(),
                 do_events: "*".to_string(),
                 ..Default::default()
-            };
+            });
             let filter = RdbFilter::from_config(&config, &db_type).unwrap();
 
             assert!(filter
@@ -1261,11 +1277,11 @@ mod tests {
     #[test]
     fn configured_schemas_use_empty_physical_db() {
         for db_type in [DbType::Mysql, DbType::Pg] {
-            let config = FilterConfig {
+            let config = FilterConfig::Legacy(LegacyFilterConfig {
                 do_schemas: "schema1".to_string(),
                 do_events: "*".to_string(),
                 ..Default::default()
-            };
+            });
             let filter = RdbFilter::from_config(&config, &db_type).unwrap();
 
             assert!(filter.do_schemas.contains("schema1"));
@@ -1292,11 +1308,11 @@ mod tests {
     #[test]
     fn adding_table_rules_invalidates_cached_results() {
         let mut filter = RdbFilter::from_config(
-            &FilterConfig {
+            &FilterConfig::Legacy(LegacyFilterConfig {
                 do_schemas: "*".to_string(),
                 do_events: "*".to_string(),
                 ..Default::default()
-            },
+            }),
             &DbType::Mssql,
         )
         .unwrap();
@@ -1306,10 +1322,10 @@ mod tests {
         assert!(filter.filter_tb("dbo", "tb1"));
 
         let mut filter = RdbFilter::from_config(
-            &FilterConfig {
+            &FilterConfig::Legacy(LegacyFilterConfig {
                 do_events: "*".to_string(),
                 ..Default::default()
-            },
+            }),
             &DbType::Mssql,
         )
         .unwrap();
@@ -1321,14 +1337,14 @@ mod tests {
 
     #[test]
     fn mssql_config_uses_physical_database_and_default_schema() {
-        let config = FilterConfig {
+        let config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "db1,r#archive_.*#".to_string(),
             ignore_schemas: "db3".to_string(),
             do_tbs: "db1.*,db1.sales.orders,r#db[0-9]+#.r#schema.*#.r#table.*#".to_string(),
             ignore_tbs: "db2.orders".to_string(),
             do_events: "*".to_string(),
             ..Default::default()
-        };
+        });
 
         let filter = RdbFilter::from_config(&config, &DbType::Mssql).unwrap();
 
@@ -1367,10 +1383,10 @@ mod tests {
     fn mssql_table_patterns_reject_invalid_arity() {
         for pattern in ["orders", "db.schema.table.extra"] {
             let result = RdbFilter::from_config(
-                &FilterConfig {
+                &FilterConfig::Legacy(LegacyFilterConfig {
                     do_tbs: pattern.to_string(),
                     ..Default::default()
-                },
+                }),
                 &DbType::Mssql,
             );
             assert!(result.is_err(), "pattern should be rejected: {pattern}");

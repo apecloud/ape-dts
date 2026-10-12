@@ -35,9 +35,9 @@ mod tests {
             config_enums::{DbType, ExtractType, SinkType},
             connection_auth_config::ConnectionAuthConfig,
             extractor_config::BasicExtractorConfig,
-            filter_config::FilterConfig,
+            filter_config::{FilterConfig, LegacyFilterConfig},
             limiter_config::RateLimiterConfig,
-            router_config::RouterConfig,
+            router_config::{LegacyRouterConfig, RouterConfig},
             sinker_config::BasicSinkerConfig,
         },
         utils::task_util::TaskUtil,
@@ -69,7 +69,7 @@ mod tests {
             is_direct_connection: None,
             is_cluster: None,
         };
-        let mut filter_config = FilterConfig {
+        let mut filter_config = FilterConfig::Legacy(LegacyFilterConfig {
             do_schemas: "db1,db2".to_string(),
             ignore_schemas: "db3".to_string(),
             do_tbs: "db4.tb1,db5.*".to_string(),
@@ -81,13 +81,13 @@ mod tests {
             do_dcls: "".to_string(),
             ignore_cmds: "".to_string(),
             where_conditions: "".to_string(),
-        };
-        let router_config = RouterConfig::Rdb {
+        });
+        let router_config = RouterConfig::Legacy(LegacyRouterConfig {
             schema_map: "db1:db1_tmp".to_string(),
             tb_map: "".to_string(),
             col_map: "".to_string(),
             topic_map: "".to_string(),
-        };
+        });
         let mut generate_task_id = "".to_string();
         for _i in 0..10 {
             let new_task_id = TaskUtil::generate_task_id(
@@ -102,7 +102,10 @@ mod tests {
             generate_task_id = new_task_id
         }
 
-        filter_config.do_schemas = "db1_tmp,db2_tmp".to_string();
+        let FilterConfig::Legacy(options) = &mut filter_config else {
+            unreachable!()
+        };
+        options.do_schemas = "db1_tmp,db2_tmp".to_string();
         let tmp_task_id = TaskUtil::generate_task_id(
             &extractor_config,
             &sinker_config,

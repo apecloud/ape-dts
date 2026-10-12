@@ -221,10 +221,13 @@ impl Prechecker for PostgresqlPrechecker {
         }
 
         let (mut db_tables, mut err_msgs): (Vec<DbTable>, Vec<String>) = (Vec::new(), Vec::new());
-        if !self.filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&self.filter_config.do_tbs, &mut db_tables)
-        } else if !self.filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&self.filter_config.do_schemas, &mut db_tables)
+        let FilterConfig::Legacy(filter_config) = &self.filter_config else {
+            bail!("PostgreSQL prechecker only supports Legacy configuration");
+        };
+        if !filter_config.do_tbs.is_empty() {
+            DbTable::from_str(&filter_config.do_tbs, &mut db_tables)
+        } else if !filter_config.do_schemas.is_empty() {
+            DbTable::from_str(&filter_config.do_schemas, &mut db_tables)
         }
 
         let (schemas, tb_schemas, tbs) = DbTable::get_config_maps(&db_tables)?;
@@ -335,10 +338,13 @@ impl Prechecker for PostgresqlPrechecker {
 
         let (mut db_tables, mut err_msgs, mut warn_msgs): (Vec<DbTable>, Vec<String>, Vec<String>) =
             (Vec::new(), Vec::new(), Vec::new());
-        if !self.filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&self.filter_config.do_tbs, &mut db_tables)
-        } else if !self.filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&self.filter_config.do_schemas, &mut db_tables)
+        let FilterConfig::Legacy(filter_config) = &self.filter_config else {
+            bail!("PostgreSQL prechecker only supports Legacy configuration");
+        };
+        if !filter_config.do_tbs.is_empty() {
+            DbTable::from_str(&filter_config.do_tbs, &mut db_tables)
+        } else if !filter_config.do_schemas.is_empty() {
+            DbTable::from_str(&filter_config.do_schemas, &mut db_tables)
         }
 
         let (schemas, tb_schemas, _) = DbTable::get_config_maps(&db_tables)?;

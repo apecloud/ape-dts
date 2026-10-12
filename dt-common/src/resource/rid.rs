@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::resource_kind;
 use crate::config::config_enums::DbType;
 
-/// A non-empty path of non-empty, unescaped names. Dots inside a name are literal.
+/// Non-empty path of non-empty segments; dots within segments are literal. Filter RIDs may contain patterns.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct RID {
@@ -63,7 +63,7 @@ impl RID {
         self.segments.starts_with(&prefix.segments)
     }
 
-    pub(crate) fn replace_prefix(&self, len: usize, target: &Self) -> Result<Self> {
+    pub fn replace_prefix(&self, len: usize, target: &Self) -> Result<Self> {
         ensure!(
             len > 0 && len <= self.len(),
             "invalid RID prefix length {len}"
@@ -81,24 +81,21 @@ impl<'de> Deserialize<'de> for RID {
 
 impl fmt::Display for RID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // JSON preserves segment boundaries; this is not an SQL renderer.
         let encoded = serde_json::to_string(&self.segments).map_err(|_| fmt::Error)?;
         f.write_str(&encoded)
     }
 }
 
-/// Engine identifiers must validate their supported engine, resource kind and required fields.
-/// `validate_rid` checks kind/depth; additional engine-specific constraints belong in the adapter.
+/// Adapters must validate engine-specific fields as well as RID kind and depth.
 pub trait ToRid {
     fn to_rid(&self, db_type: &DbType) -> Result<RID>;
 }
 
-/// Reconstruct a concrete identifier in the supplied endpoint's context, validating its kind.
+/// Decode and validate an identifier for the supplied engine.
 pub trait FromRid: Sized {
     fn from_rid(id: &RID, db_type: &DbType) -> Result<Self>;
 }
 
-// Direct RID inputs make the isolated modules usable before engine adapters are introduced.
 impl ToRid for RID {
     fn to_rid(&self, db_type: &DbType) -> Result<RID> {
         resource_kind(db_type, self)?;
@@ -112,7 +109,7 @@ impl FromRid for RID {
     }
 }
 
-/// Construct an RID from non-empty string literals; dynamic input uses `RID::new`.
+/// Non-empty string literals are checked at compile time; dynamic input uses `RID::new`.
 #[macro_export]
 macro_rules! rid {
     ($($segment:literal),+ $(,)?) => {{

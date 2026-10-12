@@ -1,14 +1,14 @@
-//! Engine-independent resource identities. These modules do not change the pipeline's identities.
+//! Engine-independent resource identities.
 //!
 //! ```
-//! use dt_common::{config::config_enums::DbType, filter::DtFilter, rid, router::Router};
+//! use dt_common::{config::config_enums::DbType, filter::DtFilter, rid, router::DtRouter};
 //!
 //! let table = rid!("inventory", "order");
 //! let mut filter = DtFilter::new(DbType::Pg);
 //! filter.add_do(&rid!("inventory"))?;
 //! assert!(!filter.filter(&table)?); // true means excluded
 //!
-//! let router = Router::new(DbType::Pg, DbType::Mssql,
+//! let router = DtRouter::new(DbType::Pg, DbType::Mssql,
 //!     [(rid!("inventory"), rid!("market", "inventory"))])?;
 //! let target = router.route(&table)?;
 //! assert_eq!(target, rid!("market", "inventory", "order"));
@@ -16,9 +16,19 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
-pub(crate) mod config;
-mod kind;
+pub mod config_parser;
+mod exact_matcher;
+pub mod legacy;
+mod pattern_matcher;
+mod resource_kind;
 mod rid;
+mod rmatcher;
 
-pub use kind::{resource_depth, resource_kind, resource_levels, validate_rid, ResourceKind};
+pub use exact_matcher::ExactMatcher;
+pub use pattern_matcher::PatternMatcher;
+pub use pattern_matcher::{REGEX_PREFIX, REGEX_SUFFIX};
+pub use resource_kind::{
+    resource_depth, resource_kind, resource_levels, validate_rid, ResourceKind,
+};
 pub use rid::{FromRid, ToRid, RID};
+pub use rmatcher::RMatcher;

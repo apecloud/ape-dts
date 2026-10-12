@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use anyhow::{ensure, Context};
 use dt_common::{
-    config::{config_enums::DbType, filter_config::FilterConfig},
+    config::{
+        config_enums::DbType,
+        filter_config::{FilterConfig, LegacyFilterConfig},
+    },
     meta::mssql::mssql_connection_pool::MssqlConnectionPool,
     rdb_filter::RdbFilter,
 };
@@ -127,10 +130,10 @@ impl MssqlComponentTestContext {
         for selector in selectors {
             let table_names = if RdbFilter::is_pattern(selector.tb, &DbType::Mssql) {
                 let pattern_filter = RdbFilter::from_config(
-                    &FilterConfig {
+                    &FilterConfig::Legacy(LegacyFilterConfig {
                         do_tbs: format!("{}.{}.{}", selector.db, selector.schema, selector.tb),
                         ..Default::default()
-                    },
+                    }),
                     &DbType::Mssql,
                 )?;
                 let table_names = meta_manager
