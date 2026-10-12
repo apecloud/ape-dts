@@ -4,7 +4,10 @@ mod test {
 
     use anyhow::Context;
     use dt_common::{
-        config::{config_enums::DbType, router_config::RouterConfig},
+        config::{
+            config_enums::DbType,
+            router_config::{LegacyRouterConfig, RouterConfig},
+        },
         meta::{
             adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
             col_value::ColValue,
@@ -359,7 +362,7 @@ mod test {
         let table =
             context.sinker_table("ape_dts_sinker_component_test", "dbo", "transaction_rows")?;
         let router = RdbRouter::from_config(
-            &RouterConfig::Rdb {
+            &RouterConfig::Legacy(LegacyRouterConfig {
                 schema_map: String::new(),
                 tb_map: format!(
                     "{}.source_schema.source_table:{}.{}.{}",
@@ -367,7 +370,7 @@ mod test {
                 ),
                 col_map: String::new(),
                 topic_map: String::new(),
-            },
+            }),
             &DbType::Mssql,
         )?
         .context("MSSQL sinker test router has no route rules")?;

@@ -1,10 +1,13 @@
 use anyhow::{bail, ensure, Result};
+use strum::{AsRefStr, EnumString};
 
 use super::RID;
 use crate::config::config_enums::DbType;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum ResourceKind {
+    #[strum(serialize = "db")]
     Database,
     Schema,
     Table,
@@ -13,41 +16,62 @@ pub enum ResourceKind {
     Topic,
 }
 
+const MYSQL_RESOURCE_LEVELS: &[ResourceKind] = &[
+    ResourceKind::Database,
+    ResourceKind::Table,
+    ResourceKind::Column,
+];
+const PG_RESOURCE_LEVELS: &[ResourceKind] = &[
+    ResourceKind::Schema,
+    ResourceKind::Table,
+    ResourceKind::Column,
+];
+const MSSQL_RESOURCE_LEVELS: &[ResourceKind] = &[
+    ResourceKind::Database,
+    ResourceKind::Schema,
+    ResourceKind::Table,
+    ResourceKind::Column,
+];
+const MONGO_RESOURCE_LEVELS: &[ResourceKind] = &[ResourceKind::Database, ResourceKind::Collection];
+const REDIS_RESOURCE_LEVELS: &[ResourceKind] = &[ResourceKind::Database];
+const KAFKA_RESOURCE_LEVELS: &[ResourceKind] = &[ResourceKind::Topic];
+
 pub fn resource_levels(db_type: &DbType) -> &'static [ResourceKind] {
-    use ResourceKind::*;
     match db_type {
         DbType::Mysql | DbType::Tidb | DbType::ClickHouse | DbType::StarRocks | DbType::Doris => {
-            &[Database, Table, Column]
+            MYSQL_RESOURCE_LEVELS
         }
-        DbType::Pg => &[Schema, Table, Column],
-        DbType::Mssql => &[Database, Schema, Table, Column],
-        DbType::Mongo => &[Database, Collection],
-        DbType::Redis => &[Database],
-        DbType::Kafka => &[Topic],
+        DbType::Pg => PG_RESOURCE_LEVELS,
+        DbType::Mssql => MSSQL_RESOURCE_LEVELS,
+        DbType::Mongo => MONGO_RESOURCE_LEVELS,
+        DbType::Redis => REDIS_RESOURCE_LEVELS,
+        DbType::Kafka => KAFKA_RESOURCE_LEVELS,
     }
 }
 
+/// Zero-based index in the engine's resource hierarchy.
 pub fn resource_depth(db_type: &DbType, kind: ResourceKind) -> Option<usize> {
     resource_levels(db_type)
         .iter()
         .position(|&level| level == kind)
-        .map(|i| i + 1)
 }
 
 pub fn resource_kind(db_type: &DbType, id: &RID) -> Result<ResourceKind> {
+    let depth = id.len() - 1;
     resource_levels(db_type)
-        .get(id.len() - 1)
+        .get(depth)
         .copied()
-        .ok_or_else(|| anyhow::anyhow!("invalid {db_type} resource depth {}: {id}", id.len()))
+        .ok_or_else(|| anyhow::anyhow!("invalid {db_type} resource depth {depth}: {id}"))
 }
 
 pub fn validate_rid(db_type: &DbType, kind: ResourceKind, id: &RID) -> Result<()> {
     let Some(depth) = resource_depth(db_type, kind) else {
         bail!("{db_type} does not have a {kind:?} resource");
     };
+    let segments = depth + 1;
     ensure!(
-        id.len() == depth,
-        "{db_type} {kind:?} requires {depth} segments: {id}"
+        id.len() == segments,
+        "{db_type} {kind:?} requires {segments} segments: {id}"
     );
     Ok(())
 }
@@ -75,6 +99,7 @@ mod tests {
         ] {
             assert_eq!(resource_levels(&engine), levels);
             for (index, kind) in levels.iter().enumerate() {
+                assert_eq!(resource_depth(&engine, *kind), Some(index));
                 let id = RID::new(vec!["name"; index + 1]).unwrap();
                 assert_eq!(resource_kind(&engine, &id).unwrap(), *kind);
                 validate_rid(&engine, *kind, &id).unwrap();
@@ -84,6 +109,7 @@ mod tests {
                 resource_kind(&engine, &RID::new(vec!["name"; levels.len() + 1]).unwrap()).is_err()
             );
         }
+        assert_eq!(resource_depth(&Pg, Database), None);
         assert!(validate_rid(&Pg, Database, &rid!("db")).is_err());
     }
 }

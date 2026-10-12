@@ -4,255 +4,177 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
-use serde::Deserialize;
 
-use super::{pattern::MatcherSet, BaseFilter, DtFilter, IdPattern, ValueFilter};
+use super::{CommonFilter, CommonFilterKind, DtFilter, ExpressionFilter, ResourceFilter};
 use crate::{
     config::{
         config_enums::DbType,
-        config_token_parser::{ConfigTokenParser, TokenEscapePair},
-        filter_config::{BaseFilterConfig, FilterConfig},
+        filter_config::{ExpressionFilterConfig, FilterConfig, FilterSectionConfig, RULES},
     },
     meta::{
         dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
     },
-    resource::{config, resource_depth, resource_levels, ResourceKind, RID},
+    resource::{config_parser as config, validate_rid, ResourceKind, REGEX_PREFIX, RID},
+    utils::sql_util::SqlUtil,
 };
 
-fn patterns(value: &str, db_type: &DbType, legacy: bool, table: bool) -> Result<MatcherSet> {
-    let paths = if legacy && (!table || !matches!(db_type, DbType::Mssql)) {
-        // The old non-MSSQL grammar flattened both commas and dots. Preserve that
-        // behavior here; only new resource sections require explicit path boundaries.
-        let pairs = [TokenEscapePair::from(("r#".to_string(), "#".to_string()))];
-        let tokens =
-            ConfigTokenParser::parse_config(value.trim(), db_type, &[',', '.'], Some(&pairs))?;
-        let depth = if table { 2 } else { 1 };
-        ensure!(
-            tokens.len() % depth == 0,
-            "incomplete legacy resource pattern"
-        );
-        tokens.chunks(depth).map(|chunk| chunk.to_vec()).collect()
-    } else {
-        config::paths(value, db_type)?
-    };
-    MatcherSet::new(
-        paths
-            .into_iter()
-            .map(|path| {
-                let path = if table {
-                    config::legacy_table(path, db_type)?
-                } else {
-                    path
-                };
-                IdPattern::from_tokens(&path, db_type, legacy)
-            })
-            .collect::<Result<_>>()?,
-    )
+fn patterns(value: &str, db_type: &DbType) -> Result<HashSet<RID>> {
+    config::paths(value, db_type)?
+        .into_iter()
+        .map(|path| {
+            for token in &path {
+                config::literal(token, db_type)?;
+            }
+            RID::new(path)
+        })
+        .collect()
 }
 
-fn merge(
-    old: MatcherSet,
-    old_present: bool,
-    new: Option<&str>,
-    db_type: &DbType,
-) -> Result<MatcherSet> {
-    let Some(new) = new else {
-        return Ok(old);
-    };
-    let new = patterns(new, db_type, false, false)?;
+fn common_values(value: &str, kind: CommonFilterKind) -> Result<HashSet<String>> {
     ensure!(
-        !old_present || old.equivalent(&new),
-        "conflicting legacy and resource filter rules"
+        kind == CommonFilterKind::Cmd || !value.trim_end().ends_with(','),
+        "trailing comma in {} filter values",
+        kind.as_ref()
     );
-    Ok(new)
+    let mut rules = HashSet::new();
+    let mut remaining = value.trim();
+    while !remaining.is_empty() {
+        // Keep commas inside r#...# in the same literal command token.
+        let (name, rest) = if kind == CommonFilterKind::Cmd && remaining.starts_with(REGEX_PREFIX) {
+            let (name, rest) = config::token(remaining, &[])?;
+            ensure!(
+                rest.is_empty() || rest.starts_with(','),
+                "expected comma after command value"
+            );
+            (name, rest.strip_prefix(',').unwrap_or(rest))
+        } else {
+            remaining.split_once(',').unwrap_or((remaining, ""))
+        };
+        let name = name.trim();
+        remaining = rest.trim_start();
+        if kind == CommonFilterKind::Cmd && name.is_empty() {
+            continue;
+        }
+        if name == "*" {
+            rules.insert(name.to_owned());
+            continue;
+        }
+        let valid = match kind {
+            CommonFilterKind::Event => RowType::from_str(name).is_ok(),
+            CommonFilterKind::Ddl => DdlType::from_str(name).is_ok(),
+            CommonFilterKind::Dcl => DclType::from_str(name).is_ok(),
+            CommonFilterKind::Structure => StructureType::from_str(name).is_ok(),
+            CommonFilterKind::Cmd => true,
+        };
+        ensure!(valid, "invalid {} filter value {name}", kind.as_ref());
+        rules.insert(name.to_owned());
+    }
+    Ok(rules)
 }
 
-fn category<T: FromStr>(value: &str, key: &str, default: &str) -> Result<ValueFilter> {
-    let value = if value.trim().is_empty() {
-        default
-    } else {
-        value
-    };
-    let mut values = HashSet::new();
-    if !value.trim().is_empty() {
-        for name in value.split(',').map(str::trim) {
-            ensure!(
-                name == "*" || T::from_str(name).is_ok(),
-                "invalid [filter].{key} value {name}"
-            );
-            values.insert(name.to_string());
+fn common_filter(kind: CommonFilterKind, base: &FilterSectionConfig) -> Result<CommonFilter> {
+    let context = format!("[{RULES}.{}]", kind.as_ref());
+    Ok(CommonFilter {
+        do_set: common_values(
+            base.do_rules
+                .as_deref()
+                .unwrap_or_else(|| kind.default_do()),
+            kind,
+        )
+        .with_context(|| format!("{context}.do"))?,
+        ignore_set: common_values(base.ignore_rules.as_deref().unwrap_or_default(), kind)
+            .with_context(|| format!("{context}.ignore"))?,
+    })
+}
+
+fn where_conditions(value: &str, kind: ResourceKind, db_type: &DbType) -> Result<ExpressionFilter> {
+    let pairs = SqlUtil::get_escape_pairs(db_type);
+    let mut remaining = value.trim();
+    let mut conditions = HashMap::new();
+    while !remaining.is_empty() {
+        let mut segments = Vec::new();
+        loop {
+            let (token, rest) = config::token(remaining, &pairs)?;
+            segments.push(token.to_owned());
+            if let Some(rest) = rest.strip_prefix('.') {
+                remaining = rest;
+            } else {
+                remaining = rest
+                    .strip_prefix(':')
+                    .context("expected ':' after WHERE resource ID")?
+                    .trim_start();
+                break;
+            }
+        }
+        let id = config::exact_path(segments, db_type)?;
+        validate_rid(db_type, kind, &id)?;
+        ensure!(
+            remaining.starts_with('"'),
+            "WHERE expression must be enclosed in JSON double quotes"
+        );
+        // Decode one JSON string, then resume at its byte offset.
+        let mut strings = serde_json::Deserializer::from_str(remaining).into_iter::<String>();
+        let condition = strings
+            .next()
+            .context("missing WHERE expression")?
+            .context("invalid JSON string escape in WHERE expression")?;
+        remaining = remaining[strings.byte_offset()..].trim_start();
+        conditions.entry(id).or_insert(condition);
+        if !remaining.is_empty() {
+            remaining = remaining
+                .strip_prefix(',')
+                .context("expected ',' after WHERE expression")?
+                .trim_start();
+            ensure!(!remaining.is_empty(), "trailing comma in WHERE conditions");
         }
     }
-    Ok(ValueFilter { values })
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum WhereRule {
-    Resource(ResourceWhere),
-    Legacy(LegacyWhere),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResourceWhere {
-    id: RID,
-    condition: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyWhere {
-    db: String,
-    tb: String,
-    condition: String,
-}
-
-#[derive(Deserialize)]
-struct IgnoreColumns {
-    db: String,
-    tb: String,
-    ignore_cols: Vec<String>,
+    Ok(ExpressionFilter::WhereConditions { conditions })
 }
 
 impl DtFilter {
-    /// Compile resource strings independently of their configuration source.
-    /// `options` retains [filter] common options and legacy rules for compatibility.
-    pub fn from_config(
-        bases: &HashMap<ResourceKind, BaseFilterConfig>,
-        options: &FilterConfig,
-        db_type: DbType,
-    ) -> Result<Self> {
-        for kind in bases.keys() {
-            ensure!(
-                resource_depth(&db_type, *kind).is_some(),
-                "unsupported {kind:?} for {db_type}"
-            );
-        }
-        if matches!(db_type, DbType::Kafka) {
-            for (key, value) in [
-                ("do_dbs", &options.do_schemas),
-                ("ignore_dbs", &options.ignore_schemas),
-            ] {
-                ensure!(
-                    value.trim().is_empty(),
-                    "[filter].{key} is not supported by {db_type}; use [filter.topic]"
-                );
-            }
-        }
+    pub fn from_config(config: &FilterConfig, db_type: DbType) -> Result<Self> {
+        let sections = match config {
+            FilterConfig::Legacy(options) => return Self::from_legacy_config(options, db_type),
+            FilterConfig::Basic(sections) => sections,
+        };
         let mut filter = Self::new(db_type.clone());
-        let mut old_columns = MatcherSet::default();
-        let ignore_cols = &options.ignore_cols;
-        if !ignore_cols.trim().is_empty() {
-            ensure!(
-                resource_depth(&db_type, ResourceKind::Column).is_some(),
-                "{db_type} does not support column filtering"
-            );
-            let mut tables = HashMap::new();
-            for row in
-                config::json::<Vec<IgnoreColumns>>(ignore_cols).context("[filter].ignore_cols")?
-            {
-                let table = config::legacy_json_table(&row.db, &row.tb, &db_type)?;
-                tables.insert(table, row.ignore_cols);
-            }
-            for (table, columns) in tables {
-                for col in columns {
-                    old_columns.insert(IdPattern::literal(table.child(col)?))?;
-                }
-            }
-        }
-        let empty_base = BaseFilterConfig::default();
-        for (index, &kind) in resource_levels(&db_type).iter().enumerate() {
-            let base = bases.get(&kind).unwrap_or(&empty_base);
-            let legacy_keys = if index == 0 {
-                Some((
-                    "do_dbs",
-                    &options.do_schemas,
-                    "ignore_dbs",
-                    &options.ignore_schemas,
-                    false,
-                ))
-            } else if matches!(kind, ResourceKind::Table | ResourceKind::Collection) {
-                Some((
-                    "do_tbs",
-                    &options.do_tbs,
-                    "ignore_tbs",
-                    &options.ignore_tbs,
-                    true,
-                ))
-            } else {
-                None
-            };
-            let mut old_do = MatcherSet::default();
-            let mut old_ignore = MatcherSet::default();
-            let mut do_present = false;
-            let mut ignore_present = false;
-            if let Some((do_key, do_value, ignore_key, ignore_value, table)) = legacy_keys {
-                do_present = !do_value.trim().is_empty();
-                ignore_present = !ignore_value.trim().is_empty();
-                old_do = patterns(do_value, &db_type, true, table)
-                    .with_context(|| format!("[filter].{do_key}"))?;
-                old_ignore = patterns(ignore_value, &db_type, true, table)
-                    .with_context(|| format!("[filter].{ignore_key}"))?;
-            }
-            if kind == ResourceKind::Column {
-                old_ignore = old_columns.clone();
-                ignore_present = !ignore_cols.trim().is_empty();
-            }
-            let compiled = BaseFilter {
-                do_set: merge(old_do, do_present, base.do_rules.as_deref(), &db_type)
-                    .with_context(|| format!("{kind:?}.do"))?,
-                ignore_set: merge(
-                    old_ignore,
-                    ignore_present,
-                    base.ignore_rules.as_deref(),
-                    &db_type,
-                )
-                .with_context(|| format!("{kind:?}.ignore"))?,
-            };
-            filter.set_base_filter(kind, compiled)?;
-        }
-        // Do not silently swallow table options on engines which have no tables.
-        if matches!(db_type, DbType::Redis | DbType::Kafka) {
-            for (key, value) in [
-                ("do_tbs", &options.do_tbs),
-                ("ignore_tbs", &options.ignore_tbs),
-            ] {
+        for (name, base) in sections {
+            if let Ok(kind) = name.parse::<CommonFilterKind>() {
                 ensure!(
-                    value.trim().is_empty(),
-                    "[filter].{key} is not supported by {db_type}"
+                    base.expression_filters.is_empty(),
+                    "[{RULES}.{name}].where_conditions requires a resource section"
                 );
+                filter.set_common_filter(kind, common_filter(kind, base)?);
+                continue;
             }
-        }
-        filter.events = category::<RowType>(&options.do_events, "do_events", "*")?;
-        filter.ddls = category::<DdlType>(&options.do_ddls, "do_ddls", "")?;
-        filter.dcls = category::<DclType>(&options.do_dcls, "do_dcls", "")?;
-        filter.structures =
-            category::<StructureType>(&options.do_structures, "do_structures", "*")?;
-        let commands = &options.ignore_cmds;
-        filter.ignore_cmds = commands
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect();
-        let conditions = &options.where_conditions;
-        if !conditions.trim().is_empty() {
-            for rule in
-                config::json::<Vec<WhereRule>>(conditions).context("[filter].where_conditions")?
-            {
-                match rule {
-                    WhereRule::Resource(ResourceWhere { id, condition }) => {
-                        filter.set_where_condition(id, condition)?
+            let empty = [&base.do_rules, &base.ignore_rules]
+                .iter()
+                .all(|value| value.as_deref().unwrap_or_default().trim().is_empty())
+                && base.expression_filters.is_empty();
+            let Some(kind) = config::section_kind(name, &db_type, empty)? else {
+                continue;
+            };
+            filter.set_resource_filter(
+                kind,
+                ResourceFilter {
+                    do_set: patterns(base.do_rules.as_deref().unwrap_or_default(), &db_type)
+                        .with_context(|| format!("{kind:?}.do"))?,
+                    ignore_set: patterns(
+                        base.ignore_rules.as_deref().unwrap_or_default(),
+                        &db_type,
+                    )
+                    .with_context(|| format!("{kind:?}.ignore"))?,
+                },
+            )?;
+            for expression in &base.expression_filters {
+                let expression = match expression {
+                    ExpressionFilterConfig::WhereConditions(value) => {
+                        where_conditions(value, kind, &db_type)
+                            .with_context(|| format!("{kind:?}.where_conditions"))?
                     }
-                    WhereRule::Legacy(LegacyWhere { db, tb, condition }) => {
-                        let id = config::legacy_json_table(&db, &tb, &db_type)?;
-                        crate::resource::validate_rid(&db_type, ResourceKind::Table, &id)?;
-                        // Legacy duplicate entries keep their existing last-value behavior.
-                        filter.where_conditions.insert(id, condition);
-                    }
-                }
+                };
+                filter.set_expression_filter(kind, expression)?;
             }
         }
         Ok(filter)
@@ -261,14 +183,15 @@ impl DtFilter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use configparser::ini::Ini;
 
     use super::*;
-    use crate::rid;
+    use crate::{resource::resource_levels, rid};
 
     fn load_filter(ini: &Ini, db_type: DbType) -> Result<DtFilter> {
-        let bases = BaseFilterConfig::from_ini(ini, &db_type)?;
-        DtFilter::from_config(&bases, &FilterConfig::from_ini(ini), db_type)
+        DtFilter::from_config(&FilterConfig::from_ini(ini)?, db_type)
     }
 
     fn ini(text: &str) -> Ini {
@@ -284,27 +207,31 @@ mod tests {
 
     #[test]
     fn from_config_accepts_resource_maps_and_checks_direct_callers() {
-        let mut bases = HashMap::from([
+        let mut bases = BTreeMap::from([
             (
-                ResourceKind::Table,
-                BaseFilterConfig {
+                "table".to_owned(),
+                FilterSectionConfig {
                     ignore_rules: Some("market.inventory.secret".into()),
                     ..Default::default()
                 },
             ),
             (
-                ResourceKind::Schema,
-                BaseFilterConfig {
+                "schema".to_owned(),
+                FilterSectionConfig {
                     do_rules: Some("market.inventory".into()),
                     ..Default::default()
                 },
             ),
         ]);
-        let options = FilterConfig {
-            do_events: "insert".into(),
-            ..Default::default()
-        };
-        let filter = DtFilter::from_config(&bases, &options, DbType::Mssql).unwrap();
+        bases.insert(
+            "event".into(),
+            FilterSectionConfig {
+                do_rules: Some("insert".into()),
+                ..Default::default()
+            },
+        );
+        let filter =
+            DtFilter::from_config(&FilterConfig::Basic(bases.clone()), DbType::Mssql).unwrap();
         assert!(!filter
             .filter_event(&rid!("market", "inventory", "order"), &RowType::Insert)
             .unwrap());
@@ -315,33 +242,95 @@ mod tests {
             .filter(&rid!("market", "inventory", "secret"))
             .unwrap());
         assert!(filter.filter(&rid!("other", "inventory", "order")).unwrap());
-        // Direct maps must not silently drop unsupported kinds.
         bases.insert(
-            ResourceKind::Collection,
-            BaseFilterConfig {
+            "collection".to_owned(),
+            FilterSectionConfig {
                 do_rules: Some("db.c".into()),
                 ..Default::default()
             },
         );
-        assert!(DtFilter::from_config(&bases, &options, DbType::Mssql).is_err());
-        // A missing field inherits legacy rules; an explicitly empty field conflicts.
-        let mut bases = HashMap::from([(ResourceKind::Table, BaseFilterConfig::default())]);
-        let options = FilterConfig {
-            do_tbs: "db.t".into(),
-            ..Default::default()
-        };
-        assert!(!DtFilter::from_config(&bases, &options, DbType::Mysql)
-            .unwrap()
-            .filter(&rid!("db", "t"))
-            .unwrap());
-        bases.get_mut(&ResourceKind::Table).unwrap().do_rules = Some(String::new());
-        assert!(DtFilter::from_config(&bases, &options, DbType::Mysql).is_err());
+        assert!(DtFilter::from_config(&FilterConfig::Basic(bases.clone()), DbType::Mssql).is_err());
+        let mut sections = BTreeMap::from([("table".to_owned(), FilterSectionConfig::default())]);
+        for value in [None, Some(String::new())] {
+            sections.get_mut("table").unwrap().do_rules = value;
+            let filter =
+                DtFilter::from_config(&FilterConfig::Basic(sections.clone()), DbType::Mysql)
+                    .unwrap();
+            assert!(filter.filter(&rid!("db", "t")).unwrap());
+        }
+        sections.clear();
+        let filter = DtFilter::from_config(&FilterConfig::Basic(sections), DbType::Mysql).unwrap();
+        assert!(filter.filter(&rid!("db", "t")).unwrap());
+    }
+
+    #[test]
+    fn resource_sections_replace_legacy_rules_and_expressions() {
+        for legacy in [
+            r#"do_dbs=legacy
+ignore_dbs=db
+do_tbs=legacy.t
+ignore_tbs=db.t
+ignore_cols=json:[{"db":"db","tb":"t","ignore_cols":["id"]}]
+where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
+            "do_dbs=r#[#\nignore_dbs=r#[#\ndo_tbs=invalid\nignore_tbs=invalid\nignore_cols=json:invalid\nwhere_conditions=json:invalid",
+        ] {
+            for (section, excluded, condition) in [
+                ("[rules.table]\ndo=db.t", false, None),
+                ("[rules.table]", true, None),
+                ("[rules.table]\nroute=db.t:archive.t", true, None),
+                ("[rules.db]\ndo=", true, None),
+                ("[rules.table]\ndo=db.t\nwhere_conditions=", false, None),
+                ("[rules.table]\ndo=db.t\nwhere_conditions=db.t:\"new\"", false, Some("new")),
+                ("[rules.db]\nwhere_conditions=db:\"database\"\n[rules.table]\ndo=db.t", false, None),
+            ] {
+                let f = filter(&format!("[filter]\n{legacy}\ndo_events=insert\n{section}"));
+                assert_eq!(f.filter(&rid!("db", "t", "id")).unwrap(), excluded, "{section}");
+                assert!(f.filter(&rid!("legacy", "t")).unwrap());
+                for event in [RowType::Insert, RowType::Update] {
+                    assert_eq!(f.filter_event(&rid!("db", "t"), &event).unwrap(), excluded, "{section}");
+                }
+                assert_eq!(f.where_condition(&rid!("db", "t")).unwrap(), condition, "{section}");
+                assert_eq!(f.where_condition(&rid!("db", "t", "id")).unwrap(), None);
+            }
+        }
+        let f = load_filter(&ini("[filter]\ndo_tbs=db.t\n[rules.db]\ndo="), DbType::Pg).unwrap();
+        assert!(f.filter(&rid!("db", "t")).unwrap());
+    }
+
+    #[test]
+    fn raw_resource_names_are_resolved_for_the_consuming_engine() {
+        for (db_type, section) in [(DbType::Mysql, "db"), (DbType::Pg, "schema")] {
+            let config =
+                FilterConfig::from_ini(&ini(&format!("[rules.{section}]\ndo=inventory"))).unwrap();
+            let filter = DtFilter::from_config(&config, db_type).unwrap();
+            assert!(!filter.filter(&rid!("inventory", "order")).unwrap());
+            assert!(filter.filter(&rid!("other", "order")).unwrap());
+        }
+        for (db_type, text) in [
+            (DbType::Mysql, "[rules.unknown]\ndo=grant"),
+            (DbType::Mysql, "[rules.database]\ndo=db"),
+            (DbType::Mysql, "[rules.schema]\ndo=schema"),
+            (DbType::Kafka, "[rules.db]\ndo=db"),
+            (DbType::Pg, "[rules.db]\ndo=db"),
+            (DbType::Mongo, "[rules.column]\nignore=db.c.field"),
+            (DbType::Mysql, "[rules.collection]\ndo=db.c"),
+            (DbType::Mongo, "[rules.document]\ndo=db.c"),
+        ] {
+            let config = FilterConfig::from_ini(&ini(text)).unwrap();
+            assert!(DtFilter::from_config(&config, db_type).is_err(), "{text}");
+        }
+        let filter = load_filter(
+            &ini("[rules.schema]\ndo=inventory\n[rules.db]\ndo="),
+            DbType::Pg,
+        )
+        .unwrap();
+        assert!(!filter.filter(&rid!("inventory", "order")).unwrap());
     }
 
     #[test]
     fn new_and_legacy_configs_keep_union_ignore_and_question_mark_semantics() {
         let old = filter("[filter]\ndo_dbs=test_db_*\nignore_dbs=test_db_3\ndo_tbs=other_test_db_1.*\nignore_tbs=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2\ndo_events=insert");
-        let new = filter("[filter]\ndo_events=insert\nwhere_conditions=\n[filter.database]\ndo=test_db_*\nignore=test_db_3\n[filter.table]\ndo=other_test_db_1.*\nignore=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2");
+        let new = filter("[rules.event]\ndo=insert\n[rules.db]\ndo=test_db_*\nignore=test_db_3\n[rules.table]\ndo=other_test_db_1.*\nignore=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2");
         for (db, table, excluded) in [
             ("test_db_1", "t1", false),
             ("other_test_db_1", "t1", false),
@@ -365,100 +354,333 @@ mod tests {
     }
 
     #[test]
-    fn where_and_categories_stay_in_filter_with_existing_defaults() {
-        let f = filter(
+    fn common_sections_support_do_and_ignore_for_every_engine() {
+        let config = FilterConfig::from_ini(&ini(r#"[filter]
+do_events=r#[#
+do_ddls=r#[#
+do_dcls=r#[#
+do_structures=r#[#
+ignore_cmds=GET
+[rules.event]
+do=insert,update
+ignore=update
+[rules.ddl]
+do=create_table,drop_table
+ignore=drop_table
+[rules.dcl]
+do=grant,revoke
+ignore=revoke
+[rules.structure]
+do=table,index
+ignore=index
+[rules.cmd]
+do=GET,SET,FT.SEARCH
+ignore=SET"#))
+        .unwrap();
+        for engine in [
+            DbType::Mysql,
+            DbType::Tidb,
+            DbType::Pg,
+            DbType::Mssql,
+            DbType::Mongo,
+            DbType::Redis,
+            DbType::Kafka,
+            DbType::ClickHouse,
+            DbType::StarRocks,
+            DbType::Doris,
+        ] {
+            let depth = resource_levels(&engine)
+                .iter()
+                .take_while(|&&kind| kind != ResourceKind::Column)
+                .count();
+            let id = RID::new(vec!["object"; depth]).unwrap();
+            let mut f = DtFilter::from_config(&config, engine).unwrap();
+            f.add_do(&id).unwrap();
+            assert!(!f.filter_event(&id, &RowType::Insert).unwrap());
+            assert!(f.filter_event(&id, &RowType::Update).unwrap());
+            assert!(f.filter_event(&id, &RowType::Delete).unwrap());
+            assert!(!f.filter_ddl(&id, &DdlType::CreateTable).unwrap());
+            assert!(f.filter_ddl(&id, &DdlType::DropTable).unwrap());
+            assert!(!f.filter_dcl(&DclType::Grant));
+            assert!(f.filter_dcl(&DclType::Revoke));
+            assert!(!f.filter_structure(&StructureType::Table));
+            assert!(f.filter_structure(&StructureType::Index));
+            assert!(!f.filter_cmd("GET"));
+            assert!(!f.filter_cmd("FT.SEARCH"));
+            assert!(f.filter_cmd("SET"));
+            assert!(f.filter_cmd("DEL"));
+            assert!(!f.filter(&id).unwrap());
+        }
+    }
+
+    #[test]
+    fn common_sections_select_basic_without_any_legacy_fallback() {
+        let mut f = filter(
             r#"[filter]
-    do_events=
-    do_structures=
-    do_dcls=grant
-    do_ddls=create_table
-    ignore_cmds=FLUSHDB
-    where_conditions=json:[{"id":["db","t"],"condition":"id > 1"}]
-    [filter.database]
-    do=db
-    "#,
+do_tbs=db.t
+do_events=insert
+do_ddls=create_table
+do_dcls=grant
+do_structures=table
+ignore_cmds=SET
+where_conditions=json:[{"db":"db","tb":"t","condition":"id > 1"}]
+[rules.event]
+ignore=update"#,
         );
+        assert!(f.filter(&rid!("db", "t")).unwrap());
+        assert_eq!(f.where_condition(&rid!("db", "t")).unwrap(), None);
+        f.add_do(&rid!("db", "t")).unwrap();
         assert!(!f.filter_event(&rid!("db", "t"), &RowType::Delete).unwrap());
-        assert!(!f.filter_structure(&StructureType::Index));
-        assert!(!f.filter_dcl(&DclType::Grant));
-        assert!(f.filter_dcl(&DclType::Revoke));
-        assert!(!f
-            .filter_ddl(&rid!("db", "t"), &DdlType::CreateTable)
-            .unwrap());
-        assert!(f.filter_ddl(&rid!("db", "t"), &DdlType::DropTable).unwrap());
-        assert!(f.filter_cmd("FLUSHDB"));
-        assert!(!f.filter_cmd("GET"));
-        assert_eq!(f.where_condition(&rid!("db", "t")).unwrap(), Some("id > 1"));
-        assert!(f.where_condition(&rid!("db")).is_err());
-        assert!(f.filter_event(&rid!("db"), &RowType::Insert).is_err());
-        let defaults = filter("[filter.database]\ndo=db");
-        assert!(defaults.filter_dcl(&DclType::Grant));
-        assert!(defaults
-            .filter_ddl(&rid!("db", "t"), &DdlType::CreateTable)
-            .unwrap());
-    }
-
-    #[test]
-    fn legacy_json_columns_and_where_keep_exact_names_and_last_condition() {
-        let f = filter(
-            r#"[filter]
-    do_dbs=*
-    ignore_cols=json:[{"db":"a.b","tb":"t","ignore_cols":["id"]},{"db":"a.b","tb":"t","ignore_cols":["secret"]}]
-    where_conditions=json:[{"db":"a.b","tb":"t","condition":"id > 1"},{"db":"a.b","tb":"t","condition":"id > 2"}]
-    "#,
-        );
-        assert!(f.filter(&rid!("a.b", "t", "secret")).unwrap());
-        assert!(!f.filter(&rid!("a.b", "t", "id")).unwrap());
-        assert_eq!(
-            f.where_condition(&rid!("a.b", "t")).unwrap(),
-            Some("id > 2")
-        );
-        let mut f = f;
+        assert!(f.filter_event(&rid!("db", "t"), &RowType::Update).unwrap());
         assert!(f
-            .set_where_condition(rid!("a.b", "t"), "other".into())
-            .is_err());
+            .filter_ddl(&rid!("db", "t"), &DdlType::CreateTable)
+            .unwrap());
+        assert!(f.filter_dcl(&DclType::Grant));
+        assert!(!f.filter_structure(&StructureType::Table));
+        assert!(!f.filter_structure(&StructureType::Index));
+        assert!(!f.filter_cmd("SET"));
     }
 
     #[test]
-    fn aliases_legacy_mssql_and_mixed_rules_are_checked() {
-        let f = load_filter(&ini("[filter]\ndo_tbs=market.orders"), DbType::Mssql).unwrap();
-        assert!(!f.filter(&rid!("market", "dbo", "orders")).unwrap());
-        assert!(f.filter(&rid!("market", "other", "orders")).unwrap());
-        let f = load_filter(&ini("[filter.db]\ndo=inventory"), DbType::Pg).unwrap();
-        assert!(!f.filter(&rid!("inventory", "order")).unwrap());
-        let f = load_filter(&ini("[filter.document]\ndo=db.c"), DbType::Mongo).unwrap();
-        assert!(!f.filter(&rid!("db", "c")).unwrap());
-        let f = filter("[filter]\ndo_tbs=db.t2,db.t1\n[filter.table]\ndo=db.t1,db.t2");
-        assert!(!f.filter(&rid!("db", "t1")).unwrap());
-        assert!(load_filter(
-            &ini("[filter]\ndo_tbs=db.t1\n[filter.table]\ndo=db.t2"),
-            DbType::Mysql
-        )
-        .is_err());
+    fn common_defaults_empty_rules_and_literal_ignores_are_distinct() {
+        let defaults = filter("");
+        let constructed = DtFilter::new(DbType::Mysql);
+        for (kind, value, excluded) in [
+            (CommonFilterKind::Event, "insert", false),
+            (CommonFilterKind::Ddl, "create_table", true),
+            (CommonFilterKind::Dcl, "grant", true),
+            (CommonFilterKind::Structure, "table", false),
+            (CommonFilterKind::Cmd, "GET", false),
+        ] {
+            let absent = filter(&format!("[rules.{}]", kind.as_ref()));
+            let empty = filter(&format!("[rules.{}]\ndo=", kind.as_ref()));
+            let ignored = filter(&format!("[rules.{}]\ndo=*\nignore=*", kind.as_ref()));
+            assert_eq!(defaults.filter_common(kind, value), excluded);
+            assert_eq!(constructed.filter_common(kind, value), excluded);
+            assert_eq!(absent.filter_common(kind, value), excluded);
+            assert!(empty.filter_common(kind, value));
+            assert!(!ignored.filter_common(kind, value));
+            assert!(ignored.filter_common(kind, "*"));
+            let mixed = filter(&format!("[rules.{}]\ndo=*,{value}", kind.as_ref()));
+            assert!(!mixed.filter_common(kind, value));
+            assert!(mixed.filter_common(kind, "other"));
+            let all = filter(&format!("[rules.{}]\ndo=*,*", kind.as_ref()));
+            assert!(!all.filter_common(kind, "other"));
+        }
+        let legacy = filter("[filter]\nignore_cmds=*,SET");
+        assert!(!legacy.filter_cmd("GET"));
+        assert!(legacy.filter_cmd("SET"));
+        assert!(legacy.filter_cmd("*"));
     }
 
     #[test]
-    fn legacy_scope_matches_existing_filter_for_flattened_names_and_regexes() {
-        use crate::{config::filter_config::FilterConfig, rdb_filter::RdbFilter};
-        for db_type in [DbType::Mysql, DbType::Mssql] {
-            let do_dbs = "db.name,store[0-9]+,r#inventory|market#";
-            let old = RdbFilter::from_config(
-                &FilterConfig {
-                    do_schemas: do_dbs.into(),
-                    ..Default::default()
-                },
-                &db_type,
-            )
-            .unwrap();
-            let new = load_filter(&ini(&format!("[filter]\ndo_dbs={do_dbs}")), db_type).unwrap();
-            for name in ["db", "name", "db.name", "store12", "inventory", "other"] {
+    fn expressions_support_each_engine_resource_level() {
+        for engine in [
+            DbType::Mysql,
+            DbType::Pg,
+            DbType::Mssql,
+            DbType::Mongo,
+            DbType::Redis,
+            DbType::Kafka,
+        ] {
+            let mut ini = ini("");
+            let mut ids = Vec::new();
+            for &kind in resource_levels(&engine) {
+                let name = match kind {
+                    ResourceKind::Database => "db",
+                    ResourceKind::Schema => "schema",
+                    ResourceKind::Table => "table",
+                    ResourceKind::Column => "column",
+                    ResourceKind::Collection => "collection",
+                    ResourceKind::Topic => "topic",
+                };
+                let mut segments: Vec<_> = ids
+                    .last()
+                    .map(|(id, _): &(RID, &str)| id.segments().to_vec())
+                    .unwrap_or_default();
+                segments.push(name.into());
+                let id = RID::new(segments).unwrap();
+                ini.set(
+                    &format!("rules.{name}"),
+                    "where_conditions",
+                    Some(format!("{}:\"{name}\"", id.segments().join("."))),
+                );
+                ids.push((id, name));
+            }
+            let filter = load_filter(&ini, engine).unwrap();
+            assert_eq!(filter.expression_filters.len(), ids.len());
+            for (id, condition) in ids {
+                assert_eq!(filter.where_condition(&id).unwrap(), Some(condition));
+                let mut sibling = id.segments().to_vec();
+                *sibling.last_mut().unwrap() = "other".into();
                 assert_eq!(
-                    new.filter(&RID::new([name]).unwrap()).unwrap(),
-                    old.filter_schema(name),
-                    "{name}"
+                    filter.where_condition(&RID::new(sibling).unwrap()).unwrap(),
+                    None
                 );
             }
         }
+    }
+
+    #[test]
+    fn expression_paths_decode_quotes_and_preserve_segment_boundaries() {
+        for (engine, section, value, id) in [
+            (
+                DbType::Mysql,
+                "table",
+                r#"`a.b,c:d`.`t*`:"id > 1""#,
+                rid!("a.b,c:d", "t*"),
+            ),
+            (
+                DbType::Pg,
+                "table",
+                r#""a.b,c:d"."t""x":"id > 1""#,
+                rid!("a.b,c:d", "t\"x"),
+            ),
+            (
+                DbType::Mssql,
+                "table",
+                r#"[db]]:x].[s,1].[t]:"id > 1""#,
+                rid!("db]:x", "s,1", "t"),
+            ),
+            (DbType::Kafka, "topic", r#"orders:"id > 1""#, rid!("orders")),
+            (
+                DbType::Mongo,
+                "collection",
+                r#"inventory.events:"id > 1""#,
+                rid!("inventory", "events"),
+            ),
+        ] {
+            let filter = load_filter(
+                &ini(&format!("[rules.{section}]\nwhere_conditions={value}")),
+                engine,
+            )
+            .unwrap();
+            assert_eq!(filter.where_condition(&id).unwrap(), Some("id > 1"));
+        }
+    }
+
+    #[test]
+    fn where_conditions_keep_the_first_exact_rid_without_inheriting_parents() {
+        let f = filter(
+            r#"[rules.db]
+where_conditions=inventory:"database condition"
+[rules.table]
+where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",inventory.events:"id > 1",inventory.empty:"",inventory.empty:"discarded""#,
+        );
+        for (id, expected) in [
+            (rid!("inventory"), Some("database condition")),
+            (rid!("inventory", "orders"), Some("id > 100")),
+            (rid!("inventory", "events"), Some("id > 1")),
+            (rid!("inventory", "empty"), Some("")),
+            (rid!("inventory", "other"), None),
+            (rid!("other", "orders"), None),
+            (rid!("inventory2"), None),
+            (rid!("inventory", "orders", "id"), None),
+        ] {
+            assert_eq!(f.where_condition(&id).unwrap(), expected, "{id}");
+        }
+        let ExpressionFilter::WhereConditions { conditions } =
+            &f.expression_filters[&ResourceKind::Table];
+        assert_eq!(conditions.len(), 3);
+    }
+
+    #[test]
+    fn expression_strings_use_json_escapes_independently_of_sql_quotes() {
+        let value = r#"inventory.orders:"\"名字\" = '订单,事件:1' AND path = 'C:\\tmp' AND mark = '\u4e2d\ud83d\ude00'\nAND id IN (1,2)\t/* #; */",inventory.events:"id > 1",inventory.empty:"""#;
+        let expected = "\"名字\" = '订单,事件:1' AND path = 'C:\\tmp' AND mark = '中😀'\nAND id IN (1,2)\t/* #; */";
+        for engine in [DbType::Mysql, DbType::Pg, DbType::Mssql] {
+            let value = if engine == DbType::Mssql {
+                value.replace("inventory.", "inventory.dbo.")
+            } else {
+                value.to_owned()
+            };
+            let f = load_filter(
+                &ini(&format!("[rules.table]\nwhere_conditions={value}")),
+                engine.clone(),
+            )
+            .unwrap();
+            for (table, expected) in [("orders", expected), ("events", "id > 1"), ("empty", "")] {
+                let id = if engine == DbType::Mssql {
+                    RID::new(["inventory", "dbo", table]).unwrap()
+                } else {
+                    RID::new(["inventory", table]).unwrap()
+                };
+                assert_eq!(f.where_condition(&id).unwrap(), Some(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_expressions_fail_when_compiled_for_the_engine() {
+        for (engine, section, value) in [
+            (DbType::Mysql, "table", r#"json:{"db.t":"replaced format"}"#),
+            (DbType::Mysql, "table", r#"db:"wrong depth""#),
+            (DbType::Mysql, "db", r#"db.t:"wrong depth""#),
+            (DbType::Mssql, "table", r#"db.t:"missing schema""#),
+            (DbType::Mysql, "table", r#"db.*:"wildcard unsupported""#),
+            (DbType::Mysql, "table", r#"db.t?:"wildcard unsupported""#),
+            (
+                DbType::Mysql,
+                "table",
+                r#"db.r#t[0-9]+#:"regex unsupported""#,
+            ),
+            (DbType::Mysql, "table", r#"db.r#[#:"invalid regex""#),
+            (DbType::Mysql, "table", r#"`db.t:"unclosed identifier""#),
+            (DbType::Mysql, "table", r#"db.r#table:"unclosed regex""#),
+            (DbType::Mysql, "table", r#"db..t:"empty segment""#),
+            (DbType::Mysql, "table", r#"db.t,db.other:"multiple paths""#),
+            (DbType::Mysql, "event", ""),
+            (DbType::Mysql, "schema", ""),
+            (DbType::Pg, "db", ""),
+            (DbType::Mongo, "column", ""),
+        ] {
+            let config = FilterConfig::from_ini(&ini(&format!(
+                "[rules.{section}]\nwhere_conditions={value}"
+            )))
+            .unwrap();
+            assert!(
+                DtFilter::from_config(&config, engine).is_err(),
+                "{section}: {value}"
+            );
+        }
+        // Bypass INI parsing so raw control characters reach the JSON decoder.
+        for value in [
+            r#"db.t"#,
+            r#"db.t:"#,
+            r#"db.t:id > 1"#,
+            r#"db.t:'id > 1'"#,
+            r#"db.t:123"#,
+            r#"db.t:"unterminated"#,
+            r#"db.t:"bad\q""#,
+            r#"db.t:"\uD800""#,
+            r#"db.t:"\u12xx""#,
+            "db.t:\"raw\ncontrol\"",
+            r#"db.t:"unescaped "name"""#,
+            r#"db.t:"SQL doubled ""name""""#,
+            r#"db.t:"ok"suffix"#,
+            r#"db.t:"ok" db.other:"missing comma""#,
+            r#"db.t:"ok", "#,
+            r#"db.t:"ok",,db.other:"extra comma""#,
+        ] {
+            assert!(
+                where_conditions(value, ResourceKind::Table, &DbType::Mysql).is_err(),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_mssql_and_new_resource_rules_use_separate_modes() {
+        let f = load_filter(&ini("[filter]\ndo_tbs=market.orders"), DbType::Mssql).unwrap();
+        assert!(!f.filter(&rid!("market", "dbo", "orders")).unwrap());
+        assert!(f.filter(&rid!("market", "other", "orders")).unwrap());
+        let f = load_filter(&ini("[rules.schema]\ndo=inventory"), DbType::Pg).unwrap();
+        assert!(!f.filter(&rid!("inventory", "order")).unwrap());
+        let f = filter("[filter]\ndo_tbs=db.t2,db.t1\n[rules.table]\ndo=db.t1,db.t2");
+        assert!(!f.filter(&rid!("db", "t1")).unwrap());
+        let f = filter("[filter]\ndo_tbs=db.t1\n[rules.table]\ndo=db.t2");
+        assert!(f.filter(&rid!("db", "t1")).unwrap());
+        assert!(!f.filter(&rid!("db", "t2")).unwrap());
     }
 
     #[test]
@@ -466,19 +688,14 @@ mod tests {
         for (db_type, text, selected, excluded) in [
             (
                 DbType::Mongo,
-                "[filter.collection]\ndo=db.c",
+                "[rules.collection]\ndo=db.c",
                 rid!("db", "c"),
                 rid!("db", "other"),
             ),
-            (
-                DbType::Redis,
-                "[filter.database]\ndo=0",
-                rid!("0"),
-                rid!("1"),
-            ),
+            (DbType::Redis, "[rules.db]\ndo=0", rid!("0"), rid!("1")),
             (
                 DbType::Kafka,
-                "[filter.topic]\ndo=orders*",
+                "[rules.topic]\ndo=orders*",
                 rid!("orders.eu"),
                 rid!("other"),
             ),
@@ -493,23 +710,73 @@ mod tests {
     #[test]
     fn malformed_rules_fail_during_compilation() {
         for text in [
-            "[filter.table]\ndo=db",
-            "[filter.table]\ndo=db..table",
-            "[filter.table]\ndo=db.table,",
-            "[filter.table]\ndo=`db.table",
-            "[filter.table]\ndo=db.r#[#",
-            "[filter.table]\ndo=db.t\n[filter]\ndo_events=typo",
+            "[rules.table]\ndo=db",
+            "[rules.table]\ndo=db..table",
+            "[rules.table]\ndo=db.table,",
+            "[rules.table]\ndo=`db.table",
+            "[rules.table]\ndo=db.r#[#",
+            "[rules.table]\ndo=db.t\n[rules.event]\ndo=r#[#",
+            "[rules.event]\ndo=typo",
+            "[rules.event]\nignore=typo",
+            "[rules.ddl]\nignore=typo",
+            "[rules.dcl]\nignore=typo",
+            "[rules.structure]\nignore=typo",
+            "[rules.events]\ndo=insert",
             r#"[filter]
     where_conditions=json:[{"id":["db","t"],"db":"other","tb":"t","condition":"id > 1"}]"#,
         ] {
             let ini = ini(text);
-            let bases = BaseFilterConfig::from_ini(&ini, &DbType::Mysql).unwrap();
+            let config = FilterConfig::from_ini(&ini).unwrap();
             assert!(
-                DtFilter::from_config(&bases, &FilterConfig::from_ini(&ini), DbType::Mysql)
-                    .is_err(),
+                DtFilter::from_config(&config, DbType::Mysql).is_err(),
                 "{text}"
             );
         }
         assert!(filter("").filter(&rid!("db", "t")).unwrap());
+    }
+    #[test]
+    fn tokenization_preserves_patterns_quotes_and_segment_boundaries() {
+        for (value, expected) in [
+            ("`db*`.order?*", rid!("`db*`", "order?*")),
+            ("db.r#order[0-9]+#", rid!("db", "r#order[0-9]+#")),
+            ("db.order+*", rid!("db", "order+*")),
+            ("`a.b`.`order+*`", rid!("`a.b`", "`order+*`")),
+        ] {
+            assert_eq!(
+                patterns(value, &DbType::Mysql).unwrap(),
+                HashSet::from([expected]),
+                "{value}"
+            );
+        }
+        assert_eq!(
+            patterns("`db`.`^.*$`,db.*,db.*", &DbType::Mysql).unwrap(),
+            HashSet::from([rid!("`db`", "`^.*$`"), rid!("db", "*")])
+        );
+    }
+
+    #[test]
+    fn explicit_regex_groups_anchor_alternatives_and_quoted_wildcards_are_literal() {
+        let f = filter("[rules.table]\ndo=`a.b`.`t*`,r#(?:a|b)#.r#order[0-9]+#,unicode.订单\n");
+        for id in [
+            rid!("a.b", "t*"),
+            rid!("a", "order10"),
+            rid!("b", "order2"),
+            rid!("unicode", "订单"),
+        ] {
+            assert!(!f.filter(&id).unwrap(), "{id}");
+        }
+        for id in [
+            rid!("a.b", "t123"),
+            rid!("ab", "order2"),
+            rid!("a", "order2tail"),
+        ] {
+            assert!(f.filter(&id).unwrap(), "{id}");
+        }
+        let mssql = load_filter(
+            &ini("[rules.table]\ndo=[a.b].[inv]]entory].[ord.er]"),
+            DbType::Mssql,
+        )
+        .unwrap();
+        assert!(!mssql.filter(&rid!("a.b", "inv]entory", "ord.er")).unwrap());
     }
 }

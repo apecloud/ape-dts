@@ -185,7 +185,10 @@ mod test {
         )?;
 
         let mut filter_config = context.runner.config.filter.clone();
-        filter_config.ignore_cols = format!(
+        let FilterConfig::Legacy(options) = &mut filter_config else {
+            anyhow::bail!("snapshot fixture requires Legacy filter configuration");
+        };
+        options.ignore_cols = format!(
             r#"json:[{{"db":"{}","tb":"{}.{}","ignore_cols":["split_key"]}}]"#,
             snapshot_table.db, snapshot_table.schema, snapshot_table.tb
         );

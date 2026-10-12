@@ -185,10 +185,13 @@ impl Prechecker for MySqlPrechecker {
         }
 
         let (mut models, mut err_msgs): (Vec<DbTable>, Vec<String>) = (Vec::new(), Vec::new());
-        if !self.filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&self.filter_config.do_tbs, &mut models)
-        } else if !self.filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&self.filter_config.do_schemas, &mut models)
+        let FilterConfig::Legacy(filter_config) = &self.filter_config else {
+            bail!("MySQL prechecker only supports Legacy configuration");
+        };
+        if !filter_config.do_tbs.is_empty() {
+            DbTable::from_str(&filter_config.do_tbs, &mut models)
+        } else if !filter_config.do_schemas.is_empty() {
+            DbTable::from_str(&filter_config.do_schemas, &mut models)
         }
 
         let (dbs, tb_dbs, tbs) = DbTable::get_config_maps(&models)?;
@@ -297,10 +300,13 @@ impl Prechecker for MySqlPrechecker {
         }
 
         let mut models: Vec<DbTable> = Vec::new();
-        if !self.filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&self.filter_config.do_tbs, &mut models)
-        } else if !self.filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&self.filter_config.do_schemas, &mut models)
+        let FilterConfig::Legacy(filter_config) = &self.filter_config else {
+            bail!("MySQL prechecker only supports Legacy configuration");
+        };
+        if !filter_config.do_tbs.is_empty() {
+            DbTable::from_str(&filter_config.do_tbs, &mut models)
+        } else if !filter_config.do_schemas.is_empty() {
+            DbTable::from_str(&filter_config.do_schemas, &mut models)
         }
         let (dbs, tb_dbs, _) = DbTable::get_config_maps(&models)?;
         let mut all_db_names = Vec::new();

@@ -146,8 +146,8 @@ impl TaskConfig {
         let runtime = Self::load_runtime_config(loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(loader)?;
         let (extractor_basic, extractor) = Self::load_extractor_config(loader, &pipeline)?;
-        let filter = FilterConfig::from_ini(&loader.ini);
-        let router = RouterConfig::from_ini(&loader.ini);
+        let filter = FilterConfig::from_ini(&loader.ini)?;
+        let router = RouterConfig::from_ini(&loader.ini)?;
         let parallelizer = Self::load_parallelizer_config(loader, &sinker_basic, &pipeline)?;
         let checker =
             Self::load_checker_config(loader, &extractor_basic.extract_type, &sinker_basic)?;
@@ -1450,7 +1450,6 @@ mod tests {
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
-    use crate::config::router_config::RouterConfig;
     use crate::error::{ErrorCode, ErrorReport};
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
@@ -1549,37 +1548,6 @@ parallel_type=rdb_merge
 {extra_config}
 "#
         )
-    }
-
-    #[test]
-    fn public_db_keys_map_to_internal_schema_fields() {
-        let config = load_temp_task_config(&basic_snapshot_config(
-            r#"[filter]
-do_dbs=source_namespace
-ignore_dbs=ignored_namespace
-do_tbs=source_namespace.*
-
-[router]
-db_map=source_namespace:target_namespace
-tb_map=source_namespace.source_tb:target_namespace.target_tb
-"#,
-        ))
-        .expect("db/tb configuration should map to the common schema/tb model");
-
-        assert_eq!(config.filter.do_schemas, "source_namespace");
-        assert_eq!(config.filter.ignore_schemas, "ignored_namespace");
-        assert_eq!(config.filter.do_tbs, "source_namespace.*");
-        assert_eq!(config.filter.do_events, "*");
-        assert_eq!(config.filter.do_structures, "*");
-
-        let RouterConfig::Rdb {
-            schema_map, tb_map, ..
-        } = config.router;
-        assert_eq!(schema_map, "source_namespace:target_namespace");
-        assert_eq!(
-            tb_map,
-            "source_namespace.source_tb:target_namespace.target_tb"
-        );
     }
 
     #[test]
