@@ -280,6 +280,29 @@ mod tests {
     }
 
     #[test]
+    fn clickhouse_table_routes_override_database_routes_in_both_directions() {
+        let config = ini("[router]\ndb_map=test_db_2:dst_test_db_2\ntb_map=test_db_2.router_test_2:dst_test_db_2.dst_router_test_2");
+        for src in [DbType::Mysql, DbType::Pg] {
+            let router = load_router(&config, src, DbType::ClickHouse).unwrap();
+            for (source, target) in [
+                ("router_test_1", "router_test_1"),
+                ("router_test_2", "dst_router_test_2"),
+            ] {
+                assert_eq!(
+                    router.route_schema_table("test_db_2", source).unwrap(),
+                    ("dst_test_db_2".into(), target.into())
+                );
+                assert_eq!(
+                    router
+                        .reverse_schema_table("dst_test_db_2", target)
+                        .unwrap(),
+                    ("test_db_2".into(), source.into())
+                );
+            }
+        }
+    }
+
+    #[test]
     fn legacy_topic_maps_preserve_priority_duplicates_and_dotted_names() {
         let router = load_router(&ini("[router]\ntopic_map=*.*:old,*.*:default.topic,db.*:old,db.*:shared.topic,db.orders:orders.topic,db.events:shared.topic"), DbType::Mysql, DbType::Kafka).unwrap();
         for (source, target) in [

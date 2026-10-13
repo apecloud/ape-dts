@@ -63,7 +63,7 @@ impl ResourceRouter {
             resource_kind(dst, routed)?;
             return Ok(routed.clone());
         }
-        let source = Self::reverse_rid(routers, src, dst, routed, None, true)?;
+        let source = Self::reverse(routers, src, dst, routed, None)?;
         let kind = resource_kind(src, &source)?;
         let router = routers
             .get(&kind)
@@ -204,30 +204,13 @@ impl ResourceRouter {
         Ok(source.clone())
     }
 
+    /// Match the longest target prefix; only fall back to identity if no rule matches.
     pub fn reverse(
         routers: &HashMap<ResourceKind, Self>,
         src_db_type: &DbType,
         dst_db_type: &DbType,
         target: &RID,
         selected_sources: Option<&HashSet<RID>>,
-    ) -> Result<RID> {
-        Self::reverse_rid(
-            routers,
-            src_db_type,
-            dst_db_type,
-            target,
-            selected_sources,
-            false,
-        )
-    }
-
-    pub fn reverse_rid(
-        routers: &HashMap<ResourceKind, Self>,
-        src_db_type: &DbType,
-        dst_db_type: &DbType,
-        target: &RID,
-        selected_sources: Option<&HashSet<RID>>,
-        identity_fallback_only: bool,
     ) -> Result<RID> {
         let dst_db_type = Self::route_db_type(routers, src_db_type, dst_db_type);
         if let Some(sources) = selected_sources {
@@ -236,28 +219,15 @@ impl ResourceRouter {
             }
         }
         let target_kind = resource_kind(dst_db_type, target)?;
-        let mut result = None;
-        let mut consider = |candidate: RID| -> Result<()> {
-            if selected_sources.is_some_and(|sources| !sources.contains(&candidate)) {
-                return Ok(());
-            }
-            if compatible_kind(resource_kind(src_db_type, &candidate)?, target_kind)
-                && Self::forward(routers, src_db_type, dst_db_type, &candidate)? == *target
-            {
-                if let Some(previous) = &result {
-                    ensure!(
-                        previous == &candidate,
-                        "ambiguous reverse route for {target}: {previous} and {candidate}"
-                    );
-                } else {
-                    result = Some(candidate);
-                }
-            }
-            Ok(())
+        let validate = |candidate: RID| -> Result<RID> {
+            ensure!(
+                selected_sources.is_none_or(|sources| sources.contains(&candidate))
+                    && compatible_kind(resource_kind(src_db_type, &candidate)?, target_kind)
+                    && Self::forward(routers, src_db_type, dst_db_type, &candidate)? == *target,
+                "unmapped reverse route for {target}"
+            );
+            Ok(candidate)
         };
-        if !identity_fallback_only && identity_compatible(src_db_type, dst_db_type) {
-            consider(target.clone())?;
-        }
         let src_levels = resource_levels(src_db_type);
         let dst_levels = resource_levels(dst_db_type);
         for (index, kind) in src_levels.iter().enumerate().rev() {
@@ -277,17 +247,14 @@ impl ResourceRouter {
                 .prefix(depth)
                 .with_context(|| format!("invalid reverse route prefix depth {depth}: {target}"))?;
             if let Some(source) = router.reverse_route(&prefix) {
-                consider(target.replace_prefix(depth, source)?)?;
+                return validate(target.replace_prefix(depth, source)?);
             }
         }
-        if identity_fallback_only
-            && result.is_none()
-            && identity_compatible(src_db_type, dst_db_type)
-            && Self::forward(routers, src_db_type, dst_db_type, target)? == *target
-        {
-            result = Some(target.clone());
-        }
-        result.with_context(|| format!("unmapped reverse route for {target}"))
+        ensure!(
+            identity_compatible(src_db_type, dst_db_type),
+            "unmapped reverse route for {target}"
+        );
+        validate(target.clone())
     }
 
     /// Validate after all parent rules have been inserted.
@@ -391,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn to_map_none_empty_and_ambiguous_inverse_are_distinct() {
+    fn to_map_uses_the_longest_inverse_before_dispatch() {
         let id = rid!("schema", "t");
         assert_eq!(
             ResourceRouter::to(&HashMap::new(), &DbType::Mysql, &DbType::Pg, &id).unwrap(),
@@ -402,18 +369,19 @@ mod tests {
             ResourceRouter::new(Some(HashMap::new())),
         )]);
         assert!(ResourceRouter::to(&routers, &DbType::Mysql, &DbType::Kafka, &id).is_err());
-        let mut table =
-            ResourceRouter::new(Some(HashMap::from([(rid!("*", "*"), rid!("shared"))])));
+        let mut table = ResourceRouter::new(Some(HashMap::from([
+            (rid!("a", "other"), rid!("explicit")),
+            (rid!("a", "*"), rid!("inherited")),
+            (rid!("*", "*"), rid!("shared")),
+        ])));
         table.insert(rid!("a", "other"), rid!("x", "t")).unwrap();
         let mut db = ResourceRouter::default();
         db.insert(rid!("a"), rid!("x")).unwrap();
         routers.insert(ResourceKind::Table, table);
         routers.insert(ResourceKind::Database, db);
-        assert!(
-            ResourceRouter::to(&routers, &DbType::Mysql, &DbType::Kafka, &rid!("x", "t"))
-                .unwrap_err()
-                .to_string()
-                .contains("ambiguous")
+        assert_eq!(
+            ResourceRouter::to(&routers, &DbType::Mysql, &DbType::Kafka, &rid!("x", "t")).unwrap(),
+            rid!("explicit")
         );
         assert!(ResourceRouter::validate_to_pattern(&rid!("*", "t")).is_err());
     }
