@@ -138,10 +138,16 @@ impl DtFilter {
             let Some(columns) = self.resource_filters.get(&kind) else {
                 return self.filter(&table);
             };
-            return Ok(self.filter(&table)?
-                || ResourceFilter::matches(&columns.ignore_set, id, &self.matcher)
-                || (ResourceFilter::matches_prefix(&columns.do_set, &table, &self.matcher)
-                    && !ResourceFilter::matches(&columns.do_set, id, &self.matcher)));
+            if ResourceFilter::matches(&columns.ignore_set, id, &self.matcher) {
+                return Ok(true);
+            }
+            if ResourceFilter::matches(&columns.do_set, id, &self.matcher) {
+                return Ok(false);
+            }
+            if ResourceFilter::matches_prefix(&columns.do_set, &table, &self.matcher) {
+                return Ok(true);
+            }
+            return self.filter(&table);
         }
         let cacheable = matches!(kind, ResourceKind::Table | ResourceKind::Collection);
         if cacheable {
@@ -149,8 +155,7 @@ impl DtFilter {
                 return Ok(*value);
             }
         }
-        let mut allowed = false;
-        let mut ignored = false;
+        let mut excluded = true;
         for (index, kind) in resource_levels(&self.db_type).iter().enumerate().rev() {
             if *kind == ResourceKind::Column {
                 continue;
@@ -158,20 +163,27 @@ impl DtFilter {
             let Some(base) = self.resource_filters.get(kind) else {
                 continue;
             };
-            if index < id.len() {
+            let (ignored, allowed) = if index < id.len() {
                 let depth = index + 1;
                 let prefix = id
                     .prefix(depth)
                     .with_context(|| format!("invalid filter prefix depth {depth}: {id}"))?;
-                ignored |= ResourceFilter::matches(&base.ignore_set, &prefix, &self.matcher);
-                allowed |= ResourceFilter::matches(&base.do_set, &prefix, &self.matcher);
+                (
+                    ResourceFilter::matches(&base.ignore_set, &prefix, &self.matcher),
+                    ResourceFilter::matches(&base.do_set, &prefix, &self.matcher),
+                )
             } else {
                 // Descendant includes keep namespaces available for enumeration.
-                allowed |= ResourceFilter::matches_prefix(&base.do_set, id, &self.matcher);
-                ignored |= ResourceFilter::covers_descendants(&base.ignore_set, id, &self.matcher);
+                (
+                    ResourceFilter::covers_descendants(&base.ignore_set, id, &self.matcher),
+                    ResourceFilter::matches_prefix(&base.do_set, id, &self.matcher),
+                )
+            };
+            if ignored || allowed {
+                excluded = ignored;
+                break;
             }
         }
-        let excluded = ignored || !allowed;
         if cacheable {
             self.cache.insert(id.clone(), excluded);
         }
@@ -321,7 +333,7 @@ mod tests {
         assert!(f.filter(&rid!("db1", "t1", "other")).unwrap());
         assert!(f.filter(&rid!("db1", "t1", "secret")).unwrap());
         assert!(f.filter(&rid!("db1", "t2", "id")).unwrap());
-        assert!(f.filter(&rid!("db2", "t1", "id")).unwrap());
+        assert!(!f.filter(&rid!("db2", "t1", "id")).unwrap());
         let columns = vec!["id".into(), "other".into(), "secret".into()];
         for (table, expected) in [
             (rid!("db1", "t1"), vec!["other", "secret"]),
@@ -340,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_resource_filters_keep_namespace_discovery_and_parent_exclusions() {
+    fn sparse_resource_filters_stop_at_the_longest_match() {
         let mut f = DtFilter::new(DbType::Mssql);
         let table = rid!("db", "sales", "order");
         let column = table.child("id");
@@ -357,8 +369,9 @@ mod tests {
         assert!(f.filter(&rid!("db", "other")).unwrap());
         assert!(f.filter(&rid!("db", "sales", "other")).unwrap());
         f.add_ignore(&rid!("db")).unwrap();
-        assert!(f.filter(&table).unwrap());
-        assert!(f.filter(&column).unwrap());
+        assert!(!f.filter(&table).unwrap());
+        assert!(!f.filter(&column).unwrap());
+        assert!(f.filter(&rid!("db", "sales", "other")).unwrap());
         f.set_resource_filter(ResourceKind::Database, ResourceFilter::default())
             .unwrap();
         assert!(!f.filter(&column).unwrap());
@@ -367,7 +380,7 @@ mod tests {
         columns_only.add_do(&column).unwrap();
         assert!(columns_only.filter(&rid!("db")).unwrap());
         assert!(columns_only.filter(&table).unwrap());
-        assert!(columns_only.filter(&column).unwrap());
+        assert!(!columns_only.filter(&column).unwrap());
     }
 
     #[test]
@@ -376,7 +389,7 @@ mod tests {
         assert!(!f.filter(&rid!("a", "inventory", "order")).unwrap());
         assert!(f.filter(&rid!("b", "inventory", "order")).unwrap());
         f.add_ignore(rid!("a")).unwrap();
-        assert!(f.filter(&rid!("a", "inventory", "order")).unwrap());
+        assert!(!f.filter(&rid!("a", "inventory", "order")).unwrap());
         assert!(f.filter(&rid!("c")).unwrap());
         f.add_do(rid!("c", "dbo", "new")).unwrap();
         assert!(!f.filter(&rid!("c")).unwrap());
@@ -496,6 +509,44 @@ mod tests {
                     excluded,
                     "{section} {name}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn longest_resource_match_wins_and_ignore_wins_at_the_same_level() {
+        for engine in [DbType::Mysql, DbType::Pg, DbType::Mssql, DbType::Mongo] {
+            let parent = if engine == DbType::Mssql {
+                rid!("db", "sales")
+            } else {
+                rid!("sales")
+            };
+            let table = parent.child("orders");
+            for (parent_ignore, child_do, child_ignore, excluded) in [
+                (true, true, false, false),
+                (false, false, true, true),
+                (true, false, false, true),
+                (false, false, false, false),
+                (false, true, true, true),
+            ] {
+                let mut f = DtFilter::new(engine.clone());
+                if parent_ignore {
+                    f.add_ignore(&parent).unwrap();
+                } else {
+                    f.add_do(&parent).unwrap();
+                }
+                assert_eq!(f.filter(&table).unwrap(), parent_ignore);
+                // An unrelated child rule must still allow fallback to the parent.
+                f.add_do(parent.child("events")).unwrap();
+                if child_do {
+                    f.add_do(&table).unwrap();
+                }
+                if child_ignore {
+                    f.add_ignore(&table).unwrap();
+                }
+                for _ in 0..2 {
+                    assert_eq!(f.filter(&table).unwrap(), excluded, "{engine}: {table}");
+                }
             }
         }
     }

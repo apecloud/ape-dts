@@ -76,14 +76,7 @@ impl DtRouter {
 
     /// Known routed payloads prefer explicit inverse mappings over unchanged names.
     pub fn reverse_payload(&self, target: &RID) -> Result<RID> {
-        ResourceRouter::reverse_rid(
-            &self.resource_routers,
-            &self.src_db_type,
-            &self.dst_db_type,
-            target,
-            None,
-            true,
-        )
+        self.reverse_route(target)
     }
     pub fn dst_db_type(&self) -> &DbType {
         &self.dst_db_type
@@ -127,7 +120,7 @@ impl DtRouter {
         Ok(O::from(&self.route(source)?))
     }
 
-    /// Unchanged names are also inverse candidates; collisions return an error.
+    /// The longest explicit inverse rule wins over parent rules and unchanged names.
     pub fn reverse_route(&self, target: &RID) -> Result<RID> {
         self.reverse_rid(target, None)
     }
@@ -282,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn reverse_routing_checks_identity_collisions_and_selected_domain() {
+    fn reverse_routing_prefers_explicit_rules_and_checks_selected_domain() {
         let a = rid!("a", "t");
         let b = rid!("b", "t");
         let router = DtRouter::new(
@@ -291,13 +284,12 @@ mod tests {
             [(a.clone(), b.clone()), (a.clone(), b.clone())],
         )
         .unwrap();
-        assert!(router
-            .reverse_route(&b)
-            .unwrap_err()
-            .to_string()
-            .contains("ambiguous"));
+        assert_eq!(router.reverse_route(&b).unwrap(), a);
         let sources = HashSet::from([a.clone()]);
         assert_eq!(router.reverse_route_in(&b, &sources).unwrap(), a);
+        assert!(router
+            .reverse_route_in(&b, &HashSet::from([b.clone()]))
+            .is_err());
         assert!(router
             .validate_unique_targets(&HashSet::from([a, b]))
             .is_err());
@@ -353,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn reverse_routing_collects_all_target_levels_across_engines() {
+    fn reverse_routing_stops_at_the_longest_match_across_engines() {
         for (src_type, dst_type, src_namespace, dst_namespace) in [
             (DbType::Mysql, DbType::Pg, rid!("a"), rid!("x")),
             (DbType::Pg, DbType::Mssql, rid!("a"), rid!("db", "x")),
@@ -373,18 +365,21 @@ mod tests {
             .unwrap();
             for source in [&inherited, &explicit] {
                 assert_eq!(router.route(source).unwrap(), target);
+            }
+            assert_eq!(router.reverse_route(&target).unwrap(), explicit);
+            assert_eq!(router.reverse_payload(&target).unwrap(), explicit);
+            for sources in [
+                HashSet::from([explicit.clone()]),
+                HashSet::from([inherited.clone(), explicit.clone()]),
+            ] {
                 assert_eq!(
-                    router
-                        .reverse_route_in(&target, &HashSet::from([source.clone()]))
-                        .unwrap(),
-                    *source
+                    router.reverse_route_in(&target, &sources).unwrap(),
+                    explicit
                 );
             }
             assert!(router
-                .reverse_route_in(&target, &HashSet::from([inherited, explicit]))
-                .unwrap_err()
-                .to_string()
-                .contains("ambiguous"));
+                .reverse_route_in(&target, &HashSet::from([inherited]))
+                .is_err());
         }
     }
 
