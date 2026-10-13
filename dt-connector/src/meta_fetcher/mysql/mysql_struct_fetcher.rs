@@ -4,9 +4,11 @@ use std::{
 };
 
 use anyhow::bail;
+use dt_common::rid;
 use dt_common::{
     config::config_enums::DbType,
     error::DtError,
+    filter::DtFilter,
     meta::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         struct_meta::{
@@ -23,7 +25,6 @@ use dt_common::{
             },
         },
     },
-    rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
 use futures::TryStreamExt;
@@ -32,7 +33,7 @@ use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 pub struct MysqlStructFetcher {
     pub conn_pool: Pool<MySql>,
     pub dbs: HashSet<String>,
-    pub filter: Option<RdbFilter>,
+    pub filter: Option<DtFilter>,
     pub meta_manager: MysqlMetaManager,
     pub allow_missing_databases: bool,
 }
@@ -190,7 +191,7 @@ impl MysqlStructFetcher {
                 Self::get_str_with_null(&row, "TABLE_NAME")?,
             );
 
-            if self.filter_tb(&db, &tb) {
+            if self.filter_tb(&db, &tb)? {
                 continue;
             }
 
@@ -401,7 +402,7 @@ impl MysqlStructFetcher {
         }
 
         for ((db, tb, _index_name), index) in index_map {
-            self.push_to_results(&mut results, &db, &tb, index);
+            self.push_to_results(&mut results, &db, &tb, index)?;
         }
 
         Ok(results)
@@ -470,7 +471,7 @@ impl MysqlStructFetcher {
                 constraint_type: ConstraintType::Check,
                 definition,
             };
-            self.push_to_results(&mut results, &database_name, &table_name, constraint);
+            self.push_to_results(&mut results, &database_name, &table_name, constraint)?;
         }
 
         Ok(results)
@@ -543,7 +544,7 @@ impl MysqlStructFetcher {
                 constraint_type: ConstraintType::Foreign,
                 definition,
             };
-            self.push_to_results(&mut results, &database_name, &table_name, constraint);
+            self.push_to_results(&mut results, &database_name, &table_name, constraint)?;
         }
         Ok(results)
     }
@@ -563,14 +564,14 @@ impl MysqlStructFetcher {
         Ok(SqlUtil::try_get_mysql_optional_string(row, col_name)?.unwrap_or_default())
     }
 
-    fn filter_tb(&mut self, db: &str, tb: &str) -> bool {
+    fn filter_tb(&mut self, db: &str, tb: &str) -> anyhow::Result<bool> {
         if !self.dbs.contains(db) {
-            return true;
+            return Ok(true);
         }
         if let Some(filter) = &mut self.filter {
-            return filter.filter_tb(db, tb);
+            return filter.filter(&rid!(db, tb));
         }
-        false
+        Ok(false)
     }
 
     fn get_index_kind(non_unique: i32, index_type: &IndexType) -> IndexKind {
@@ -624,9 +625,9 @@ impl MysqlStructFetcher {
         table_schema: &str,
         table_name: &str,
         item: T,
-    ) {
-        if self.filter_tb(table_schema, table_name) {
-            return;
+    ) -> anyhow::Result<()> {
+        if self.filter_tb(table_schema, table_name)? {
+            return Ok(());
         }
 
         let key = (table_schema.into(), table_name.into());
@@ -635,6 +636,7 @@ impl MysqlStructFetcher {
         } else {
             results.insert(key, vec![item]);
         }
+        Ok(())
     }
 
     fn get_result<T>(

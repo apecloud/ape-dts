@@ -59,16 +59,16 @@ fn to_routes(
                         Ok(id.segments().join(""))
                     })
                     .collect::<Result<Vec<_>>>()?,
-            )?;
+            );
             let source = if matches!(src, DbType::Kafka) {
-                RID::new([source.segments().join(".")])?
+                RID::new([source.segments().join(".")])
             } else {
                 source
             };
             let target = config::exact_path(to, dst)?;
             // Dots belong to the topic name.
             let target = if dst_kind == ResourceKind::Topic {
-                RID::new([target.segments().join(".")])?
+                RID::new([target.segments().join(".")])
             } else {
                 target
             };
@@ -144,6 +144,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use configparser::ini::Ini;
+    use strum::IntoEnumIterator;
 
     use super::*;
     use crate::{config::router_config::RouterSectionConfig, rid};
@@ -391,7 +392,7 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
         assert_eq!(router.route(&rid!("db", "t")).unwrap(), rid!("db", "t"));
         assert_eq!(router.route_db_type(), &DbType::Pg);
         assert_eq!(router.to(&rid!("db", "t")).unwrap(), rid!("db", "t"));
-        for kind in CommonFilterKind::ALL {
+        for kind in CommonFilterKind::iter() {
             for mapping in ["", "a:b"] {
                 let config = RouterConfig::from_ini(&ini(&format!(
                     "[rules.{}]\nroute={mapping}",
@@ -405,7 +406,11 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
 
     #[test]
     fn raw_resource_names_are_resolved_for_the_source_engine() {
-        for (db_type, section) in [(DbType::Mysql, "db"), (DbType::Pg, "schema")] {
+        for (db_type, section) in [
+            (DbType::Mysql, "db"),
+            (DbType::Mysql, "database"),
+            (DbType::Pg, "schema"),
+        ] {
             let config = RouterConfig::from_ini(&ini(&format!(
                 "[rules.{section}]\nroute=inventory:archive"
             )))
@@ -418,7 +423,7 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
         }
         for (db_type, text) in [
             (DbType::Mysql, "[rules.future]\nroute=a:b"),
-            (DbType::Mysql, "[rules.database]\nroute=a:b"),
+            (DbType::Pg, "[rules.database]\nroute=a:b"),
             (DbType::Mysql, "[rules.schema]\nroute=a:b"),
             (DbType::Kafka, "[rules.db]\nroute=a:b"),
             (DbType::Pg, "[rules.db]\nroute=a:b"),

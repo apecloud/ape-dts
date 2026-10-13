@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     error::{DtError, DtOptionExt},
-    rdb_filter::RdbFilter,
+    filter::DtFilter,
     utils::redis_util::RedisUtil,
 };
 
@@ -13,7 +13,7 @@ pub struct RedisFetcher {
     pub connection_auth: ConnectionAuthConfig,
     pub conn: Option<redis::Connection>,
     pub is_source: bool,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
 }
 
 #[async_trait]

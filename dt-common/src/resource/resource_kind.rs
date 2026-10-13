@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use strum::{AsRefStr, EnumString};
 
 use super::RID;
@@ -7,7 +7,7 @@ use crate::config::config_enums::DbType;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum ResourceKind {
-    #[strum(serialize = "db")]
+    #[strum(to_string = "db", serialize = "database")]
     Database,
     Schema,
     Table,
@@ -57,11 +57,12 @@ pub fn resource_depth(db_type: &DbType, kind: ResourceKind) -> Option<usize> {
 }
 
 pub fn resource_kind(db_type: &DbType, id: &RID) -> Result<ResourceKind> {
+    ensure!(!id.is_empty(), "empty {db_type} resource: {id}");
     let depth = id.len() - 1;
     resource_levels(db_type)
         .get(depth)
         .copied()
-        .ok_or_else(|| anyhow::anyhow!("invalid {db_type} resource depth {depth}: {id}"))
+        .ok_or_else(|| anyhow!("invalid {db_type} resource depth {depth}: {id}"))
 }
 
 pub fn validate_rid(db_type: &DbType, kind: ResourceKind, id: &RID) -> Result<()> {
@@ -100,16 +101,17 @@ mod tests {
             assert_eq!(resource_levels(&engine), levels);
             for (index, kind) in levels.iter().enumerate() {
                 assert_eq!(resource_depth(&engine, *kind), Some(index));
-                let id = RID::new(vec!["name"; index + 1]).unwrap();
+                let id = RID::new(vec!["name"; index + 1]);
                 assert_eq!(resource_kind(&engine, &id).unwrap(), *kind);
                 validate_rid(&engine, *kind, &id).unwrap();
-                assert!(validate_rid(&engine, *kind, &id.child("extra").unwrap()).is_err());
+                assert!(validate_rid(&engine, *kind, &id.child("extra")).is_err());
             }
-            assert!(
-                resource_kind(&engine, &RID::new(vec!["name"; levels.len() + 1]).unwrap()).is_err()
-            );
+            assert!(resource_kind(&engine, &RID::new(vec!["name"; levels.len() + 1])).is_err());
+            assert!(resource_kind(&engine, &RID::new(Vec::<String>::new())).is_err());
+            assert!(resource_kind(&engine, &rid!("")).is_err());
         }
         assert_eq!(resource_depth(&Pg, Database), None);
         assert!(validate_rid(&Pg, Database, &rid!("db")).is_err());
+        assert_eq!(Database.as_ref(), "db");
     }
 }

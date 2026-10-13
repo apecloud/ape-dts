@@ -3,6 +3,7 @@ mod test {
     use std::collections::HashMap;
 
     use anyhow::Context;
+    use dt_common::router::DtRouter;
     use dt_common::{
         config::{
             config_enums::DbType,
@@ -21,7 +22,6 @@ mod test {
         },
     };
     use dt_connector::{
-        rdb_router::RdbRouter,
         sinker::{base_sinker::BaseSinker, mssql::mssql_sinker::MssqlSinker},
         Sinker,
     };
@@ -175,7 +175,7 @@ mod test {
     fn new_sinker(
         pool: &MssqlConnectionPool,
         meta_manager: MssqlMetaManager,
-        router: Option<RdbRouter>,
+        router: Option<DtRouter>,
         batch_size: usize,
     ) -> MssqlSinker {
         MssqlSinker::new(
@@ -361,7 +361,7 @@ mod test {
         let pool = context.sinker_pool.clone();
         let table =
             context.sinker_table("ape_dts_sinker_component_test", "dbo", "transaction_rows")?;
-        let router = RdbRouter::from_config(
+        let router = DtRouter::from_config(
             &RouterConfig::Legacy(LegacyRouterConfig {
                 schema_map: String::new(),
                 tb_map: format!(
@@ -371,9 +371,9 @@ mod test {
                 col_map: String::new(),
                 topic_map: String::new(),
             }),
-            &DbType::Mssql,
-        )?
-        .context("MSSQL sinker test router has no route rules")?;
+            DbType::Mssql,
+            DbType::Mssql,
+        )?;
         let meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
         let mut sinker = new_sinker(&pool, meta_manager, Some(router), 1);
 

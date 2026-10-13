@@ -13,13 +13,13 @@ mod test {
         config::{
             config_enums::DbType, extractor_config::ExtractorConfig, filter_config::FilterConfig,
         },
+        filter::DtFilter,
         meta::{
             dt_data::{DtData, DtItem},
             dt_queue::DtQueue,
             position::Position,
         },
         monitor::task_monitor_handle::TaskMonitorHandle,
-        rdb_filter::RdbFilter,
         time_filter::TimeFilter,
     };
     use dt_connector::{
@@ -104,7 +104,7 @@ mod test {
                 connection_pool: context.source_pool.clone(),
                 meta_manager: MssqlTestEndpoint::create_meta_manager(context.source_pool.clone())
                     .await?,
-                filter: Arc::new(RdbFilter::from_config(filter_config, &DbType::Mssql)?),
+                filter: Arc::new(DtFilter::from_config(filter_config, DbType::Mssql)?),
                 partition_cols: Arc::new(partition_cols),
                 batch_size: *batch_size,
                 parallel_type: parallel_type.clone(),

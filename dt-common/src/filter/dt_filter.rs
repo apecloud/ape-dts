@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use dashmap::DashMap;
+use strum::IntoEnumIterator;
 
 use super::{CommonFilter, CommonFilterKind, ExpressionFilter, ResourceFilter};
 use crate::{
@@ -10,13 +11,11 @@ use crate::{
         dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
     },
-    resource::{
-        resource_depth, resource_kind, resource_levels, PatternMatcher, ResourceKind, ToRid, RID,
-    },
+    resource::{resource_depth, resource_kind, resource_levels, PatternMatcher, ResourceKind, RID},
     utils::sql_util::SqlUtil,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DtFilter {
     pub db_type: DbType,
     pub matcher: PatternMatcher,
@@ -44,6 +43,39 @@ impl DtFilter {
         &self.db_type
     }
 
+    pub fn resource_filters(&self) -> &HashMap<ResourceKind, ResourceFilter> {
+        &self.resource_filters
+    }
+
+    pub fn filter_all_ddl(&self) -> bool {
+        DdlType::iter().all(|ddl| self.filter_common(CommonFilterKind::Ddl, &ddl.to_string()))
+    }
+
+    pub fn filter_all_dcl(&self) -> bool {
+        DclType::iter().all(|dcl| self.filter_dcl(&dcl))
+    }
+
+    pub fn excluded_columns<'a>(
+        &self,
+        table: &RID,
+        columns: impl IntoIterator<Item = &'a String>,
+    ) -> Result<HashSet<String>> {
+        let mut excluded = HashSet::new();
+        let Some(rules) = self.resource_filters.get(&ResourceKind::Column) else {
+            return Ok(excluded);
+        };
+        let selected = ResourceFilter::matches_prefix(&rules.do_set, table, &self.matcher);
+        for column in columns {
+            let id = table.child(column.clone());
+            if ResourceFilter::matches(&rules.ignore_set, &id, &self.matcher)
+                || (selected && !ResourceFilter::matches(&rules.do_set, &id, &self.matcher))
+            {
+                excluded.insert(column.clone());
+            }
+        }
+        Ok(excluded)
+    }
+
     pub fn set_common_filter(&mut self, kind: CommonFilterKind, filter: CommonFilter) {
         let previous = self.common_filters.entry(kind).or_default();
         previous.do_set.extend(filter.do_set);
@@ -63,7 +95,7 @@ impl DtFilter {
         filter: ResourceFilter,
     ) -> Result<()> {
         let depth = resource_depth(&self.db_type, kind)
-            .ok_or_else(|| anyhow::anyhow!("unsupported {kind:?} for {}", self.db_type))?;
+            .ok_or_else(|| anyhow!("unsupported {kind:?} for {}", self.db_type))?;
         filter.validate(depth + 1, &self.matcher)?;
         self.resource_filters.insert(kind, filter);
         self.cache.clear();
@@ -71,8 +103,8 @@ impl DtFilter {
     }
 
     /// Preserve RID tokens for `PatternMatcher`, including quotes and regex delimiters.
-    pub fn add_do<I: ToRid + ?Sized>(&mut self, pattern: &I) -> Result<()> {
-        let id = pattern.to_rid(&self.db_type)?;
+    pub fn add_do(&mut self, pattern: impl Into<RID>) -> Result<()> {
+        let id: RID = pattern.into();
         let kind = resource_kind(&self.db_type, &id)?;
         self.matcher.validate(&id)?;
         self.resource_filters
@@ -84,8 +116,8 @@ impl DtFilter {
         Ok(())
     }
 
-    pub fn add_ignore<I: ToRid + ?Sized>(&mut self, pattern: &I) -> Result<()> {
-        let id = pattern.to_rid(&self.db_type)?;
+    pub fn add_ignore(&mut self, pattern: impl Into<RID>) -> Result<()> {
+        let id: RID = pattern.into();
         let kind = resource_kind(&self.db_type, &id)?;
         self.matcher.validate(&id)?;
         self.resource_filters
@@ -97,20 +129,16 @@ impl DtFilter {
         Ok(())
     }
 
-    pub fn filter<I: ToRid + ?Sized>(&self, resource: &I) -> Result<bool> {
-        self.filter_rid(&resource.to_rid(&self.db_type)?)
-    }
-
-    pub fn filter_rid(&self, id: &RID) -> Result<bool> {
+    pub fn filter(&self, id: &RID) -> Result<bool> {
         let kind = resource_kind(&self.db_type, id)?;
         if kind == ResourceKind::Column {
             let table = id
                 .parent()
                 .with_context(|| format!("column resource has no parent: {id}"))?;
             let Some(columns) = self.resource_filters.get(&kind) else {
-                return self.filter_rid(&table);
+                return self.filter(&table);
             };
-            return Ok(self.filter_rid(&table)?
+            return Ok(self.filter(&table)?
                 || ResourceFilter::matches(&columns.ignore_set, id, &self.matcher)
                 || (ResourceFilter::matches_prefix(&columns.do_set, &table, &self.matcher)
                     && !ResourceFilter::matches(&columns.do_set, id, &self.matcher)));
@@ -150,9 +178,8 @@ impl DtFilter {
         Ok(excluded)
     }
 
-    pub fn filter_event<I: ToRid + ?Sized>(&self, resource: &I, event: &RowType) -> Result<bool> {
-        let id = resource.to_rid(&self.db_type)?;
-        let kind = resource_kind(&self.db_type, &id)?;
+    pub fn filter_event(&self, id: &RID, event: &RowType) -> Result<bool> {
+        let kind = resource_kind(&self.db_type, id)?;
         ensure!(
             matches!(
                 kind,
@@ -167,16 +194,12 @@ impl DtFilter {
                     .count(),
             "event filtering requires a data object"
         );
-        Ok(
-            self.filter_common(CommonFilterKind::Event, &event.to_string())
-                || self.filter_rid(&id)?,
-        )
+        Ok(self.filter_common(CommonFilterKind::Event, &event.to_string()) || self.filter(id)?)
     }
 
-    pub fn filter_ddl<I: ToRid + ?Sized>(&self, resource: &I, ddl: &DdlType) -> Result<bool> {
-        let id = resource.to_rid(&self.db_type)?;
-        resource_kind(&self.db_type, &id)?;
-        Ok(self.filter_common(CommonFilterKind::Ddl, &ddl.to_string()) || self.filter_rid(&id)?)
+    pub fn filter_ddl(&self, id: &RID, ddl: &DdlType) -> Result<bool> {
+        resource_kind(&self.db_type, id)?;
+        Ok(self.filter_common(CommonFilterKind::Ddl, &ddl.to_string()) || self.filter(id)?)
     }
 
     pub fn filter_dcl(&self, dcl: &DclType) -> bool {
@@ -299,6 +322,17 @@ mod tests {
         assert!(f.filter(&rid!("db1", "t1", "secret")).unwrap());
         assert!(f.filter(&rid!("db1", "t2", "id")).unwrap());
         assert!(f.filter(&rid!("db2", "t1", "id")).unwrap());
+        let columns = vec!["id".into(), "other".into(), "secret".into()];
+        for (table, expected) in [
+            (rid!("db1", "t1"), vec!["other", "secret"]),
+            (rid!("db2", "t1"), vec!["other", "secret"]),
+            (rid!("marker", "t"), vec![]),
+        ] {
+            assert_eq!(
+                f.excluded_columns(&table, &columns).unwrap(),
+                expected.into_iter().map(String::from).collect(),
+            );
+        }
         let f = filter("[rules.db]\ndo=db1\n[rules.column]\ndo=db1.t1.id");
         assert!(!f.filter(&rid!("db1", "t2", "other")).unwrap());
         let f = filter("[rules.db]\ndo=db1\n[rules.table]\nignore=db1.*");
@@ -309,7 +343,7 @@ mod tests {
     fn sparse_resource_filters_keep_namespace_discovery_and_parent_exclusions() {
         let mut f = DtFilter::new(DbType::Mssql);
         let table = rid!("db", "sales", "order");
-        let column = table.child("id").unwrap();
+        let column = table.child("id");
         assert!(f.filter(&column).unwrap());
         f.add_do(&table).unwrap();
         for id in [
@@ -341,10 +375,10 @@ mod tests {
         let mut f = load_filter(&ini("[rules.schema]\ndo=a.inventory,b.inventory\nignore=a.audit\n[rules.table]\nignore=b.inventory.order"), DbType::Mssql).unwrap();
         assert!(!f.filter(&rid!("a", "inventory", "order")).unwrap());
         assert!(f.filter(&rid!("b", "inventory", "order")).unwrap());
-        f.add_ignore(&rid!("a")).unwrap();
+        f.add_ignore(rid!("a")).unwrap();
         assert!(f.filter(&rid!("a", "inventory", "order")).unwrap());
         assert!(f.filter(&rid!("c")).unwrap());
-        f.add_do(&rid!("c", "dbo", "new")).unwrap();
+        f.add_do(rid!("c", "dbo", "new")).unwrap();
         assert!(!f.filter(&rid!("c")).unwrap());
         assert!(!f.filter(&rid!("c", "dbo", "new")).unwrap());
     }
@@ -394,7 +428,7 @@ mod tests {
             let id = |name: &str| {
                 let mut path = vec!["db"; depth - 1];
                 path.push(name);
-                RID::new(path).unwrap()
+                RID::new(path)
             };
             let pattern = id(rule);
             let kind = levels[depth - 1];
@@ -458,7 +492,7 @@ mod tests {
                 ("unselected", true),
             ] {
                 assert_eq!(
-                    f.filter(&RID::new([name]).unwrap()).unwrap(),
+                    f.filter(&RID::new([name])).unwrap(),
                     excluded,
                     "{section} {name}"
                 );

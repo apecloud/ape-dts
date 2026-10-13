@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use chrono::Local;
+use dt_common::router::DtRouter;
 use dt_common::{
     error::{DtError, DtOptionExt, DtResultExt, Stage},
     log_error, log_info, log_summary, log_warn,
@@ -27,7 +28,10 @@ use dt_common::{
         row_type::RowType,
         struct_meta::struct_data::StructData,
     },
-    monitor::task_monitor_handle::TaskMonitorHandle,
+    monitor::{
+        counter_type::CounterType, task_metrics::TaskMetricsType,
+        task_monitor_handle::TaskMonitorHandle,
+    },
     utils::limit_queue::LimitedQueue,
 };
 use indexmap::{IndexMap, IndexSet};
@@ -46,7 +50,6 @@ use crate::{
     },
     checker::state_store::CheckerStateStore,
     rdb_query_builder::RdbQueryBuilder,
-    rdb_router::RdbRouter,
     sinker::base_sinker::BaseSinker,
     sinker::mongo::mongo_cmd,
 };
@@ -201,7 +204,7 @@ pub struct CheckContext {
     pub summary: CheckSummaryLog,
     pub output_revise_sql: bool,
     pub extractor_meta_manager: Option<RdbMetaManager>,
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub output_full_row: bool,
     pub revise_match_full_row: bool,
     pub global_summary: Option<Arc<Mutex<CheckSummaryLog>>>,
@@ -255,35 +258,29 @@ impl Default for CheckContext {
 }
 
 impl CheckContext {
-    pub async fn add_checker_counter(
-        &self,
-        counter_type: dt_common::monitor::counter_type::CounterType,
-        value: u64,
-    ) {
+    pub async fn add_checker_counter(&self, counter_type: CounterType, value: u64) {
         self.monitor
             .add_counter(self.monitor.default_task_id(), counter_type, value)
             .await;
     }
 
-    pub fn set_checker_counter(
-        &self,
-        counter_type: dt_common::monitor::counter_type::CounterType,
-        value: u64,
-    ) {
+    pub fn set_checker_counter(&self, counter_type: CounterType, value: u64) {
         self.monitor
             .set_counter(self.monitor.default_task_id(), counter_type, value);
     }
 
-    pub fn add_checker_metric(
-        &self,
-        metrics_type: dt_common::monitor::task_metrics::TaskMetricsType,
-        value: u64,
-    ) {
+    pub fn add_checker_metric(&self, metrics_type: TaskMetricsType, value: u64) {
         self.monitor.add_no_window_metrics(metrics_type, value);
     }
 
-    fn record_row_table_counts(&mut self, row: &RowData, checked_count: usize, skip_count: usize) {
-        self.record_table_counts(&row.db, &row.schema, &row.tb, checked_count, skip_count);
+    fn record_row_table_counts(
+        &mut self,
+        row: &RowData,
+        checked_count: usize,
+        skip_count: usize,
+    ) -> anyhow::Result<()> {
+        self.record_table_counts(&row.db, &row.schema, &row.tb, checked_count, skip_count)?;
+        Ok(())
     }
 
     fn record_table_counts(
@@ -293,14 +290,18 @@ impl CheckContext {
         target_tb: &str,
         checked_count: usize,
         skip_count: usize,
-    ) {
+    ) -> anyhow::Result<()> {
         if checked_count == 0 && skip_count == 0 {
-            return;
+            return Ok(());
         }
         self.summary.checked_count += checked_count;
-        let (db, schema, tb) = match &self.router {
-            Some(router) => router.reverse_get_tb_map_with_db(target_db, target_schema, target_tb),
-            None => (target_db, target_schema, target_tb),
+        let (ref db, ref schema, ref tb) = match &self.router {
+            Some(router) => router.reverse_table(target_db, target_schema, target_tb)?,
+            None => (
+                target_db.to_string(),
+                target_schema.to_string(),
+                target_tb.to_string(),
+            ),
         };
         let has_target_db = target_db != db;
         let has_target = has_target_db || target_schema != schema || target_tb != tb;
@@ -315,6 +316,7 @@ impl CheckContext {
             skip_count,
             ..Default::default()
         });
+        Ok(())
     }
 
     fn record_entry_table_counts(&mut self, entry: &CheckEntry) {
@@ -1020,9 +1022,9 @@ impl<C: Checker> DataChecker<C> {
                 meta_manager.invalidate_cache_for_table(db, schema, tb);
             }
 
-            let (target_db, target_schema, target_tb) = match &self.ctx.router {
-                Some(router) => router.get_tb_map_with_db(db, schema, tb),
-                None => (db.as_str(), schema.as_str(), tb.as_str()),
+            let (ref target_db, ref target_schema, ref target_tb) = match &self.ctx.router {
+                Some(router) => router.route_table(db, schema, tb)?,
+                None => (db.to_string(), schema.to_string(), tb.to_string()),
             };
             let (target_db, target_schema, target_tb) = (
                 target_db.to_string(),
@@ -1093,7 +1095,7 @@ impl<C: Checker> DataChecker<C> {
             if let Err(err) = self.drain_retries().await {
                 log_error!("Checker [{}] drain retries failed: {}", self.name, err);
             }
-            self.flush_store().await;
+            self.flush_store().await?;
         }
         self.finish_summary_and_meta().await?;
         Ok(())
@@ -1166,7 +1168,7 @@ mod tests {
 
     use anyhow::bail;
     use async_trait::async_trait;
-    use dt_common::meta::row_type::RowType;
+    use dt_common::{config::config_enums::DbType, meta::row_type::RowType, rid};
     use tokio::{
         sync::{mpsc, Notify},
         time::{timeout, Duration},
@@ -1353,21 +1355,12 @@ mod tests {
     async fn handle_control_item_routes_snapshot_finished_before_invalidate() {
         let (_control_tx, control_rx) = mpsc::unbounded_channel();
         let invalidated = Arc::new(StdMutex::new(Vec::new()));
-        let mut tb_map = HashMap::new();
-        tb_map.insert(
-            (
-                String::new(),
-                "src_schema".to_string(),
-                "src_tb".to_string(),
-            ),
-            (
-                String::new(),
-                "dst_schema".to_string(),
-                "dst_tb".to_string(),
-            ),
-        );
-        let router =
-            RdbRouter::from_maps_for_test(HashMap::new(), tb_map, HashMap::new(), HashMap::new());
+        let router = DtRouter::new(
+            DbType::Mysql,
+            DbType::Mysql,
+            [(rid!("src_schema", "src_tb"), rid!("dst_schema", "dst_tb"))],
+        )
+        .unwrap();
         let mut checker = DataChecker::new(
             CaptureInvalidateChecker {
                 invalidated: invalidated.clone(),

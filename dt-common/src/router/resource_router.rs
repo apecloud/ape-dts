@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 
 use crate::{
     config::config_enums::DbType,
@@ -31,6 +31,10 @@ impl ResourceRouter {
         self.to_map.is_some()
     }
 
+    pub fn mappings(&self) -> &HashMap<RID, RID> {
+        &self.forward_map
+    }
+
     fn dispatch(&self, source: &RID) -> Result<RID> {
         let Some(map) = &self.to_map else {
             return Ok(source.clone());
@@ -41,11 +45,11 @@ impl ResourceRouter {
         let mut segments = source.segments().to_vec();
         for index in (0..segments.len()).rev() {
             segments[index] = WILDCARD.into();
-            if let Some(target) = map.get(&RID::new(segments.clone())?) {
+            if let Some(target) = map.get(&RID::new(segments.clone())) {
                 return Ok(target.clone());
             }
         }
-        anyhow::bail!("no destination dispatch rule for {source}")
+        bail!("no destination dispatch rule for {source}")
     }
 
     /// Recover the source RID, preferring explicit inverse routes over unchanged names.
@@ -217,7 +221,7 @@ impl ResourceRouter {
         )
     }
 
-    fn reverse_rid(
+    pub fn reverse_rid(
         routers: &HashMap<ResourceKind, Self>,
         src_db_type: &DbType,
         dst_db_type: &DbType,

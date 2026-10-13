@@ -67,7 +67,7 @@ mod tests {
         let all = HashSet::from([rid!("db", "*")]);
         assert!(ResourceFilter::covers_descendants(&all, &prefix, &matcher));
         for rule in ["`*`", "`^.*$`", "order*", "?"] {
-            let rules = HashSet::from([RID::new(["db", rule]).unwrap()]);
+            let rules = HashSet::from([RID::new(["db", rule])]);
             assert!(
                 !ResourceFilter::covers_descendants(&rules, &prefix, &matcher),
                 "{rule}"

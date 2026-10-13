@@ -1,34 +1,29 @@
 use std::fmt;
 
 use anyhow::{ensure, Result};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
-use super::resource_kind;
-use crate::config::config_enums::DbType;
-
-/// Non-empty path of non-empty segments; dots within segments are literal. Filter RIDs may contain patterns.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Ordered resource segments; dots within segments are literal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RID {
     segments: Vec<String>,
 }
 
 impl RID {
-    pub fn new<I, S>(segments: I) -> Result<Self>
+    pub fn new<I, S>(segments: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let segments: Vec<String> = segments.into_iter().map(Into::into).collect();
-        ensure!(
-            !segments.is_empty(),
-            "RID must contain at least one segment"
-        );
-        ensure!(
-            segments.iter().all(|s| !s.is_empty()),
-            "RID segments must not be empty"
-        );
-        Ok(Self { segments })
+        // Empty db/schema/table components represent absent levels and do not count toward RID depth.
+        Self {
+            segments: segments
+                .into_iter()
+                .map(Into::<String>::into)
+                .filter(|segment| !segment.is_empty())
+                .collect(),
+        }
     }
 
     pub fn segments(&self) -> &[String] {
@@ -50,10 +45,10 @@ impl RID {
     }
 
     pub fn parent(&self) -> Option<Self> {
-        self.prefix(self.len() - 1)
+        self.len().checked_sub(1).and_then(|len| self.prefix(len))
     }
 
-    pub fn child(&self, name: impl Into<String>) -> Result<Self> {
+    pub fn child(&self, name: impl Into<String>) -> Self {
         let mut segments = self.segments.clone();
         segments.push(name.into());
         Self::new(segments)
@@ -68,14 +63,9 @@ impl RID {
             len > 0 && len <= self.len(),
             "invalid RID prefix length {len}"
         );
-        Self::new(target.segments.iter().chain(&self.segments[len..]).cloned())
-    }
-}
-
-impl<'de> Deserialize<'de> for RID {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let segments = Vec::<String>::deserialize(deserializer)?;
-        Self::new(segments).map_err(serde::de::Error::custom)
+        Ok(Self::new(
+            target.segments.iter().chain(&self.segments[len..]).cloned(),
+        ))
     }
 }
 
@@ -86,36 +76,18 @@ impl fmt::Display for RID {
     }
 }
 
-/// Adapters must validate engine-specific fields as well as RID kind and depth.
-pub trait ToRid {
-    fn to_rid(&self, db_type: &DbType) -> Result<RID>;
-}
-
-/// Decode and validate an identifier for the supplied engine.
-pub trait FromRid: Sized {
-    fn from_rid(id: &RID, db_type: &DbType) -> Result<Self>;
-}
-
-impl ToRid for RID {
-    fn to_rid(&self, db_type: &DbType) -> Result<RID> {
-        resource_kind(db_type, self)?;
-        Ok(self.clone())
+impl From<&RID> for RID {
+    fn from(id: &RID) -> Self {
+        id.clone()
     }
 }
 
-impl FromRid for RID {
-    fn from_rid(id: &RID, db_type: &DbType) -> Result<Self> {
-        id.to_rid(db_type)
-    }
-}
-
-/// Non-empty string literals are checked at compile time; dynamic input uses `RID::new`.
+/// Borrow string expressions to construct a RID without moving them.
 #[macro_export]
 macro_rules! rid {
-    ($($segment:literal),+ $(,)?) => {{
-        const _: () = { $(assert!(!$segment.is_empty(), "RID segments must not be empty");)+ };
-        $crate::resource::RID::new([$($segment),+]).expect("validated RID literals")
-    }};
+    ($($segment:expr),+ $(,)?) => {
+        $crate::resource::RID::new([$(::std::convert::AsRef::<str>::as_ref(&($segment))),+])
+    };
 }
 
 #[cfg(test)]
@@ -143,9 +115,9 @@ mod tests {
             assert_eq!(serde_json::from_str::<RID>(&encoded).unwrap(), id);
             assert_eq!(id.to_string(), encoded);
         }
-        let id = rid!("market", "inventory", "order");
+        let id: &RID = &rid!("market", "inventory", "order",);
         assert_eq!(id.parent(), Some(rid!("market", "inventory")));
-        assert_eq!(id.parent().unwrap().child("order").unwrap(), id);
+        assert_eq!(id.parent().unwrap().child("order"), *id);
         assert!(id.starts_with(&rid!("market")));
         assert_eq!(id.prefix(0), None);
         assert_eq!(id.prefix(4), None);
@@ -153,11 +125,45 @@ mod tests {
     }
 
     #[test]
-    fn construction_and_deserialization_enforce_non_empty_segments() {
-        for json in ["[]", "[\"\"]", "[\"db\",\"\"]", "\"db.table\"", "[1]"] {
+    fn construction_omits_empty_segments() {
+        for (segments, expected) in [
+            (vec![], vec![]),
+            (vec![""], vec![]),
+            (vec!["", "db", ""], vec!["db"]),
+            (vec!["db", "", "table"], vec!["db", "table"]),
+            (vec!["", " ", "table", ""], vec![" ", "table"]),
+        ] {
+            let id = RID::new(segments);
+            assert_eq!(id.segments(), expected);
+            let json = serde_json::to_string(&id).unwrap();
+            assert_eq!(serde_json::from_str::<RID>(&json).unwrap(), id);
+        }
+        let empty = RID::new(Vec::<String>::new());
+        assert!(empty.is_empty());
+        assert_eq!(empty.parent(), None);
+        assert_eq!(empty.prefix(1), None);
+        assert!(empty.replace_prefix(1, &rid!("db")).is_err());
+        assert_eq!(empty.child(""), empty);
+        assert_eq!(rid!("db").child(""), rid!("db"));
+        for json in ["\"db.table\"", "[1]", "null"] {
             assert!(serde_json::from_str::<RID>(json).is_err(), "{json}");
         }
-        assert!(RID::new(Vec::<String>::new()).is_err());
-        assert!(rid!("db").child("").is_err());
+    }
+
+    #[test]
+    fn macros_accept_mixed_string_expressions_and_evaluate_them_once() {
+        let schema = "inventory".to_owned();
+        let mut names = ["orders".to_owned()].into_iter();
+        let id = rid!("", schema, names.next().unwrap(),);
+        assert_eq!(id.segments(), ["inventory", "orders"]);
+        assert_eq!(schema, "inventory");
+        assert_eq!(rid!(&schema, "orders"), id);
+        assert!(names.next().is_none());
+        let borrowed: &RID = &rid!("", schema, format!("{}s", "order"),);
+        assert_eq!(*borrowed, id);
+        assert_eq!(schema, "inventory");
+        let parts = [schema, "orders".to_owned()];
+        assert_eq!(rid!(parts[0], parts[1]), id);
+        assert_eq!(parts, ["inventory", "orders"]);
     }
 }

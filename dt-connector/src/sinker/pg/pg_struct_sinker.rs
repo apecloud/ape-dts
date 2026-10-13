@@ -1,13 +1,13 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum, meta::struct_meta::struct_data::StructData,
-    rdb_filter::RdbFilter,
+    config::config_enums::ConflictPolicyEnum, filter::DtFilter,
+    meta::struct_meta::struct_data::StructData,
 };
 use sqlx::{Pool, Postgres};
 
 use crate::{
-    rdb_router::RdbRouter,
     sinker::{
         base_sinker::BaseSinker,
         base_struct_sinker::{BaseStructSinker, DBConnPool},
@@ -19,8 +19,8 @@ use crate::{
 pub struct PgStructSinker {
     pub conn_pool: Pool<Postgres>,
     pub conflict_policy: ConflictPolicyEnum,
-    pub filter: RdbFilter,
-    pub router: Option<RdbRouter>,
+    pub filter: DtFilter,
+    pub router: Option<DtRouter>,
     pub base_sinker: BaseSinker,
 }
 

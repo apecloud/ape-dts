@@ -2,8 +2,9 @@ use std::collections::HashSet;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::config::{config_enums::DbType, filter_config::FilterConfig};
+use dt_common::config::config_enums::DbType;
 use dt_common::error::DtError;
+use dt_common::rid;
 use regex::Regex;
 
 use super::traits::Prechecker;
@@ -18,7 +19,6 @@ const MYSQL_SUPPORT_DB_VERSION_REGEX: &str = r"5\..*|8\..*";
 
 pub struct MySqlPrechecker {
     pub fetcher: MysqlFetcher,
-    pub filter_config: FilterConfig,
     pub precheck_config: PrecheckConfig,
     pub is_source: bool,
 }
@@ -167,8 +167,7 @@ impl Prechecker for MySqlPrechecker {
             ));
         }
 
-        let is_filter_pattern =
-            BasicPrechecker::is_filter_pattern(DbType::Mysql, &self.fetcher.filter);
+        let is_filter_pattern = BasicPrechecker::is_filter_pattern(&self.fetcher.filter);
         if is_filter_pattern {
             return Ok(CheckResult::build_with_err(
                 CheckItem::CheckIfStructExisted,
@@ -184,15 +183,8 @@ impl Prechecker for MySqlPrechecker {
             ));
         }
 
-        let (mut models, mut err_msgs): (Vec<DbTable>, Vec<String>) = (Vec::new(), Vec::new());
-        let FilterConfig::Legacy(filter_config) = &self.filter_config else {
-            bail!("MySQL prechecker only supports Legacy configuration");
-        };
-        if !filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&filter_config.do_tbs, &mut models)
-        } else if !filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&filter_config.do_schemas, &mut models)
-        }
+        let models = DbTable::from_filter(&self.fetcher.filter)?;
+        let mut err_msgs = Vec::new();
 
         let (dbs, tb_dbs, tbs) = DbTable::get_config_maps(&models)?;
         let mut all_db_names = Vec::new();
@@ -282,8 +274,7 @@ impl Prechecker for MySqlPrechecker {
             ));
         }
 
-        let is_filter_pattern =
-            BasicPrechecker::is_filter_pattern(DbType::Mysql, &self.fetcher.filter);
+        let is_filter_pattern = BasicPrechecker::is_filter_pattern(&self.fetcher.filter);
         if is_filter_pattern {
             return Ok(CheckResult::build_with_err(
                 CheckItem::CheckIfTableStructSupported,
@@ -299,15 +290,7 @@ impl Prechecker for MySqlPrechecker {
             ));
         }
 
-        let mut models: Vec<DbTable> = Vec::new();
-        let FilterConfig::Legacy(filter_config) = &self.filter_config else {
-            bail!("MySQL prechecker only supports Legacy configuration");
-        };
-        if !filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&filter_config.do_tbs, &mut models)
-        } else if !filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&filter_config.do_schemas, &mut models)
-        }
+        let models = DbTable::from_filter(&self.fetcher.filter)?;
         let (dbs, tb_dbs, _) = DbTable::get_config_maps(&models)?;
         let mut all_db_names = Vec::new();
         all_db_names.extend(&dbs);
@@ -350,10 +333,10 @@ impl Prechecker for MySqlPrechecker {
                                     "{}.{}",
                                     constraint.rel_database_name, constraint.rel_table_name
                                 );
-                                if self.fetcher.filter.filter_tb(
-                                    &constraint.rel_database_name,
-                                    &constraint.rel_table_name,
-                                ) {
+                                if self.fetcher.filter.filter(&rid!(
+                                    constraint.rel_database_name,
+                                    constraint.rel_table_name
+                                ))? {
                                     fkref_nonexists_tables.insert(rel_db_tb_name);
                                 }
                             }

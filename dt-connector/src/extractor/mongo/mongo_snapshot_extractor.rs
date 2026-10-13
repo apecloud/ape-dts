@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use dt_common::{
     config::config_enums::{DbType, RdbParallelType},
     error::{DtError, DtErrorContextExt, Stage},
+    filter::DtFilter,
     log_error, log_info,
     meta::{
         col_value::ColValue,
@@ -14,7 +15,6 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
-    rdb_filter::RdbFilter,
 };
 use mongodb::{
     bson::{doc, oid::ObjectId, raw::RawDocumentBuf, Document},
@@ -43,7 +43,7 @@ pub struct MongoSnapshotExtractor {
     pub mongo_client: Client,
     pub sample_rate: Option<u8>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub use_raw_document: bool,
 }
 

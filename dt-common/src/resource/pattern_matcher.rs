@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use regex::Regex;
+use regex::{Error as RegexError, Regex};
 
 use super::{RMatcher, RID};
 use crate::utils::sql_util::{CharEscapePair, SqlUtil};
@@ -17,6 +17,11 @@ pub struct PatternMatcher {
 impl PatternMatcher {
     pub fn new(escape_pairs: Vec<CharEscapePair>) -> Self {
         Self { escape_pairs }
+    }
+
+    pub fn is_pattern(&self, value: &str) -> bool {
+        self.character_escape(value).is_none()
+            && (value.contains('*') || value.contains('?') || value.starts_with(REGEX_PREFIX))
     }
 
     pub fn is_match_segments(&self, input: &[String], pattern: &[String]) -> bool {
@@ -50,7 +55,7 @@ impl PatternMatcher {
             .find(|pair| SqlUtil::is_escaped(pattern, pair))
     }
 
-    fn regex(pattern: &str) -> std::result::Result<Regex, regex::Error> {
+    fn regex(pattern: &str) -> Result<Regex, RegexError> {
         let raw = pattern
             .strip_prefix(REGEX_PREFIX)
             .and_then(|inner| inner.strip_suffix(REGEX_SUFFIX));
@@ -73,12 +78,10 @@ impl RMatcher for PatternMatcher {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
 
     use super::*;
     use crate::{
-        config::{config_enums::DbType, filter_config::FilterConfig},
-        rdb_filter::RdbFilter,
+        config::config_enums::DbType,
         rid,
         utils::sql_util::{CharEscapePair, InnerEscapeMode},
     };
@@ -131,9 +134,9 @@ mod tests {
             (DbType::Mysql, "r#.*#", "`r#.*#`", "orders"),
         ] {
             let matcher = matcher(&db_type);
-            let pattern = RID::new([quoted, "order*"]).unwrap();
-            assert!(matcher.is_match(&RID::new([input, "orders"]).unwrap(), &pattern));
-            assert!(!matcher.is_match(&RID::new([other, "orders"]).unwrap(), &pattern));
+            let pattern = RID::new([quoted, "order*"]);
+            assert!(matcher.is_match(&RID::new([input, "orders"]), &pattern));
+            assert!(!matcher.is_match(&RID::new([other, "orders"]), &pattern));
         }
         assert!(!matcher(&DbType::Mssql).is_match(&rid!("a]b"), &rid!("[a]b]")));
         assert!(matcher(&DbType::Mysql).is_match(&rid!("`db`"), &rid!("`db`")));
@@ -157,63 +160,6 @@ mod tests {
         assert!(quoted.is_match(&rid!("r#.*#"), &rid!("`r#.*#`")));
         assert!(!quoted.is_match(&rid!("订单"), &rid!("`r#.*#`")));
         assert!(quoted.validate(&rid!("`r#[#`")).is_ok());
-    }
-
-    #[test]
-    fn standard_patterns_match_legacy_rdb_filter_semantics() {
-        for db_type in [
-            DbType::Mysql,
-            DbType::Pg,
-            DbType::Mssql,
-            DbType::Redis,
-            DbType::Kafka,
-        ] {
-            let matcher = matcher(&db_type);
-            let quoted = SqlUtil::escape_by_db_type("db*", &db_type);
-            for pattern in [
-                "db",
-                "*",
-                "?",
-                "db*",
-                "db?",
-                "db[0-9]+",
-                "db+*",
-                "db.name",
-                "db|store",
-                "r#db[0-9]+#",
-                "r#db|store#",
-                "r#(?s).*#",
-                "r#[#",
-                "(",
-                &quoted,
-            ] {
-                let mut legacy =
-                    RdbFilter::from_config(&FilterConfig::default(), &db_type).unwrap();
-                // Bypass INI tokenization to compare matcher behavior directly.
-                legacy.do_schemas = HashSet::from([pattern.to_owned()]);
-                for input in [
-                    "",
-                    "db",
-                    "db1",
-                    "db10",
-                    "db*",
-                    "db+10",
-                    "db.name",
-                    "dbXname",
-                    "store",
-                    "bookstore",
-                    "other",
-                    "db\nname",
-                    &quoted,
-                ] {
-                    assert_eq!(
-                        matcher.is_match_segment(input, pattern),
-                        !legacy.filter_schema(input),
-                        "{db_type}: input={input}, pattern={pattern}"
-                    );
-                }
-            }
-        }
     }
 
     #[test]

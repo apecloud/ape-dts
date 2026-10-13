@@ -2,6 +2,7 @@ use std::{cmp, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     log_error, log_info,
@@ -24,7 +25,7 @@ use tokio::{sync::RwLock, time::Instant};
 use crate::sinker::checkable_sinker::CheckableSink;
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
-    rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
+    sinker::base_sinker::BaseSinker, Sinker,
 };
 
 #[derive(Clone)]
@@ -33,7 +34,7 @@ pub struct PgSinker {
     pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub batch_size: usize,
     pub base_sinker: BaseSinker,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
@@ -157,10 +158,10 @@ impl Sinker for PgSinker {
         {
             // Snapshot finished positions keep source table names, so route them before
             // invalidating target-side metadata cache.
-            let (routed_schema, routed_tb) = if let Some(router) = &self.router {
-                router.get_tb_map(schema, tb)
+            let (ref routed_schema, ref routed_tb) = if let Some(router) = &self.router {
+                router.route_schema_table(schema, tb)?
             } else {
-                (schema.as_str(), tb.as_str())
+                (schema.clone(), tb.clone())
             };
             self.meta_manager
                 .invalidate_cache_for_table(routed_schema, routed_tb);
@@ -199,7 +200,9 @@ impl CheckableSink for PgSinker {
 
 impl PgSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
-        let task_id = self.base_sinker.source_task_id_for_rows(data, &self.router);
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(data, &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let monitor_interval = self.base_sinker.monitor_interval_secs();
         let mut data_size = 0;
@@ -267,7 +270,7 @@ impl PgSinker {
     ) -> anyhow::Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self.meta_manager.get_tb_meta_by_row_data(&data[0]).await?;
         let query_builder = RdbQueryBuilder::new_for_pg(tb_meta, None);
@@ -302,7 +305,7 @@ impl PgSinker {
     ) -> anyhow::Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager

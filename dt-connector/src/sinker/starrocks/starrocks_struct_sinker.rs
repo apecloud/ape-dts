@@ -2,9 +2,11 @@ use std::cmp;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
     error::{DtError, DtErrorContextExt},
+    filter::DtFilter,
     log_error, log_info,
     meta::{
         mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
@@ -17,12 +19,11 @@ use dt_common::{
             structure::{column::Column, table::Table},
         },
     },
-    rdb_filter::RdbFilter,
 };
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool};
 
-use crate::{close_conn_pool, rdb_router::RdbRouter, Sinker};
+use crate::{close_conn_pool, Sinker};
 
 const SIGN_COL_NAME: &str = "_ape_dts_is_deleted";
 const SIGN_COL_TYPE: &str = "BOOLEAN";
@@ -34,8 +35,8 @@ pub struct StarrocksStructSinker {
     pub db_type: DbType,
     pub conn_pool: Pool<MySql>,
     pub conflict_policy: ConflictPolicyEnum,
-    pub filter: RdbFilter,
-    pub router: Option<RdbRouter>,
+    pub filter: DtFilter,
+    pub router: Option<DtRouter>,
     pub extractor_meta_manager: RdbMetaManager,
     pub backend_count: i32,
 }
@@ -58,15 +59,15 @@ impl Sinker for StarrocksStructSinker {
                 }
 
                 StructStatement::MysqlCreateTable(statement) => {
-                    let (schema, tb) = if let Some(router) = &self.router {
-                        router.reverse_get_tb_map(
+                    let (ref schema, ref tb) = if let Some(router) = &self.router {
+                        router.reverse_schema_table(
                             &statement.table.database_name,
                             &statement.table.table_name,
-                        )
+                        )?
                     } else {
                         (
-                            statement.table.database_name.as_str(),
-                            statement.table.table_name.as_str(),
+                            statement.table.database_name.clone(),
+                            statement.table.table_name.clone(),
                         )
                     };
                     if let Some(meta_manager) =
@@ -85,15 +86,15 @@ impl Sinker for StarrocksStructSinker {
                 }
 
                 StructStatement::PgCreateTable(statement) => {
-                    let (schema, tb) = if let Some(router) = &self.router {
-                        router.reverse_get_tb_map(
+                    let (ref schema, ref tb) = if let Some(router) = &self.router {
+                        router.reverse_schema_table(
                             &statement.table.schema_name,
                             &statement.table.table_name,
-                        )
+                        )?
                     } else {
                         (
-                            statement.table.schema_name.as_str(),
-                            statement.table.table_name.as_str(),
+                            statement.table.schema_name.clone(),
+                            statement.table.table_name.clone(),
                         )
                     };
                     if let Some(meta_manager) = self.extractor_meta_manager.pg_meta_manager.as_mut()

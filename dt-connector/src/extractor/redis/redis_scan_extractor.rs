@@ -1,6 +1,7 @@
 use anyhow::bail;
 use async_trait::async_trait;
-use dt_common::{error::DtError, log_info, rdb_filter::RdbFilter};
+use dt_common::rid;
+use dt_common::{error::DtError, filter::DtFilter, log_info};
 use dt_common::{
     meta::{
         dt_data::DtData,
@@ -26,7 +27,7 @@ pub struct RedisScanExtractor {
     pub statistic_type: RedisStatisticType,
     pub scan_count: u64,
     pub conn: Connection,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
 }
 
 #[async_trait]
@@ -46,7 +47,7 @@ impl Extractor for RedisScanExtractor {
 
         let count = &self.scan_count.to_string();
         for db in self.get_dbs().await? {
-            if self.filter.filter_schema(&db) {
+            if self.filter.filter(&rid!(db))? {
                 continue;
             }
 

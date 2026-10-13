@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
+use crate::filter::DtFilter;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::{
     rbac::PgPrivilege, rbac::PgRole, rbac::PgRoleMember, structure_type::StructureType,
 };
-use crate::rdb_filter::RdbFilter;
 
 #[derive(Debug, Clone)]
 pub struct PgCreateRbacStatement {
@@ -12,14 +14,13 @@ pub struct PgCreateRbacStatement {
 }
 
 impl PgCreateRbacStatement {
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if filter.filter_structure(&StructureType::Rbac) {
             return Ok(sqls);
         }
 
-        let mut role_map: std::collections::HashMap<String, &PgRole> =
-            std::collections::HashMap::new();
+        let mut role_map: HashMap<String, &PgRole> = HashMap::new();
         for role in &self.roles {
             role_map.insert(role.name.clone(), role);
 
@@ -126,32 +127,22 @@ impl PgCreateRbacStatement {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-
-    use dashmap::DashMap;
+    use std::collections::HashSet;
 
     use super::*;
     use crate::config::config_enums::DbType;
+    use crate::filter::{CommonFilter, CommonFilterKind, DtFilter};
     use crate::meta::struct_meta::structure::rbac::{PgPrivilege, PgRole, PgRoleMember};
-    use crate::rdb_filter::RdbFilter;
 
-    fn build_filter() -> RdbFilter {
-        let mut filter = RdbFilter {
-            db_type: DbType::Pg,
-            do_structures: HashSet::new(),
-            cache: DashMap::new(),
-            do_schemas: HashSet::new(),
-            ignore_schemas: HashSet::new(),
-            do_tbs: HashSet::new(),
-            ignore_tbs: HashSet::new(),
-            ignore_cols: HashMap::new(),
-            do_events: HashSet::new(),
-            do_dcls: HashSet::new(),
-            do_ddls: HashSet::new(),
-            ignore_cmds: HashSet::new(),
-            where_conditions: HashMap::new(),
-        };
-        filter.do_structures.insert(StructureType::Rbac.to_string());
+    fn build_filter() -> DtFilter {
+        let mut filter = DtFilter::new(DbType::Pg);
+        filter.set_common_filter(
+            CommonFilterKind::Structure,
+            CommonFilter::new(
+                HashSet::from([StructureType::Rbac.to_string()]),
+                HashSet::new(),
+            ),
+        );
         filter
     }
 

@@ -10,8 +10,8 @@ use crate::{
         router_config::LegacyRouterConfig,
     },
     resource::{
-        config_parser as config, legacy, resource_depth, resource_levels, validate_rid,
-        ResourceKind, RID,
+        config_parser as config, legacy, resource_depth, resource_kind, resource_levels,
+        validate_rid, ResourceKind, RID,
     },
 };
 
@@ -78,11 +78,11 @@ impl DtRouter {
                 );
             }
             for (source_table, columns) in tables {
-                let target_table = parent_router.route_rid(&source_table)?;
+                let target_table = parent_router.route(&source_table)?;
                 for (from, to) in columns {
-                    let from = source_table.child(from)?;
+                    let from = source_table.child(from);
                     validate_rid(src, ResourceKind::Column, &from)?;
-                    rules.push((from, target_table.child(to)?));
+                    rules.push((from, target_table.child(to)));
                 }
             }
         }
@@ -187,7 +187,7 @@ fn topic_maps(
                 .into_iter()
                 .map(|token| Ok(config::quoted_literal(&token, src)?.unwrap_or(token)))
                 .collect::<Result<Vec<_>>>()?;
-            let topic = RID::new([names.join(".")])?;
+            let topic = RID::new([names.join(".")]);
             let default = from.iter().all(|s| s == WILDCARD);
             ensure!(!matches!(src, DbType::Mssql) || default, "legacy MSSQL topic_map lacks database identity; use JSON topic_map with a complete source path");
             let descendants = !default && from.last().is_some_and(|s| s == WILDCARD);
@@ -221,7 +221,7 @@ fn topic_maps(
     for rule in rules {
         validate_rid(dst, ResourceKind::Topic, &rule.to)?;
         let (prefix, min_depth, max_depth) = if let Some(from) = rule.from {
-            let kind = crate::resource::resource_kind(src, &from)?;
+            let kind = resource_kind(src, &from)?;
             ensure!(
                 kind != ResourceKind::Column,
                 "topic dispatch does not accept columns"
@@ -253,7 +253,7 @@ fn topic_maps(
         {
             let mut path = prefix.clone();
             path.resize(index + 1, WILDCARD.into());
-            let pattern = RID::new(path)?;
+            let pattern = RID::new(path);
             let map = maps.entry(kind).or_default();
             map.insert(pattern, rule.to.clone());
         }

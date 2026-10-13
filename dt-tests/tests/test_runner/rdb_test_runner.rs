@@ -8,6 +8,8 @@ use dt_common::meta::{
     col_value::ColValue, ddl_meta::ddl_parser::DdlParser,
     mysql::mysql_meta_manager::MysqlMetaManager, row_data::RowData,
 };
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::{
         config_enums::{DbType, TaskKind},
@@ -17,13 +19,11 @@ use dt_common::{
         meta_center_config::MetaCenterConfig,
         task_config::TaskConfig,
     },
+    filter::DtFilter,
     meta::{ddl_meta::ddl_type::DdlType, time::dt_utc_time::DtNaiveTime},
-    rdb_filter::RdbFilter,
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
-use dt_connector::{
-    meta_fetcher::mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher, rdb_router::RdbRouter,
-};
+use dt_connector::meta_fetcher::mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher;
 use dt_task::task_util::TaskUtil;
 use serde::de::DeserializeOwned;
 use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
@@ -38,7 +38,8 @@ use super::{
 use crate::{
     test_config_util::TestConfigUtil,
     test_runner::mock_data::{
-        context::MockDbContext, mysql_type::MysqlType, pg_type::PgType, MockData,
+        context::MockDbContext, mock_stmt::MockColType, mysql_type::MysqlType, pg_type::PgType,
+        MockData,
     },
 };
 
@@ -53,8 +54,8 @@ pub struct RdbTestRunner {
     pub dst_mssql_endpoint: Option<MssqlTestEndpoint>,
     pub meta_center_pool_mysql: Option<Pool<MySql>>,
     pub config: TaskConfig,
-    pub router: Option<RdbRouter>,
-    pub filter: RdbFilter,
+    pub router: Option<DtRouter>,
+    pub filter: DtFilter,
     pub unordered_compare: bool, // whether to compare rows in unordered way
     pub unordered_compare_threads: usize,
     pub mock_prepare_only: bool,
@@ -77,11 +78,7 @@ struct MockDataPrepare {
 }
 
 impl MockDataPrepare {
-    fn from_mock_data<
-        T: crate::test_runner::mock_data::mock_stmt::MockColType + DeserializeOwned,
-    >(
-        mock_data: MockData<T>,
-    ) -> Self {
+    fn from_mock_data<T: MockColType + DeserializeOwned>(mock_data: MockData<T>) -> Self {
         Self {
             src_prepare_stmts: mock_data.mock_src_prepare_stmts(),
             dst_prepare_stmts_for_data_task: mock_data.mock_dst_prepare_stmts_for_data_task(),
@@ -296,8 +293,8 @@ impl RdbTestRunner {
         }
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
-        let router = RdbRouter::from_config(&config.router, &dst_db_type).unwrap();
-        let filter = RdbFilter::from_config(&config.filter, &dst_db_type).unwrap();
+        let router = config.build_router().unwrap();
+        let filter = config.build_filter().unwrap();
         let meta_center_pool_mysql = match &config.meta_center {
             Some(MetaCenterConfig::MySqlDbEngine {
                 url,
@@ -974,12 +971,27 @@ impl RdbTestRunner {
         let dst_db_type = self.get_db_type(DST);
         // router: col_map
         let col_map = self.router.as_ref().and_then(|router| {
-            router.get_col_map_with_db(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2)
+            router
+                .column_map(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2)
+                .unwrap()
         });
-        // filter: ignore_cols
-        let ignore_cols =
-            self.filter
-                .get_ignore_cols_with_db(&src_db_tb.0, &src_db_tb.1, &src_db_tb.2);
+        let columns: HashSet<String> = src_data
+            .iter()
+            .flat_map(|row| {
+                row.before
+                    .iter()
+                    .chain(row.after.iter())
+                    .flat_map(|values| values.keys().cloned())
+            })
+            .collect();
+        let id = if src_db_type == DbType::Mssql {
+            rid!(src_db_tb.0, src_db_tb.1, src_db_tb.2)
+        } else {
+            rid!(src_db_tb.1, src_db_tb.2)
+        };
+        let ignore_cols = self.filter.excluded_columns(&id, &columns).unwrap();
+        let col_map = col_map.as_ref();
+        let ignore_cols = Some(&ignore_cols);
 
         if self.unordered_compare {
             // Unordered comparison: use multiset matching for tables without primary key
@@ -1390,8 +1402,8 @@ impl RdbTestRunner {
         let mut dst_db_tbs = vec![];
         for (db, schema, tb) in src_db_tbs.iter() {
             let (dst_db, dst_schema, dst_tb) = match &self.router {
-                Some(router) => router.get_tb_map_with_db(db, schema, tb),
-                None => (db.as_str(), schema.as_str(), tb.as_str()),
+                Some(router) => router.route_table(db, schema, tb)?,
+                None => (db.clone(), schema.clone(), tb.clone()),
             };
             dst_db_tbs.push((dst_db.into(), dst_schema.into(), dst_tb.into()));
         }
@@ -1507,7 +1519,12 @@ impl RdbTestRunner {
 
     pub fn get_where_sql(&self, db: &str, schema: &str, tb: &str, condition: &str) -> String {
         let mut res: String = String::new();
-        if let Some(where_condition) = self.filter.get_where_condition_with_db(db, schema, tb) {
+        let id = if self.get_db_type(SRC) == DbType::Mssql {
+            rid!(db, schema, tb)
+        } else {
+            rid!(schema, tb)
+        };
+        if let Some(where_condition) = self.filter.where_condition(&id).unwrap() {
             res = format!("WHERE {}", where_condition);
         }
 

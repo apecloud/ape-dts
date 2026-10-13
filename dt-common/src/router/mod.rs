@@ -1,4 +1,5 @@
 mod config;
+mod data_router;
 mod dt_router;
 mod legacy;
 mod resource_router;

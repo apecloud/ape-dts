@@ -1,6 +1,7 @@
 use anyhow::{ensure, Context, Result};
+use serde::de::DeserializeOwned;
 
-use super::{ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID};
+use super::{resource_depth, ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID};
 use crate::{
     config::{config_enums::DbType, filter_config::RULES},
     utils::sql_util::{CharEscapePair, InnerEscapeMode, SqlUtil},
@@ -11,7 +12,7 @@ pub fn section_kind(name: &str, db_type: &DbType, empty: bool) -> Result<Option<
     let kind = name
         .parse::<ResourceKind>()
         .with_context(|| format!("unknown resource section [{section}]"))?;
-    if super::resource_depth(db_type, kind).is_none() {
+    if resource_depth(db_type, kind).is_none() {
         ensure!(empty, "[{section}] is not supported by {db_type}");
         return Ok(None);
     }
@@ -145,7 +146,7 @@ pub fn literal(token: &str, db_type: &DbType) -> Result<Option<String>> {
 }
 
 pub fn exact_path(tokens: Vec<String>, db_type: &DbType) -> Result<RID> {
-    RID::new(
+    Ok(RID::new(
         tokens
             .iter()
             .map(|token| {
@@ -159,10 +160,10 @@ pub fn exact_path(tokens: Vec<String>, db_type: &DbType) -> Result<RID> {
                 Ok(token.clone())
             })
             .collect::<Result<Vec<_>>>()?,
-    )
+    ))
 }
 
-pub fn json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T> {
+pub fn json<T: DeserializeOwned>(value: &str) -> Result<T> {
     serde_json::from_str(value.trim().strip_prefix("json:").unwrap_or(value.trim()))
         .context("invalid resource configuration JSON")
 }

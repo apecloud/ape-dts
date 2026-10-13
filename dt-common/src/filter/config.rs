@@ -26,7 +26,7 @@ fn patterns(value: &str, db_type: &DbType) -> Result<HashSet<RID>> {
             for token in &path {
                 config::literal(token, db_type)?;
             }
-            RID::new(path)
+            Ok(RID::new(path))
         })
         .collect()
 }
@@ -299,7 +299,11 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
 
     #[test]
     fn raw_resource_names_are_resolved_for_the_consuming_engine() {
-        for (db_type, section) in [(DbType::Mysql, "db"), (DbType::Pg, "schema")] {
+        for (db_type, section) in [
+            (DbType::Mysql, "db"),
+            (DbType::Mysql, "database"),
+            (DbType::Pg, "schema"),
+        ] {
             let config =
                 FilterConfig::from_ini(&ini(&format!("[rules.{section}]\ndo=inventory"))).unwrap();
             let filter = DtFilter::from_config(&config, db_type).unwrap();
@@ -308,7 +312,7 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
         }
         for (db_type, text) in [
             (DbType::Mysql, "[rules.unknown]\ndo=grant"),
-            (DbType::Mysql, "[rules.database]\ndo=db"),
+            (DbType::Pg, "[rules.database]\ndo=db"),
             (DbType::Mysql, "[rules.schema]\ndo=schema"),
             (DbType::Kafka, "[rules.db]\ndo=db"),
             (DbType::Pg, "[rules.db]\ndo=db"),
@@ -342,7 +346,7 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
             ("other_test_db_1", "one_pk_no_uk_2", true),
             ("unselected", "t1", true),
         ] {
-            let id = RID::new([db, table]).unwrap();
+            let id = RID::new([db, table]);
             for f in [&old, &new] {
                 assert_eq!(f.filter(&id).unwrap(), excluded, "{id}");
                 assert_eq!(f.filter_event(&id, &RowType::Insert).unwrap(), excluded);
@@ -393,7 +397,7 @@ ignore=SET"#))
                 .iter()
                 .take_while(|&&kind| kind != ResourceKind::Column)
                 .count();
-            let id = RID::new(vec!["object"; depth]).unwrap();
+            let id = RID::new(vec!["object"; depth]);
             let mut f = DtFilter::from_config(&config, engine).unwrap();
             f.add_do(&id).unwrap();
             assert!(!f.filter_event(&id, &RowType::Insert).unwrap());
@@ -499,7 +503,7 @@ ignore=update"#,
                     .map(|(id, _): &(RID, &str)| id.segments().to_vec())
                     .unwrap_or_default();
                 segments.push(name.into());
-                let id = RID::new(segments).unwrap();
+                let id = RID::new(segments);
                 ini.set(
                     &format!("rules.{name}"),
                     "where_conditions",
@@ -513,10 +517,7 @@ ignore=update"#,
                 assert_eq!(filter.where_condition(&id).unwrap(), Some(condition));
                 let mut sibling = id.segments().to_vec();
                 *sibling.last_mut().unwrap() = "other".into();
-                assert_eq!(
-                    filter.where_condition(&RID::new(sibling).unwrap()).unwrap(),
-                    None
-                );
+                assert_eq!(filter.where_condition(&RID::new(sibling)).unwrap(), None);
             }
         }
     }
@@ -601,9 +602,9 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             .unwrap();
             for (table, expected) in [("orders", expected), ("events", "id > 1"), ("empty", "")] {
                 let id = if engine == DbType::Mssql {
-                    RID::new(["inventory", "dbo", table]).unwrap()
+                    RID::new(["inventory", "dbo", table])
                 } else {
-                    RID::new(["inventory", table]).unwrap()
+                    RID::new(["inventory", table])
                 };
                 assert_eq!(f.where_condition(&id).unwrap(), Some(expected));
             }
