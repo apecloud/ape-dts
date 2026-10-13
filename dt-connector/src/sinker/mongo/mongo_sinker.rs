@@ -2,6 +2,7 @@ use std::{cmp, collections::HashMap};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
     log_error, log_warn,
     meta::{
@@ -26,14 +27,13 @@ use tokio::time::Instant;
 use crate::{
     call_batch_fn,
     common::mongo::{changestream_parser, oplog_parser},
-    rdb_router::RdbRouter,
     sinker::{base_sinker::BaseSinker, checkable_sinker::CheckableSink},
     Sinker,
 };
 
 #[derive(Clone)]
 pub struct MongoSinker {
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub batch_size: usize,
     pub mongo_client: Client,
     pub base_sinker: BaseSinker,
@@ -621,7 +621,9 @@ impl MongoSinker {
     }
 
     async fn serial_sink(&mut self, data: &[RowData]) -> Result<()> {
-        let task_id = self.base_sinker.source_task_id_for_rows(data, &self.router);
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(data, &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = self.base_sinker.monitor_interval_secs();
@@ -1131,7 +1133,7 @@ impl MongoSinker {
     ) -> Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
@@ -1191,7 +1193,7 @@ impl MongoSinker {
     ) -> Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 

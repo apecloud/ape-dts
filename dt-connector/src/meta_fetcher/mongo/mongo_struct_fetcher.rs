@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
+use dt_common::rid;
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt},
+    filter::DtFilter,
     meta::{
         mongo::mongo_shard::list_shard_collections,
         struct_meta::statement::{
@@ -11,7 +13,6 @@ use dt_common::{
             mongo_shard_key_statement::MongoShardKeyStatement,
         },
     },
-    rdb_filter::RdbFilter,
 };
 use mongodb::{
     bson::{doc, Bson, Document},
@@ -23,7 +24,7 @@ const STRUCT_CURSOR_BATCH_SIZE: i32 = 100;
 pub struct MongoStructFetcher {
     pub mongo_client: Client,
     pub dbs: HashSet<String>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
 }
 
 impl MongoStructFetcher {
@@ -34,7 +35,7 @@ impl MongoStructFetcher {
             let Some((db, collection)) = shard_collection.ns.split_once('.') else {
                 continue;
             };
-            if !self.dbs.contains(db) || self.filter.filter_tb(db, collection) {
+            if !self.dbs.contains(db) || self.filter.filter(&rid!(db, collection))? {
                 continue;
             }
             statements.push(MongoShardKeyStatement { shard_collection });
@@ -77,7 +78,7 @@ impl MongoStructFetcher {
                     collection_doc
                 )
             })?;
-            if Self::is_system_collection(name) || self.filter.filter_tb(db, name) {
+            if Self::is_system_collection(name) || self.filter.filter(&rid!(db, name))? {
                 continue;
             }
 

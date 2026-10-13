@@ -8,9 +8,9 @@ use dt_common::{
         connection_auth_config::ConnectionAuthConfig,
     },
     error::DtError,
+    filter::DtFilter,
     log_info, log_warn,
     meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
-    rdb_filter::RdbFilter,
     utils::redis_util::RedisUtil,
 };
 use tokio::{sync::Mutex, task::JoinSet};
@@ -38,7 +38,7 @@ pub struct RedisClusterPsyncExtractor {
     pub heartbeat_interval_secs: u64,
     pub heartbeat_key: String,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub extract_type: ExtractType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }

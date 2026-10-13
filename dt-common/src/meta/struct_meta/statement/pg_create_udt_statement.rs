@@ -1,7 +1,7 @@
+use crate::filter::DtFilter;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::structure_type::StructureType;
 use crate::meta::struct_meta::structure::user_defined::PgUdt;
-use crate::rdb_filter::RdbFilter;
 
 #[derive(Debug, Clone)]
 pub struct PgCreateUdtStatement {
@@ -9,7 +9,7 @@ pub struct PgCreateUdtStatement {
 }
 
 impl PgCreateUdtStatement {
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if filter.filter_structure(&StructureType::Udt) {
             return Ok(sqls);

@@ -297,7 +297,7 @@ impl RdbStructTestRunner {
             .iter()
             .map(|(db, schema, tb)| match &self.base.router {
                 Some(router) => {
-                    let (dst_db, dst_schema, dst_tb) = router.get_tb_map_with_db(db, schema, tb);
+                    let (dst_db, dst_schema, dst_tb) = router.route_table(db, schema, tb).unwrap();
                     (
                         dst_db.to_string(),
                         dst_schema.to_string(),

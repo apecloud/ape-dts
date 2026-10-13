@@ -6,7 +6,6 @@ pub mod log_filter;
 pub mod logger;
 pub mod meta;
 pub mod monitor;
-pub mod rdb_filter;
 pub mod resource;
 pub mod router;
 pub mod runtime_trace;

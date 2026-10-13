@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{ensure, Result};
 
 use super::DtFilter;
-use crate::resource::{resource_depth, resource_kind, validate_rid, ResourceKind, ToRid, RID};
+use crate::resource::{resource_depth, resource_kind, validate_rid, ResourceKind, RID};
 
 #[derive(Debug, Clone)]
 pub enum ExpressionFilter {
@@ -15,15 +15,14 @@ pub enum ExpressionFilter {
 
 impl DtFilter {
     /// Exact lookup; parent conditions are not inherited.
-    pub fn where_condition<I: ToRid + ?Sized>(&self, resource: &I) -> Result<Option<&str>> {
-        let id = resource.to_rid(&self.db_type)?;
-        let kind = resource_kind(&self.db_type, &id)?;
+    pub fn where_condition(&self, id: &RID) -> Result<Option<&str>> {
+        let kind = resource_kind(&self.db_type, id)?;
         Ok(self
             .expression_filters
             .get(&kind)
             .and_then(|filter| match filter {
                 ExpressionFilter::WhereConditions { conditions } => {
-                    conditions.get(&id).map(String::as_str)
+                    conditions.get(id).map(String::as_str)
                 }
             }))
     }
@@ -123,7 +122,7 @@ mod tests {
             let mut filter = DtFilter::new(engine.clone());
             let mut rules = Vec::new();
             for name in names {
-                let id = parent.child(name).unwrap();
+                let id = parent.child(name);
                 filter.set_where_condition(id.clone(), name.into()).unwrap();
                 rules.push(format!(
                     "{}:{}",
@@ -146,16 +145,10 @@ mod tests {
                 DtFilter::from_config(&FilterConfig::from_ini(&ini).unwrap(), engine).unwrap();
             for f in [&filter, &configured] {
                 for name in names {
-                    assert_eq!(
-                        f.where_condition(&parent.child(name).unwrap()).unwrap(),
-                        Some(name)
-                    );
+                    assert_eq!(f.where_condition(&parent.child(name)).unwrap(), Some(name));
                 }
                 for name in ["orders", "order12", "event", "event1", "unselected"] {
-                    assert_eq!(
-                        f.where_condition(&parent.child(name).unwrap()).unwrap(),
-                        None
-                    );
+                    assert_eq!(f.where_condition(&parent.child(name)).unwrap(), None);
                 }
                 assert_eq!(f.where_condition(&parent).unwrap(), None);
             }

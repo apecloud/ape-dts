@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
+use dt_common::router::DtRouter;
 use dt_common::{
     config::{
         config_enums::{CheckMode, DbType, ExtractType, SinkType, TaskKind},
@@ -17,7 +18,10 @@ use dt_common::{
     meta::{
         avro::avro_converter::AvroConverter,
         dt_queue::DtQueue,
-        mssql::{mssql_meta_manager::MssqlMetaManager, MSSQL_DEFAULT_SCHEMA},
+        mssql::{
+            mssql_connection_pool::MssqlConnectionPool, mssql_meta_manager::MssqlMetaManager,
+            MSSQL_DEFAULT_SCHEMA,
+        },
         mysql::mysql_meta_manager::MysqlMetaManager,
         pg::pg_meta_manager::PgMetaManager,
         rdb_meta_manager::RdbMetaManager,
@@ -25,7 +29,6 @@ use dt_common::{
         syncer::Syncer,
     },
     monitor::task_monitor_handle::TaskMonitorHandle,
-    rdb_filter::RdbFilter,
     time_filter::TimeFilter,
     utils::{redis_util::RedisUtil, sql_util::SqlUtil},
 };
@@ -62,7 +65,6 @@ use dt_connector::{
         },
         resumer::recovery::Recovery,
     },
-    rdb_router::RdbRouter,
     Extractor,
 };
 use serde::{Deserialize, Serialize};
@@ -114,7 +116,7 @@ impl ExtractorUtil {
         monitor: TaskMonitorHandle,
         monitor_task_id: String,
         data_marker: Option<DataMarker>,
-        router: Option<RdbRouter>,
+        router: Option<DtRouter>,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     ) -> anyhow::Result<Box<dyn Extractor + Send>> {
         let base_extractor = BaseExtractor {
@@ -128,7 +130,7 @@ impl ExtractorUtil {
             time_filter: TimeFilter::default(),
         };
 
-        let filter = RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?;
+        let filter = config.build_filter()?;
 
         let extractor: Box<dyn Extractor + Send> = match extractor_config.to_owned() {
             ExtractorConfig::MysqlSnapshot {
@@ -811,15 +813,14 @@ impl ExtractorUtil {
                 Some(RdbMetaManager::from_pg(meta_manager))
             }
             DbType::Mssql => {
-                let connection_pool =
-                    dt_common::meta::mssql::mssql_connection_pool::MssqlConnectionPool::from_config(
-                        extractor_url,
-                        connection_auth,
-                        task_config.extractor_basic.app_name.as_deref(),
-                        1,
-                        task_config.extractor_basic.connection_timeout_secs,
-                    )
-                    .await?;
+                let connection_pool = MssqlConnectionPool::from_config(
+                    extractor_url,
+                    connection_auth,
+                    task_config.extractor_basic.app_name.as_deref(),
+                    1,
+                    task_config.extractor_basic.connection_timeout_secs,
+                )
+                .await?;
                 let meta_manager = MssqlMetaManager::new(connection_pool).await?;
                 Some(RdbMetaManager::from_mssql(meta_manager))
             }

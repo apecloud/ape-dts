@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use strum::{AsRefStr, EnumString};
+use strum::{AsRefStr, EnumIter, EnumString};
 
 #[derive(Debug, Clone, Default)]
 pub struct CommonFilter {
@@ -20,7 +20,7 @@ impl CommonFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, EnumIter, AsRefStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum CommonFilterKind {
     Event,
@@ -31,14 +31,6 @@ pub enum CommonFilterKind {
 }
 
 impl CommonFilterKind {
-    pub const ALL: [Self; 5] = [
-        Self::Event,
-        Self::Ddl,
-        Self::Dcl,
-        Self::Structure,
-        Self::Cmd,
-    ];
-
     pub fn default_do(self) -> &'static str {
         match self {
             Self::Event | Self::Structure | Self::Cmd => "*",

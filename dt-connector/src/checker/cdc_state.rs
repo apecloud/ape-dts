@@ -250,7 +250,7 @@ impl<C: Checker> DataChecker<C> {
                     self.name, row.row_key
                 )
             })?;
-            let entry = self.build_restored_entry(key.clone());
+            let entry = self.build_restored_entry(key.clone())?;
             let store_key = CheckerStoreKey::new(&key.db, &key.schema, &key.tb, row.row_key);
             self.store.insert(store_key, entry);
         }
@@ -259,10 +259,10 @@ impl<C: Checker> DataChecker<C> {
         Ok(())
     }
 
-    fn build_restored_entry(&self, key: RecheckKey) -> CheckEntry {
+    fn build_restored_entry(&self, key: RecheckKey) -> anyhow::Result<CheckEntry> {
         let lookup_row = key.to_lookup_row();
         let source_row = if let Some(router) = &self.ctx.router {
-            router.reverse_route_row(lookup_row.clone())
+            router.reverse_route_row(lookup_row.clone())?
         } else {
             lookup_row.clone()
         };
@@ -281,7 +281,7 @@ impl<C: Checker> DataChecker<C> {
         let schema_changed =
             db_changed || source_row.schema != lookup_row.schema || source_row.tb != lookup_row.tb;
 
-        CheckEntry {
+        Ok(CheckEntry {
             key,
             log: CheckLog {
                 db: source_row.db,
@@ -297,7 +297,7 @@ impl<C: Checker> DataChecker<C> {
             },
             revise_sql: None,
             diff_cols: Some(Vec::new()),
-        }
+        })
     }
 
     async fn refetch_source_rows(&self, keys: &[RecheckKey]) -> anyhow::Result<Vec<RowData>> {
@@ -313,10 +313,10 @@ impl<C: Checker> DataChecker<C> {
                 if let Some(router) = &self.ctx.router {
                     router.reverse_route_row(row)
                 } else {
-                    row
+                    Ok(row)
                 }
             })
-            .collect::<Vec<_>>();
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let mut grouped = HashMap::<(&str, &str, &str), Vec<&RowData>>::new();
         for row in &lookup_rows {
             grouped
@@ -341,9 +341,10 @@ impl<C: Checker> DataChecker<C> {
                         if let Some(router) = &self.ctx.router {
                             router.route_row(row)
                         } else {
-                            row
+                            Ok(row)
                         }
-                    }),
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?,
             );
         }
         Ok(rows)
@@ -440,7 +441,7 @@ impl<C: Checker> DataChecker<C> {
                                     tb_meta.as_ref(),
                                 )
                                 .await?;
-                                self.store_entry(lookup_row, row_key, entry).await;
+                                self.store_entry(lookup_row, row_key, entry).await?;
                             } else {
                                 self.remove_store_entry(lookup_row, row_key)?;
                             }
@@ -454,11 +455,11 @@ impl<C: Checker> DataChecker<C> {
                                 tb_meta.as_ref(),
                             )
                             .await?;
-                            self.store_entry(lookup_row, row_key, entry).await;
+                            self.store_entry(lookup_row, row_key, entry).await?;
                         }
                         (None, Some(_)) => {
-                            let entry = self.build_restored_entry(key.clone());
-                            self.store_entry(lookup_row, row_key, entry).await;
+                            let entry = self.build_restored_entry(key.clone())?;
+                            self.store_entry(lookup_row, row_key, entry).await?;
                         }
                         (None, None) => {
                             self.remove_store_entry(lookup_row, row_key)?;

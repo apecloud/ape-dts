@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use dt_common::config::{config_enums::DbType, filter_config::FilterConfig};
 use dt_common::error::DtError;
+use dt_common::rid;
 use mongodb::bson::Bson;
 use regex::Regex;
 
@@ -132,7 +133,7 @@ impl Prechecker for MongoPrechecker {
 
         let invalid_dbs = vec!["admin", "local"];
         for db in invalid_dbs {
-            if !self.fetcher.filter.filter_schema(db) {
+            if !self.fetcher.filter.filter(&rid!(db))? {
                 check_error = Some(
                     DtError::UnsupportedTableStructure(
                         "MongoDB databases admin and local are not supported migration objects"

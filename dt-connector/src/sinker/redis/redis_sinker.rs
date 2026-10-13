@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
     error::{DtError, DtOptionExt},
     log_debug,
@@ -24,10 +25,7 @@ use redis::{Connection, ConnectionLike, Value};
 use tokio::{sync::RwLock, time::Instant};
 
 use super::entry_rewriter::EntryRewriter;
-use crate::{
-    call_batch_fn, data_marker::DataMarker, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
-    Sinker,
-};
+use crate::{call_batch_fn, data_marker::DataMarker, sinker::base_sinker::BaseSinker, Sinker};
 
 pub struct RedisSinker {
     pub cluster_node: Option<ClusterNode>,
@@ -40,7 +38,7 @@ pub struct RedisSinker {
     pub base_sinker: BaseSinker,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
     pub key_parser: KeyParser,
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
 }
 
 #[async_trait]
@@ -124,7 +122,9 @@ impl RedisSinker {
         let mut cmds = Vec::new();
         if let DtData::Redis { entry } = dt_data {
             let dst_db_id = if let Some(router) = &self.router {
-                router.route_redis_db_id(entry.db_id)?
+                router
+                    .route_namespace(&entry.db_id.to_string())?
+                    .parse::<i64>()?
             } else {
                 entry.db_id
             };

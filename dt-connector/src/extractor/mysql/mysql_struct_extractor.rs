@@ -3,12 +3,12 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use dt_common::{
     config::task_config::DEFAULT_DB_BATCH_SIZE,
+    filter::DtFilter,
     log_info, log_warn,
     meta::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         struct_meta::{statement::struct_statement::StructStatement, struct_data::StructData},
     },
-    rdb_filter::RdbFilter,
 };
 use sqlx::{MySql, Pool};
 
@@ -23,7 +23,7 @@ pub struct MysqlStructExtractor {
     pub extract_state: ExtractState,
     pub conn_pool: Pool<MySql>,
     pub dbs: Vec<String>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub db_batch_size: usize,
 }
 

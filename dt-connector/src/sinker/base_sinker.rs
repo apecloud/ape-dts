@@ -1,10 +1,9 @@
+use dt_common::router::DtRouter;
 use dt_common::{
     meta::row_data::RowData,
     monitor::{counter_type::CounterType, task_monitor_handle::TaskMonitorHandle},
     utils::limit_queue::LimitedQueue,
 };
-
-use crate::rdb_router::RdbRouter;
 
 #[derive(Clone, Default)]
 pub struct BaseSinker {
@@ -36,20 +35,28 @@ impl BaseSinker {
         self.monitor.task_id_for_rows(rows)
     }
 
-    pub fn source_task_id_for_rows(&self, rows: &[RowData], router: &Option<RdbRouter>) -> String {
+    pub fn source_task_id_for_rows(
+        &self,
+        rows: &[RowData],
+        router: &Option<DtRouter>,
+    ) -> anyhow::Result<String> {
         if !self.monitor.is_snapshot_task() {
-            return self.monitor.default_task_id().to_string();
+            return Ok(self.monitor.default_task_id().to_string());
         }
 
         let Some(first) = rows.first() else {
-            return self.monitor.default_task_id().to_string();
+            return Ok(self.monitor.default_task_id().to_string());
         };
 
-        let (db, schema, tb) = match router {
-            Some(router) => router.reverse_get_tb_map_with_db(&first.db, &first.schema, &first.tb),
-            None => (first.db.as_str(), first.schema.as_str(), first.tb.as_str()),
+        let (ref db, ref schema, ref tb) = match router {
+            Some(router) => router.reverse_table(&first.db, &first.schema, &first.tb)?,
+            None => (
+                first.db.to_string(),
+                first.schema.to_string(),
+                first.tb.to_string(),
+            ),
         };
-        self.task_id_for_db_schema_tb(db, schema, tb)
+        Ok(self.task_id_for_db_schema_tb(db, schema, tb))
     }
 
     pub fn ensure_monitor_for(&self, task_id: &str) {

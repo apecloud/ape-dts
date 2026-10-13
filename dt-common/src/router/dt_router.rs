@@ -5,7 +5,7 @@ use anyhow::Result;
 use super::ResourceRouter;
 use crate::{
     config::config_enums::DbType,
-    resource::{FromRid, ResourceKind, ToRid, RID},
+    resource::{ResourceKind, RID},
 };
 
 #[derive(Debug, Clone)]
@@ -64,6 +64,27 @@ impl DtRouter {
     pub fn src_db_type(&self) -> &DbType {
         &self.src_db_type
     }
+    pub fn resource_routers(&self) -> &HashMap<ResourceKind, ResourceRouter> {
+        &self.resource_routers
+    }
+
+    pub fn has_rules(&self) -> bool {
+        self.resource_routers
+            .values()
+            .any(|router| !router.mappings().is_empty() || router.has_to_map())
+    }
+
+    /// Known routed payloads prefer explicit inverse mappings over unchanged names.
+    pub fn reverse_payload(&self, target: &RID) -> Result<RID> {
+        ResourceRouter::reverse_rid(
+            &self.resource_routers,
+            &self.src_db_type,
+            &self.dst_db_type,
+            target,
+            None,
+            true,
+        )
+    }
     pub fn dst_db_type(&self) -> &DbType {
         &self.dst_db_type
     }
@@ -74,29 +95,23 @@ impl DtRouter {
     }
 
     /// Reverse the sinker's routed RID, then match dispatch rules in the source namespace.
-    pub fn to<I: ToRid + ?Sized>(&self, resource: &I) -> Result<RID> {
-        let id = resource.to_rid(self.route_db_type())?;
+    pub fn to(&self, id: &RID) -> Result<RID> {
         ResourceRouter::to(
             &self.resource_routers,
             &self.src_db_type,
             &self.dst_db_type,
-            &id,
+            id,
         )
     }
 
-    pub fn to_as<I: ToRid + ?Sized, O: FromRid>(&self, resource: &I) -> Result<O> {
-        O::from_rid(&self.to(resource)?, &self.dst_db_type)
+    pub fn to_as<O>(&self, resource: &RID) -> Result<O>
+    where
+        O: for<'a> From<&'a RID>,
+    {
+        Ok(O::from(&self.to(resource)?))
     }
 
-    pub fn route<I: ToRid + ?Sized>(&self, source: &I) -> Result<RID> {
-        self.route_rid(&source.to_rid(&self.src_db_type)?)
-    }
-
-    pub fn route_as<I: ToRid + ?Sized, O: FromRid>(&self, source: &I) -> Result<O> {
-        O::from_rid(&self.route(source)?, self.route_db_type())
-    }
-
-    pub fn route_rid(&self, source: &RID) -> Result<RID> {
+    pub fn route(&self, source: &RID) -> Result<RID> {
         ResourceRouter::forward(
             &self.resource_routers,
             &self.src_db_type,
@@ -105,31 +120,27 @@ impl DtRouter {
         )
     }
 
+    pub fn route_as<O>(&self, source: &RID) -> Result<O>
+    where
+        O: for<'a> From<&'a RID>,
+    {
+        Ok(O::from(&self.route(source)?))
+    }
+
     /// Unchanged names are also inverse candidates; collisions return an error.
-    pub fn reverse_route<I: ToRid + ?Sized>(&self, target: &I) -> Result<RID> {
-        self.reverse_rid(&target.to_rid(self.route_db_type())?, None)
+    pub fn reverse_route(&self, target: &RID) -> Result<RID> {
+        self.reverse_rid(target, None)
     }
 
-    pub fn reverse_route_in<I: ToRid + ?Sized>(
-        &self,
-        target: &I,
-        selected_sources: &HashSet<RID>,
-    ) -> Result<RID> {
-        self.reverse_rid(
-            &target.to_rid(self.route_db_type())?,
-            Some(selected_sources),
-        )
+    pub fn reverse_route_in(&self, target: &RID, selected_sources: &HashSet<RID>) -> Result<RID> {
+        self.reverse_rid(target, Some(selected_sources))
     }
 
-    pub fn reverse_route_as<I: ToRid + ?Sized, O: FromRid>(
-        &self,
-        target: &I,
-        selected_sources: &HashSet<RID>,
-    ) -> Result<O> {
-        O::from_rid(
-            &self.reverse_route_in(target, selected_sources)?,
-            &self.src_db_type,
-        )
+    pub fn reverse_route_as<O>(&self, target: &RID, selected_sources: &HashSet<RID>) -> Result<O>
+    where
+        O: for<'a> From<&'a RID>,
+    {
+        Ok(O::from(&self.reverse_route_in(target, selected_sources)?))
     }
 
     fn reverse_rid(&self, target: &RID, selected_sources: Option<&HashSet<RID>>) -> Result<RID> {
@@ -155,31 +166,20 @@ impl DtRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{resource::validate_rid, rid};
+    use crate::rid;
 
     struct EngineResource {
         id: RID,
-        db_type: DbType,
     }
-    impl ToRid for EngineResource {
-        fn to_rid(&self, db_type: &DbType) -> Result<RID> {
-            assert_eq!(&self.db_type, db_type);
-            validate_rid(db_type, ResourceKind::Table, &self.id)?;
-            Ok(self.id.clone())
-        }
-    }
-    impl FromRid for EngineResource {
-        fn from_rid(id: &RID, db_type: &DbType) -> Result<Self> {
-            validate_rid(db_type, ResourceKind::Table, id)?;
-            Ok(Self {
-                id: id.clone(),
-                db_type: db_type.clone(),
-            })
+
+    impl From<&RID> for EngineResource {
+        fn from(id: &RID) -> Self {
+            Self { id: id.clone() }
         }
     }
 
     #[test]
-    fn conversion_traits_receive_payload_and_destination_engine_contexts() {
+    fn borrowed_rids_route_to_engine_resources() {
         for (src, dst, source, payload, destination) in [
             (
                 DbType::Pg,
@@ -196,7 +196,6 @@ mod tests {
                 Some(rid!("public", "queue")),
             ),
         ] {
-            let payload_engine = if destination.is_some() { &src } else { &dst };
             let maps = destination
                 .as_ref()
                 .map(|id| {
@@ -214,21 +213,16 @@ mod tests {
                 maps,
             )
             .unwrap();
-            let source = EngineResource {
-                id: source,
-                db_type: src.clone(),
-            };
             let routed: EngineResource = router.route_as(&source).unwrap();
             assert_eq!(routed.id, payload);
-            assert_eq!(&routed.db_type, payload_engine);
             let restored: EngineResource = router
-                .reverse_route_as(&routed, &HashSet::from([source.id.clone()]))
+                .reverse_route_as(&routed.id, &HashSet::from([source.clone()]))
                 .unwrap();
-            assert_eq!(restored.id, source.id);
-            assert_eq!(restored.db_type, src);
-            let target: EngineResource = router.to_as(&routed).unwrap();
+            assert_eq!(restored.id, source);
+            let rerouted: EngineResource = router.route_as(&restored.id).unwrap();
+            assert_eq!(rerouted.id, payload);
+            let target: EngineResource = router.to_as(&routed.id).unwrap();
             assert_eq!(target.id, destination.unwrap_or(payload));
-            assert_eq!(target.db_type, dst);
         }
     }
 
@@ -365,9 +359,9 @@ mod tests {
             (DbType::Pg, DbType::Mssql, rid!("a"), rid!("db", "x")),
             (DbType::Mssql, DbType::Pg, rid!("db", "a"), rid!("x")),
         ] {
-            let inherited = src_namespace.child("t").unwrap();
-            let explicit = src_namespace.child("other").unwrap();
-            let target = dst_namespace.child("t").unwrap();
+            let inherited = src_namespace.child("t");
+            let explicit = src_namespace.child("other");
+            let target = dst_namespace.child("t");
             let router = DtRouter::new(
                 src_type,
                 dst_type,
@@ -433,7 +427,7 @@ mod tests {
         )
         .is_err());
         let router = DtRouter::new(DbType::Mysql, DbType::Mysql, []).unwrap();
-        assert!(router.route_rid(&invalid).is_err());
+        assert!(router.route(&invalid).is_err());
         assert!(router.reverse_route(&invalid).is_err());
         assert!(router
             .reverse_route_in(&valid, &HashSet::from([invalid]))

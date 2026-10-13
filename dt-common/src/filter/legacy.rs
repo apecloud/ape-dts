@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
+use strum::IntoEnumIterator;
 
 use super::{CommonFilter, CommonFilterKind, DtFilter, ExpressionFilter, ResourceFilter};
 use crate::{
@@ -20,7 +21,7 @@ impl DtFilter {
     pub fn from_legacy_config(options: &LegacyFilterConfig, db_type: DbType) -> Result<Self> {
         let mut filter = Self::new(db_type.clone());
         resource_filters(options, &db_type, &mut filter)?;
-        for kind in CommonFilterKind::ALL {
+        for kind in CommonFilterKind::iter() {
             if let Some(common) = common_filter(kind, options, &db_type)? {
                 filter.set_common_filter(kind, common);
             }
@@ -88,7 +89,7 @@ fn common_values(value: &str, db_type: &DbType) -> Result<HashSet<String>> {
 }
 
 /// Escape exact legacy JSON names for use as resource patterns.
-fn literal_pattern(id: RID) -> Result<RID> {
+fn literal_pattern(id: RID) -> RID {
     RID::new(
         id.segments()
             .iter()
@@ -125,7 +126,7 @@ fn patterns(value: &str, db_type: &DbType, table: bool) -> Result<HashSet<RID>> 
             for token in &path {
                 config::quoted_literal(token, db_type)?;
             }
-            RID::new(path)
+            Ok(RID::new(path))
         })
         .collect()
 }
@@ -210,7 +211,7 @@ fn resource_filters(
         let mut columns = HashSet::new();
         for (table, names) in tables {
             for name in names {
-                columns.insert(literal_pattern(table.child(name)?)?);
+                columns.insert(literal_pattern(table.child(name)));
             }
         }
         filter.set_resource_filter(
@@ -311,13 +312,13 @@ mod tests {
                 unreachable!()
             };
             let mut f = DtFilter::from_legacy_config(options, DbType::Mysql).unwrap();
-            let table = RID::new([name, name]).unwrap();
+            let table = RID::new([name, name]);
             assert_eq!(f.where_condition(&table).unwrap(), Some(condition));
             f.set_where_condition(table.clone(), "discarded".into())
                 .unwrap();
             assert_eq!(f.where_condition(&table).unwrap(), Some(condition));
-            assert!(f.filter(&table.child(name).unwrap()).unwrap());
-            assert!(!f.filter(&table.child("other").unwrap()).unwrap());
+            assert!(f.filter(&table.child(name)).unwrap());
+            assert!(!f.filter(&table.child("other")).unwrap());
             assert_eq!(f.where_condition(&rid!("other", "other")).unwrap(), None);
             assert!(f.filter(&rid!("excluded")).unwrap());
         }
@@ -358,9 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn common_filters_match_rdb_filter_selection_and_command_semantics() {
-        use crate::rdb_filter::RdbFilter;
-
+    fn common_filters_preserve_legacy_selection_and_command_semantics() {
         for db_type in [DbType::Mysql, DbType::Pg, DbType::Mssql, DbType::Redis] {
             for value in [
                 "",
@@ -376,7 +375,11 @@ mod tests {
                     "[filter]\ndo_dbs=*\ndo_events={value}\ndo_ddls={value}\ndo_dcls={value}\ndo_structures={value}\nignore_cmds=*,SET,r#GET|DEL#,r#GET{{1,2}}#,SET*,GET?,FT.SEARCH"
                 )))
                 .unwrap();
-                let mut old = RdbFilter::from_config(&config, &db_type).unwrap();
+                let all = value == "*";
+                let listed = matches!(
+                    value,
+                    "*,insert,create_table,grant,table" | "insert,create_table,grant,table"
+                );
                 let new = DtFilter::from_config(&config, db_type.clone()).unwrap();
                 let id = match db_type {
                     DbType::Mssql => rid!("db", "schema", "table"),
@@ -386,24 +389,27 @@ mod tests {
                 for event in [RowType::Insert, RowType::Update, RowType::Delete] {
                     assert_eq!(
                         new.filter_event(&id, &event).unwrap(),
-                        old.filter_event_with_db("db", "schema", "table", &event),
+                        !(all || value.is_empty() || listed && event == RowType::Insert),
                         "{db_type} {value} {event}"
                     );
                 }
                 for ddl in [DdlType::CreateTable, DdlType::DropTable] {
                     assert_eq!(
                         new.filter_ddl(&id, &ddl).unwrap(),
-                        old.filter_spec_ddl(&ddl),
+                        !(all || listed && ddl == DdlType::CreateTable),
                         "{db_type} {value} {ddl}"
                     );
                 }
                 for dcl in [DclType::Grant, DclType::Revoke] {
-                    assert_eq!(new.filter_dcl(&dcl), old.filter_dcl(&dcl));
+                    assert_eq!(
+                        new.filter_dcl(&dcl),
+                        !(all || listed && dcl == DclType::Grant)
+                    );
                 }
                 for structure in [StructureType::Table, StructureType::Index] {
                     assert_eq!(
                         new.filter_structure(&structure),
-                        old.filter_structure(&structure)
+                        !(all || value.is_empty() || listed && structure == StructureType::Table)
                     );
                 }
                 for command in [
@@ -425,7 +431,16 @@ mod tests {
                 ] {
                     assert_eq!(
                         new.filter_cmd(command),
-                        old.filter_cmd(command),
+                        matches!(
+                            command,
+                            "*" | "SET"
+                                | "r#GET|DEL#"
+                                | "r#GET{1,2}#"
+                                | "SET*"
+                                | "GET?"
+                                | "FT"
+                                | "SEARCH"
+                        ),
                         "{db_type} {value} {command}"
                     );
                 }
@@ -439,7 +454,6 @@ mod tests {
             ] {
                 let config =
                     FilterConfig::from_ini(&ini(&format!("[filter]\n{key}=r#[#"))).unwrap();
-                assert!(RdbFilter::from_config(&config, &db_type).is_err());
                 assert!(DtFilter::from_config(&config, db_type.clone()).is_err());
             }
         }
@@ -479,9 +493,7 @@ where_conditions=json:[{"db":"db*","tb":"r#.*#","condition":"id > 1"}]
 ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
         );
         for name in ["*", "r#.*#"] {
-            assert!(f
-                .filter(&RID::new(["db*", "r#.*#", name]).unwrap())
-                .unwrap());
+            assert!(f.filter(&RID::new(["db*", "r#.*#", name])).unwrap());
         }
         for id in [rid!("db*", "r#.*#", "id"), rid!("db1", "table", "*")] {
             assert!(!f.filter(&id).unwrap());
@@ -501,22 +513,13 @@ ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
 
     #[test]
     fn legacy_scope_matches_existing_filter_for_flattened_names_and_regexes() {
-        use crate::rdb_filter::RdbFilter;
         for db_type in [DbType::Mysql, DbType::Mssql] {
             let do_dbs = "db.name,store[0-9]+,r#inventory|market#";
-            let old = RdbFilter::from_config(
-                &FilterConfig::Legacy(LegacyFilterConfig {
-                    do_schemas: do_dbs.into(),
-                    ..Default::default()
-                }),
-                &db_type,
-            )
-            .unwrap();
             let new = load_filter(&ini(&format!("[filter]\ndo_dbs={do_dbs}")), db_type).unwrap();
             for name in ["db", "name", "db.name", "store12", "inventory", "other"] {
                 assert_eq!(
-                    new.filter(&RID::new([name]).unwrap()).unwrap(),
-                    old.filter_schema(name),
+                    new.filter(&RID::new([name])).unwrap(),
+                    matches!(name, "db.name" | "other"),
                     "{name}"
                 );
             }
