@@ -569,7 +569,7 @@ impl MysqlStructFetcher {
             return Ok(true);
         }
         if let Some(filter) = &mut self.filter {
-            return filter.filter(&rid!(db, tb));
+            return filter.filter(rid!(db, tb));
         }
         Ok(false)
     }

@@ -55,8 +55,7 @@ impl RdkafkaSinker {
             } else {
                 rid!(row_data.schema, row_data.tb)
             };
-            let topic_id = self.router.to(&id)?;
-            let topic = topic_id.segments()[0].clone();
+            let topic: String = self.router.to(id)?;
             let key = self.avro_converter.row_data_to_avro_key(row_data).await?;
             let payload = self.avro_converter.row_data_to_avro_value(row_data).await?;
 

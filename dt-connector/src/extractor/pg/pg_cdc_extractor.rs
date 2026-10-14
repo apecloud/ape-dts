@@ -311,7 +311,7 @@ impl PgCdcExtractor {
         // if the tb is filtered, we won't try to get the tb_meta since we may get privilege errors,
         // but we need to keep the oid —— tb_meta map which may be used for decoding events,
         // the built-in object used by datamarker, although it is not in filter config, still needs to get tb_meta.
-        if self.filter.filter(&rid!(schema, tb))?
+        if self.filter.filter(rid!(schema, tb))?
             && !self.extract_state.is_data_marker_info("", schema, tb)
         {
             let tb_meta = Self::mock_pg_tb_meta(schema, tb, event.rel_id() as i32);
@@ -564,7 +564,7 @@ impl PgCdcExtractor {
             let tb_meta = self.meta_manager.get_tb_meta_by_oid(*rel_id as i32)?;
             let schema = tb_meta.basic.schema;
             let tb = tb_meta.basic.tb;
-            if self.filter.filter(&rid!(schema, tb))? {
+            if self.filter.filter(rid!(schema, tb))? {
                 continue;
             }
 
@@ -595,7 +595,7 @@ impl PgCdcExtractor {
         tuple_data: &[TupleData],
     ) -> anyhow::Result<HashMap<String, ColValue>> {
         let ignore_cols = Some(self.filter.excluded_columns(
-            &rid!(tb_meta.basic.schema, tb_meta.basic.tb),
+            rid!(tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
         let mut col_values: HashMap<String, ColValue> = HashMap::new();
@@ -645,7 +645,7 @@ impl PgCdcExtractor {
     fn filter_event(&mut self, tb_meta: &PgTbMeta, row_type: RowType) -> anyhow::Result<bool> {
         let schema = &tb_meta.basic.schema;
         let tb = &tb_meta.basic.tb;
-        let filtered = self.filter.filter_event(&rid!(schema, tb), &row_type)?;
+        let filtered = self.filter.filter_event(rid!(schema, tb), &row_type)?;
         if filtered {
             return Ok(!self.extract_state.is_data_marker_info("", schema, tb));
         }

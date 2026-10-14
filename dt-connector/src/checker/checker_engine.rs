@@ -4,6 +4,8 @@ use std::{
 };
 
 use anyhow::Context;
+use dt_common::config::config_enums::DbType;
+use dt_common::rid;
 use dt_common::{
     error::{ErrorCode, ErrorReport},
     log_diff, log_miss, log_sql, log_warn,
@@ -587,8 +589,19 @@ impl<C: Checker> DataChecker<C> {
     fn task_id_for_snapshot_entry(&self, entry: &CheckEntry) -> anyhow::Result<String> {
         let (ref db, ref schema, ref tb) = match &self.ctx.router {
             Some(router) => {
-                router.reverse_table(&entry.key.db, &entry.key.schema, &entry.key.tb)?
-            }
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(&entry.key.db, &entry.key.schema, &entry.key.tb)
+                } else {
+                    rid!(&entry.key.schema, &entry.key.tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?,
             None => (
                 entry.key.db.to_string(),
                 entry.key.schema.to_string(),
@@ -753,8 +766,19 @@ impl<C: Checker> DataChecker<C> {
     ) -> anyhow::Result<CheckLog> {
         let (ref mapped_db, ref mapped_schema, ref mapped_tb) = match &ctx.router {
             Some(router) => {
-                router.reverse_table(&src_row_data.db, &src_row_data.schema, &src_row_data.tb)?
-            }
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(&src_row_data.db, &src_row_data.schema, &src_row_data.tb)
+                } else {
+                    rid!(&src_row_data.schema, &src_row_data.tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?,
             None => (
                 src_row_data.db.to_string(),
                 src_row_data.schema.to_string(),
@@ -1062,8 +1086,19 @@ impl<C: Checker> DataChecker<C> {
             if monitor_task_id.is_none() {
                 let (ref db, ref schema, ref tb) = match &self.ctx.router {
                     Some(router) => {
-                        router.reverse_table(&first_row.db, &first_row.schema, &first_row.tb)?
-                    }
+                        let id = if router.route_db_type() == &DbType::Mssql {
+                            rid!(&first_row.db, &first_row.schema, &first_row.tb)
+                        } else {
+                            rid!(&first_row.schema, &first_row.tb)
+                        };
+                        if router.src_db_type() == &DbType::Mssql {
+                            router.reverse::<(String, String, String)>(id)
+                        } else {
+                            router
+                                .reverse::<(String, String)>(id)
+                                .map(|(schema, tb)| (String::new(), schema, tb))
+                        }
+                    }?,
                     None => (
                         first_row.db.to_string(),
                         first_row.schema.to_string(),

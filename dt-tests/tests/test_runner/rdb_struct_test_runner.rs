@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
+use dt_common::rid;
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
     meta::ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
@@ -297,12 +298,22 @@ impl RdbStructTestRunner {
             .iter()
             .map(|(db, schema, tb)| match &self.base.router {
                 Some(router) => {
-                    let (dst_db, dst_schema, dst_tb) = router.route_table(db, schema, tb).unwrap();
-                    (
-                        dst_db.to_string(),
-                        dst_schema.to_string(),
-                        dst_tb.to_string(),
-                    )
+                    let (dst_db, dst_schema, dst_tb) = {
+                        let id = if router.src_db_type() == &DbType::Mssql {
+                            rid!(db, schema, tb)
+                        } else {
+                            rid!(schema, tb)
+                        };
+                        if router.route_db_type() == &DbType::Mssql {
+                            router.forward::<(String, String, String)>(id)
+                        } else {
+                            router
+                                .forward::<(String, String)>(id)
+                                .map(|(schema, tb)| (String::new(), schema, tb))
+                        }
+                    }
+                    .unwrap();
+                    (dst_db, dst_schema, dst_tb)
                 }
                 None => (db.clone(), schema.clone(), tb.clone()),
             })

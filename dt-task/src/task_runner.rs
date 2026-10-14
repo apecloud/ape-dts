@@ -1341,7 +1341,7 @@ impl TaskRunner {
         // MSSQL this is the physical database. list_tbs normalizes tables to (db, schema, table).
         let mut schemas = Vec::new();
         for schema in TaskUtil::list_schemas(&extractor_client, db_type).await? {
-            if !filter.filter(&rid!(schema))? {
+            if !filter.filter(rid!(schema))? {
                 schemas.push(schema);
             }
         }

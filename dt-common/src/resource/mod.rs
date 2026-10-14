@@ -1,7 +1,7 @@
 //! Engine-independent resource identities.
 //!
 //! ```
-//! use dt_common::{config::config_enums::DbType, filter::DtFilter, rid, router::DtRouter};
+//! use dt_common::{config::config_enums::DbType, filter::DtFilter, resource::RID, rid, router::DtRouter};
 //!
 //! let schema = "inventory".to_owned();
 //! let table = &rid!(schema, "order");
@@ -11,9 +11,9 @@
 //!
 //! let router = DtRouter::new(DbType::Pg, DbType::Mssql,
 //!     [(rid!("inventory"), rid!("market", "inventory"))])?;
-//! let target = router.route(table)?;
+//! let target = router.forward::<RID>(table)?;
 //! assert_eq!(target, rid!("market", "inventory", "order"));
-//! assert_eq!(router.reverse_route(&target)?, *table);
+//! assert_eq!(router.reverse::<RID>(&target)?, *table);
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
@@ -24,6 +24,7 @@ mod pattern_matcher;
 mod resource_kind;
 mod rid;
 mod rmatcher;
+mod table_id;
 
 pub use exact_matcher::ExactMatcher;
 pub use pattern_matcher::PatternMatcher;
@@ -33,3 +34,4 @@ pub use resource_kind::{
 };
 pub use rid::RID;
 pub use rmatcher::RMatcher;
+pub use table_id::{TableId, TableIdRef};

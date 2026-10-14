@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 
 use dt_common::meta::mongo::{mongo_constant::MongoConstants, mongo_shard::list_shard_collections};
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     config::{
@@ -847,7 +848,7 @@ impl MongoTestRunner {
         let src_data = self.fetch_data(db, tb, SRC).await;
 
         let (ref dst_db, ref dst_tb) = match &self.router {
-            Some(router) => router.route_schema_table(db, tb).unwrap(),
+            Some(router) => router.forward::<(String, String)>(rid!(db, tb)).unwrap(),
             None => (db.to_string(), tb.to_string()),
         };
         let dst_data = self.fetch_data(dst_db, dst_tb, DST).await;
@@ -1187,7 +1188,7 @@ impl MongoTestRunner {
         self.router
             .as_ref()
             .map(|router| {
-                let (dst_db, dst_tb) = router.route_schema_table(db, tb).unwrap();
+                let (dst_db, dst_tb) = router.forward::<(String, String)>(rid!(db, tb)).unwrap();
                 (dst_db.to_string(), dst_tb.to_string())
             })
             .unwrap_or_else(|| (db.to_string(), tb.to_string()))

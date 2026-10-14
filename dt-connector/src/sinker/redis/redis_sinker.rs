@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     error::{DtError, DtOptionExt},
@@ -123,7 +124,7 @@ impl RedisSinker {
         if let DtData::Redis { entry } = dt_data {
             let dst_db_id = if let Some(router) = &self.router {
                 router
-                    .route_namespace(&entry.db_id.to_string())?
+                    .forward::<String>(rid!(&entry.db_id.to_string()))?
                     .parse::<i64>()?
             } else {
                 entry.db_id

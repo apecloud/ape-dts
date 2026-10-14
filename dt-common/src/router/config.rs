@@ -11,7 +11,10 @@ use crate::{
         router_config::{RouterConfig, TO_PREFIX},
     },
     filter::CommonFilterKind,
-    resource::{config_parser as config, resource_depth, validate_rid, ResourceKind, RID},
+    resource::{
+        config_parser as config, resource_depth, resource_kind, resource_levels, validate_rid,
+        ResourceKind, RID,
+    },
 };
 
 #[derive(Deserialize)]
@@ -135,8 +138,68 @@ impl DtRouter {
                 rules.push((from, to));
             }
         }
-        Self::new_with_to_maps(src, dst, rules, to_maps)
+        build_router(src, dst, rules, to_maps)
     }
+}
+
+pub fn build_router(
+    src: DbType,
+    dst: DbType,
+    rules: Vec<(RID, RID)>,
+    to_maps: HashMap<ResourceKind, HashMap<RID, RID>>,
+) -> Result<DtRouter> {
+    let route_dst = if to_maps.is_empty() { &dst } else { &src };
+    for (source, target) in &rules {
+        let src_kind = resource_kind(&src, source)
+            .with_context(|| format!("invalid {src} resource: {source}"))?;
+        let dst_kind = resource_kind(route_dst, target)
+            .with_context(|| format!("invalid {route_dst} resource: {target}"))?;
+        let namespace = |kind| matches!(kind, ResourceKind::Database | ResourceKind::Schema);
+        ensure!(
+            src_kind == dst_kind || namespace(src_kind) && namespace(dst_kind),
+            "cannot route {src_kind:?} to {dst_kind:?}: {source} -> {target}"
+        );
+        ensure!(
+            resource_levels(&src).iter().skip(source.len())
+                .eq(resource_levels(route_dst).iter().skip(target.len())),
+            "incompatible resource suffixes for {source} -> {target}; bind the complete namespace or object"
+        );
+    }
+    for (&kind, map) in &to_maps {
+        ensure!(
+            resource_depth(&src, kind).is_some(),
+            "{src} does not support {kind:?} dispatch sources"
+        );
+        for (source, target) in map {
+            validate_rid(&src, kind, source)?;
+            resource_kind(&dst, target)
+                .with_context(|| format!("invalid {dst} resource: {target}"))?;
+            let mut wildcard = false;
+            for segment in source.segments() {
+                if segment == WILDCARD {
+                    wildcard = true;
+                } else {
+                    ensure!(
+                        !wildcard,
+                        "dispatch wildcards must form a trailing suffix: {source}"
+                    );
+                }
+            }
+        }
+    }
+    let router = DtRouter::new_with_to_maps(src, dst, rules, to_maps)?;
+    if let Some(columns) = router.resource_routers().get(&ResourceKind::Column) {
+        for (source, target) in columns.mappings() {
+            let parent = source
+                .parent()
+                .with_context(|| format!("column resource has no parent: {source}"))?;
+            ensure!(
+                Some(router.forward::<RID>(parent)?) == target.parent(),
+                "column route changes its parent table: {source} -> {target}"
+            );
+        }
+    }
+    Ok(router)
 }
 
 #[cfg(test)]
@@ -188,14 +251,14 @@ mod tests {
                 rid!("default.topic"),
             ),
         ] {
-            assert_eq!(router.route(&source).unwrap(), payload);
-            assert_eq!(router.to(&payload).unwrap(), destination);
+            assert_eq!(router.forward::<RID>(&source).unwrap(), payload);
+            assert_eq!(router.to::<RID>(&payload).unwrap(), destination);
         }
         assert_eq!(
-            router.route(&rid!("db", "orders", "id")).unwrap(),
+            router.forward::<RID>(rid!("db", "orders", "id")).unwrap(),
             rid!("cold", "history", "new_id")
         );
-        assert!(router.to(&rid!("cold", "history", "new_id")).is_err());
+        assert!(router.to::<RID>(rid!("cold", "history", "new_id")).is_err());
     }
 
     #[test]
@@ -244,8 +307,8 @@ mod tests {
         ] {
             let router = load_router(&ini(text), src.clone(), dst).unwrap();
             assert_eq!(router.route_db_type(), &src);
-            assert_eq!(router.route(&source).unwrap(), routed);
-            assert_eq!(router.to(&routed).unwrap(), target);
+            assert_eq!(router.forward::<RID>(&source).unwrap(), routed);
+            assert_eq!(router.to::<RID>(&routed).unwrap(), target);
         }
         let router = load_router(
             &ini("[rules.table]\nroute=db.t:archive.t\nto_topic="),
@@ -254,7 +317,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(router.route_db_type(), &DbType::Mysql);
-        assert!(router.to(&rid!("archive", "t")).is_err());
+        assert!(router.to::<RID>(rid!("archive", "t")).is_err());
     }
 
     #[test]
@@ -303,11 +366,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            router.route(&rid!("db", "t", "id")).unwrap(),
+            router.forward::<RID>(rid!("db", "t", "id")).unwrap(),
             rid!("archive", "orders", "order_id")
         );
         assert_eq!(
-            router.route(&rid!("db", "t", "other")).unwrap(),
+            router.forward::<RID>(rid!("db", "t", "other")).unwrap(),
             rid!("archive", "orders", "other")
         );
         bases.insert(
@@ -332,13 +395,19 @@ mod tests {
                 DbType::Pg,
             )
             .unwrap();
-            assert_eq!(router.route(&rid!("db", "t")).unwrap(), rid!("db", "t"));
+            assert_eq!(
+                router.forward::<RID>(rid!("db", "t")).unwrap(),
+                rid!("db", "t")
+            );
         }
         sections.clear();
         let router =
             DtRouter::from_config(&RouterConfig::Basic(sections), DbType::Mysql, DbType::Pg)
                 .unwrap();
-        assert_eq!(router.route(&rid!("db", "t")).unwrap(), rid!("db", "t"));
+        assert_eq!(
+            router.forward::<RID>(rid!("db", "t")).unwrap(),
+            rid!("db", "t")
+        );
     }
 
     #[test]
@@ -352,20 +421,20 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
             let config = RouterConfig::from_ini(&ini(&format!("[router]\n{legacy}\ntopic_map=*.*:events\n[rules.table]\nroute=db.t:archive.orders\n[rules.column]\nroute=db.t.id:archive.orders.new_id"))).unwrap();
             let router = DtRouter::from_config(&config, DbType::Mysql, DbType::Pg).unwrap();
             assert_eq!(
-                router.route(&rid!("db", "t", "id")).unwrap(),
+                router.forward::<RID>(rid!("db", "t", "id")).unwrap(),
                 rid!("archive", "orders", "new_id")
             );
             assert_eq!(
-                router.route(&rid!("db", "t", "value")).unwrap(),
+                router.forward::<RID>(rid!("db", "t", "value")).unwrap(),
                 rid!("archive", "orders", "value")
             );
             assert_eq!(
-                router.route(&rid!("db", "other")).unwrap(),
+                router.forward::<RID>(rid!("db", "other")).unwrap(),
                 rid!("db", "other")
             );
             assert_eq!(router.route_db_type(), &DbType::Pg);
             assert_eq!(
-                router.to(&rid!("archive", "orders")).unwrap(),
+                router.to::<RID>(rid!("archive", "orders")).unwrap(),
                 rid!("archive", "orders")
             );
         }
@@ -380,7 +449,10 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
             .unwrap();
             for engine in [DbType::Mysql, DbType::Pg] {
                 let router = DtRouter::from_config(&config, engine.clone(), engine).unwrap();
-                assert_eq!(router.route(&rid!("db", "t")).unwrap(), rid!("db", "t"));
+                assert_eq!(
+                    router.forward::<RID>(rid!("db", "t")).unwrap(),
+                    rid!("db", "t")
+                );
             }
         }
     }
@@ -389,9 +461,12 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
     fn common_filter_sections_select_basic_and_reject_router_fields() {
         let config = RouterConfig::from_ini(&ini("[router]\ntb_map=db.t:archive.orders\ntopic_map=*.*:events\n[rules.event]\ndo=insert\nignore=delete\n[rules.cmd]\nignore=SET")).unwrap();
         let router = DtRouter::from_config(&config, DbType::Mysql, DbType::Pg).unwrap();
-        assert_eq!(router.route(&rid!("db", "t")).unwrap(), rid!("db", "t"));
+        assert_eq!(
+            router.forward::<RID>(rid!("db", "t")).unwrap(),
+            rid!("db", "t")
+        );
         assert_eq!(router.route_db_type(), &DbType::Pg);
-        assert_eq!(router.to(&rid!("db", "t")).unwrap(), rid!("db", "t"));
+        assert_eq!(router.to::<RID>(rid!("db", "t")).unwrap(), rid!("db", "t"));
         for kind in CommonFilterKind::iter() {
             for mapping in ["", "a:b"] {
                 let config = RouterConfig::from_ini(&ini(&format!(
@@ -417,7 +492,7 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
             .unwrap();
             let router = DtRouter::from_config(&config, db_type, DbType::Pg).unwrap();
             assert_eq!(
-                router.route(&rid!("inventory", "order")).unwrap(),
+                router.forward::<RID>(rid!("inventory", "order")).unwrap(),
                 rid!("archive", "order")
             );
         }
@@ -446,7 +521,7 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
         ] {
             let router = load_router(&ini(text), db_type.clone(), db_type).unwrap();
             assert_eq!(
-                router.route(&rid!("db", "c")).unwrap(),
+                router.forward::<RID>(rid!("db", "c")).unwrap(),
                 rid!("archive", "c")
             );
         }
@@ -461,7 +536,7 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
         )
         .unwrap();
         assert_eq!(
-            r.route(&rid!("a.b", "order")).unwrap(),
+            r.forward::<RID>(rid!("a.b", "order")).unwrap(),
             rid!("archive", "order.2026")
         );
         let r = load_router(
@@ -473,13 +548,17 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
         )
         .unwrap();
         assert_eq!(
-            r.route(&rid!("a.b", "order")).unwrap(),
+            r.forward::<RID>(rid!("a.b", "order")).unwrap(),
             rid!("archive", "order.2026")
         );
         for text in [
             "[rules.table]\nroute=a.t:b.t:c.t",
             "[rules.table]\nroute=a.*:b.t",
             "[rules.table]\nroute=a.t:b.t,",
+            "[rules.table]\nroute=a:b.t",
+            "[rules.table]\nroute=a.t:b",
+            "[rules.db]\nroute=a:b.t.id.extra",
+            "[rules.column]\nroute=a.t.id:b.other.new_id",
         ] {
             let ini = ini(text);
             let config = RouterConfig::from_ini(&ini).unwrap();
@@ -487,6 +566,21 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
                 DtRouter::from_config(&config, DbType::Mysql, DbType::Mysql).is_err(),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn configured_routes_require_compatible_resource_layouts() {
+        for (src, dst, text) in [
+            (
+                DbType::Mysql,
+                DbType::Kafka,
+                "[rules.table]\nroute=db.t:topic",
+            ),
+            (DbType::Mssql, DbType::Pg, "[rules.db]\nroute=db:schema"),
+            (DbType::Pg, DbType::Mssql, "[rules.schema]\nroute=schema:db"),
+        ] {
+            assert!(load_router(&ini(text), src, dst).is_err(), "{text}");
         }
     }
 }

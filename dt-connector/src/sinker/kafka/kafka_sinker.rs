@@ -38,16 +38,16 @@ impl Sinker for KafkaSinker {
                 DbType::Mssql => rid!(db, schema, table),
                 _ => rid!(schema, table),
             };
-            let topic_id = self.router.to(&id)?;
+            let topic: String = self.router.to(id)?;
             let payload = self.avro_converter.ddl_data_to_avro_value(ddl_data).await?;
-            payloads.push((topic_id, String::new(), payload));
+            payloads.push((topic, String::new(), payload));
         }
         let messages: Vec<_> = payloads
             .iter()
             .map(|(topic, key, payload)| Record {
                 key: key.as_bytes(),
                 value: payload.as_slice(),
-                topic: topic.segments()[0].as_str(),
+                topic: topic.as_str(),
                 partition: -1,
             })
             .collect();
@@ -83,10 +83,10 @@ impl KafkaSinker {
             } else {
                 rid!(row_data.schema, row_data.tb)
             };
-            let topic_id = self.router.to(&id)?;
+            let topic: String = self.router.to(id)?;
             let key = self.avro_converter.row_data_to_avro_key(row_data).await?;
             let payload = self.avro_converter.row_data_to_avro_value(row_data).await?;
-            payloads.push((topic_id, key, payload));
+            payloads.push((topic, key, payload));
         }
 
         // TODO: Currently measuring RT for the entire message batch,
@@ -99,7 +99,7 @@ impl KafkaSinker {
             .map(|(topic, key, payload)| Record {
                 key: key.as_bytes(),
                 value: payload.as_slice(),
-                topic: topic.segments()[0].as_str(),
+                topic: topic.as_str(),
                 partition: -1,
             })
             .collect();

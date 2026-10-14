@@ -133,7 +133,7 @@ impl Prechecker for MongoPrechecker {
 
         let invalid_dbs = vec!["admin", "local"];
         for db in invalid_dbs {
-            if !self.fetcher.filter.filter(&rid!(db))? {
+            if !self.fetcher.filter.filter(rid!(db))? {
                 check_error = Some(
                     DtError::UnsupportedTableStructure(
                         "MongoDB databases admin and local are not supported migration objects"

@@ -185,20 +185,17 @@ fn resource_filters(
         } else {
             continue;
         };
-        filter.set_resource_filter(
-            kind,
-            ResourceFilter::new(
-                patterns(do_value, db_type, table).with_context(|| format!("[filter].{do_key}"))?,
-                patterns(ignore_value, db_type, table)
-                    .with_context(|| format!("[filter].{ignore_key}"))?,
-            ),
-        )?;
+        let resource_filter = ResourceFilter::new(
+            patterns(do_value, db_type, table).with_context(|| format!("[filter].{do_key}"))?,
+            patterns(ignore_value, db_type, table)
+                .with_context(|| format!("[filter].{ignore_key}"))?,
+        );
+        resource_filter.validate(index + 1, &filter.matcher)?;
+        filter.set_resource_filter(kind, resource_filter)?;
     }
     if !options.ignore_cols.trim().is_empty() {
-        ensure!(
-            resource_depth(db_type, ResourceKind::Column).is_some(),
-            "{db_type} does not support column filtering"
-        );
+        let depth = resource_depth(db_type, ResourceKind::Column)
+            .with_context(|| format!("{db_type} does not support column filtering"))?;
         let mut tables = BTreeMap::new();
         for row in config::json::<Vec<IgnoreColumns>>(&options.ignore_cols)
             .context("[filter].ignore_cols")?
@@ -214,10 +211,9 @@ fn resource_filters(
                 columns.insert(literal_pattern(table.child(name)));
             }
         }
-        filter.set_resource_filter(
-            ResourceKind::Column,
-            ResourceFilter::new(HashSet::new(), columns),
-        )?;
+        let resource_filter = ResourceFilter::new(HashSet::new(), columns);
+        resource_filter.validate(depth + 1, &filter.matcher)?;
+        filter.set_resource_filter(ResourceKind::Column, resource_filter)?;
     }
     Ok(())
 }
@@ -319,8 +315,8 @@ mod tests {
             assert_eq!(f.where_condition(&table).unwrap(), Some(condition));
             assert!(f.filter(&table.child(name)).unwrap());
             assert!(!f.filter(&table.child("other")).unwrap());
-            assert_eq!(f.where_condition(&rid!("other", "other")).unwrap(), None);
-            assert!(f.filter(&rid!("excluded")).unwrap());
+            assert_eq!(f.where_condition(rid!("other", "other")).unwrap(), None);
+            assert!(f.filter(rid!("excluded")).unwrap());
         }
     }
 
@@ -338,23 +334,26 @@ mod tests {
     do_dbs=db
     "#,
         );
-        assert!(!f.filter_event(&rid!("db", "t"), &RowType::Delete).unwrap());
+        assert!(!f.filter_event(rid!("db", "t"), &RowType::Delete).unwrap());
         assert!(!f.filter_structure(&StructureType::Index));
         assert!(!f.filter_dcl(&DclType::Grant));
         assert!(f.filter_dcl(&DclType::Revoke));
         assert!(!f
-            .filter_ddl(&rid!("db", "t"), &DdlType::CreateTable)
+            .filter_ddl(rid!("db", "t"), &DdlType::CreateTable)
             .unwrap());
-        assert!(f.filter_ddl(&rid!("db", "t"), &DdlType::DropTable).unwrap());
+        assert!(f.filter_ddl(rid!("db", "t"), &DdlType::DropTable).unwrap());
         assert!(f.filter_cmd("FLUSHDB"));
         assert!(!f.filter_cmd("GET"));
-        assert_eq!(f.where_condition(&rid!("db", "t")).unwrap(), Some("id > 1"));
-        assert_eq!(f.where_condition(&rid!("db")).unwrap(), None);
-        assert!(f.filter_event(&rid!("db"), &RowType::Insert).is_err());
+        assert_eq!(f.where_condition(rid!("db", "t")).unwrap(), Some("id > 1"));
+        assert_eq!(f.where_condition(rid!("db")).unwrap(), None);
+        assert_eq!(
+            f.filter_event(rid!("db"), &RowType::Insert).unwrap(),
+            f.filter(rid!("db")).unwrap()
+        );
         let defaults = filter("[filter]\ndo_dbs=db");
         assert!(defaults.filter_dcl(&DclType::Grant));
         assert!(defaults
-            .filter_ddl(&rid!("db", "t"), &DdlType::CreateTable)
+            .filter_ddl(rid!("db", "t"), &DdlType::CreateTable)
             .unwrap());
     }
 
@@ -468,19 +467,13 @@ mod tests {
     where_conditions=json:[{"db":"a.b","tb":"t","condition":"id > 1"},{"db":"a.b","tb":"t","condition":"id > 2"}]
     "#,
         );
-        assert!(f.filter(&rid!("a.b", "t", "secret")).unwrap());
-        assert!(!f.filter(&rid!("a.b", "t", "id")).unwrap());
-        assert_eq!(
-            f.where_condition(&rid!("a.b", "t")).unwrap(),
-            Some("id > 1")
-        );
+        assert!(f.filter(rid!("a.b", "t", "secret")).unwrap());
+        assert!(!f.filter(rid!("a.b", "t", "id")).unwrap());
+        assert_eq!(f.where_condition(rid!("a.b", "t")).unwrap(), Some("id > 1"));
         let mut f = f;
         f.set_where_condition(rid!("a.b", "t"), "other".into())
             .unwrap();
-        assert_eq!(
-            f.where_condition(&rid!("a.b", "t")).unwrap(),
-            Some("id > 1")
-        );
+        assert_eq!(f.where_condition(rid!("a.b", "t")).unwrap(), Some("id > 1"));
     }
 
     #[test]
@@ -493,16 +486,16 @@ where_conditions=json:[{"db":"db*","tb":"r#.*#","condition":"id > 1"}]
 ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
         );
         for name in ["*", "r#.*#"] {
-            assert!(f.filter(&RID::new(["db*", "r#.*#", name])).unwrap());
+            assert!(f.filter(RID::new(["db*", "r#.*#", name])).unwrap());
         }
         for id in [rid!("db*", "r#.*#", "id"), rid!("db1", "table", "*")] {
             assert!(!f.filter(&id).unwrap());
         }
         assert_eq!(
-            f.where_condition(&rid!("db*", "r#.*#")).unwrap(),
+            f.where_condition(rid!("db*", "r#.*#")).unwrap(),
             Some("id > 1")
         );
-        assert_eq!(f.where_condition(&rid!("db1", "table")).unwrap(), None);
+        assert_eq!(f.where_condition(rid!("db1", "table")).unwrap(), None);
         for command in ["*", "r#GET|SET#", "`GET`", "SET*", "GET|SET"] {
             assert!(f.filter_cmd(command), "{command}");
         }
@@ -518,11 +511,22 @@ ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
             let new = load_filter(&ini(&format!("[filter]\ndo_dbs={do_dbs}")), db_type).unwrap();
             for name in ["db", "name", "db.name", "store12", "inventory", "other"] {
                 assert_eq!(
-                    new.filter(&RID::new([name])).unwrap(),
+                    new.filter(RID::new([name])).unwrap(),
                     matches!(name, "db.name" | "other"),
                     "{name}"
                 );
             }
+        }
+        for rule in [
+            "do_tbs=db",
+            "ignore_tbs=db.t.extra",
+            "do_dbs=r#[#",
+            "ignore_tbs=db.r#[#",
+        ] {
+            assert!(
+                load_filter(&ini(&format!("[filter]\n{rule}")), DbType::Mysql).is_err(),
+                "{rule}"
+            );
         }
     }
 }

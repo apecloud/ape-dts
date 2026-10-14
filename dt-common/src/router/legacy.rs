@@ -3,7 +3,11 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 
-use super::{config::RouteRule, resource_router::WILDCARD, DtRouter};
+use super::{
+    config::{build_router, RouteRule},
+    resource_router::WILDCARD,
+    DtRouter,
+};
 use crate::{
     config::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
@@ -78,7 +82,7 @@ impl DtRouter {
                 );
             }
             for (source_table, columns) in tables {
-                let target_table = parent_router.route(&source_table)?;
+                let target_table = parent_router.forward::<RID>(&source_table)?;
                 for (from, to) in columns {
                     let from = source_table.child(from);
                     validate_rid(src, ResourceKind::Column, &from)?;
@@ -86,7 +90,7 @@ impl DtRouter {
                 }
             }
         }
-        Self::new_with_to_maps(src.clone(), destination, rules, to_maps)
+        build_router(src.clone(), destination, rules, to_maps)
     }
 }
 
@@ -221,7 +225,8 @@ fn topic_maps(
     for rule in rules {
         validate_rid(dst, ResourceKind::Topic, &rule.to)?;
         let (prefix, min_depth, max_depth) = if let Some(from) = rule.from {
-            let kind = resource_kind(src, &from)?;
+            let kind = resource_kind(src, &from)
+                .with_context(|| format!("invalid {src} resource: {from}"))?;
             ensure!(
                 kind != ResourceKind::Column,
                 "topic dispatch does not accept columns"
@@ -289,12 +294,14 @@ mod tests {
                 ("router_test_2", "dst_router_test_2"),
             ] {
                 assert_eq!(
-                    router.route_schema_table("test_db_2", source).unwrap(),
+                    router
+                        .forward::<(String, String)>(rid!("test_db_2", source))
+                        .unwrap(),
                     ("dst_test_db_2".into(), target.into())
                 );
                 assert_eq!(
                     router
-                        .reverse_schema_table("dst_test_db_2", target)
+                        .reverse::<(String, String)>(rid!("dst_test_db_2", target))
                         .unwrap(),
                     ("test_db_2".into(), source.into())
                 );
@@ -312,16 +319,17 @@ mod tests {
             (rid!("db"), rid!("shared.topic")),
             (rid!("other", "t"), rid!("default.topic")),
         ] {
-            assert_eq!(router.to(&source).unwrap(), target);
+            let topic: String = router.to(source).unwrap();
+            assert_eq!(topic, String::from(target));
         }
-        assert!(router.to(&rid!("db", "orders", "id")).is_err());
+        assert!(router.to::<RID>(rid!("db", "orders", "id")).is_err());
         let quoted = load_router(
             &ini("[router]\ntopic_map=*.*:`a.b`"),
             DbType::Mysql,
             DbType::Kafka,
         )
         .unwrap();
-        assert_eq!(quoted.to(&rid!("db", "t")).unwrap(), rid!("a.b"));
+        assert_eq!(quoted.to::<RID>(rid!("db", "t")).unwrap(), rid!("a.b"));
         for (engine, source) in [
             (DbType::Pg, rid!("public", "t")),
             (DbType::Mongo, rid!("db", "c")),
@@ -334,7 +342,7 @@ mod tests {
                 DbType::Kafka,
             )
             .unwrap();
-            assert_eq!(router.to(&source).unwrap(), rid!("events"));
+            assert_eq!(router.to::<RID>(&source).unwrap(), rid!("events"));
         }
         for (engine, mapping) in [
             (DbType::Mysql, "*.t:topic"),
@@ -358,7 +366,7 @@ topic_map=json:[{"from":null,"to":["default.topic"]},{"from":["db"],"descendants
             (rid!("db", "audit", "other"), rid!("database.topic")),
             (rid!("other", "dbo", "t"), rid!("default.topic")),
         ] {
-            assert_eq!(router.to(&source).unwrap(), target);
+            assert_eq!(router.to::<RID>(&source).unwrap(), target);
         }
     }
 
@@ -372,14 +380,26 @@ topic_map=json:[{"from":null,"to":["default.topic"]},{"from":["db"],"descendants
             unreachable!()
         };
         let router = DtRouter::from_legacy_config(&options, DbType::Mysql, DbType::Kafka).unwrap();
-        let routed = router.route(&rid!("db", "t")).unwrap();
+        let routed = router.forward::<RID>(rid!("db", "t")).unwrap();
         assert_eq!(routed, rid!("archive", "new"));
-        assert_eq!(router.to(&routed).unwrap(), rid!("events"));
-        options.tb_map = "invalid".into();
-        assert!(DtRouter::from_legacy_config(&options, DbType::Mysql, DbType::Kafka).is_err());
+        assert_eq!(router.to::<RID>(&routed).unwrap(), rid!("events"));
+        for mapping in [
+            "invalid",
+            "db.t:archive",
+            r#"json:[{"from":["db","t"],"to":["a","b","c","d"]}]"#,
+        ] {
+            options.tb_map = mapping.into();
+            assert!(DtRouter::from_legacy_config(&options, DbType::Mysql, DbType::Kafka).is_err());
+        }
         options.tb_map.clear();
         options.topic_map = "invalid".into();
         assert!(DtRouter::from_legacy_config(&options, DbType::Mysql, DbType::Kafka).is_err());
+        assert!(load_router(
+            &ini("[router]\ndb_map=db:schema"),
+            DbType::Mssql,
+            DbType::Pg,
+        )
+        .is_err());
     }
 
     #[test]
@@ -395,11 +415,13 @@ topic_map=json:[{"from":null,"to":["default.topic"]},{"from":["db"],"descendants
         )
         .unwrap();
         assert_eq!(
-            r.route(&rid!("market", "dbo", "order", "id")).unwrap(),
+            r.forward::<RID>(rid!("market", "dbo", "order", "id"))
+                .unwrap(),
             rid!("archive", "history", "order_2026", "order_id")
         );
         assert_eq!(
-            r.route(&rid!("market", "dbo", "order", "value")).unwrap(),
+            r.forward::<RID>(rid!("market", "dbo", "order", "value"))
+                .unwrap(),
             rid!("archive", "history", "order_2026", "value")
         );
         let dotted = load_router(
@@ -409,7 +431,9 @@ topic_map=json:[{"from":null,"to":["default.topic"]},{"from":["db"],"descendants
         )
         .unwrap();
         assert_eq!(
-            dotted.route(&rid!("source.db", "dbo", "t")).unwrap(),
+            dotted
+                .forward::<RID>(rid!("source.db", "dbo", "t"))
+                .unwrap(),
             rid!("target.db", "dbo", "t")
         );
     }

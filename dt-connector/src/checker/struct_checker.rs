@@ -7,6 +7,7 @@ use std::{
 use anyhow::{bail, ensure, Context};
 use async_mutex::Mutex;
 use chrono::Local;
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     config::config_enums::DbType,
@@ -186,12 +187,24 @@ impl StructCheckerHandle {
             return Ok(target_key.clone());
         };
         if target_key.is_table_scoped() {
-            let (db, schema, tb) =
-                router.reverse_table(&target_key.db, &target_key.schema, &target_key.tb)?;
+            let (db, schema, tb) = {
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(&target_key.db, &target_key.schema, &target_key.tb)
+                } else {
+                    rid!(&target_key.schema, &target_key.tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?;
             return Ok(target_key.with_location(&db, &schema, &tb));
         }
         if !target_key.schema.is_empty() {
-            let schema = router.reverse_namespace(&target_key.schema)?;
+            let schema: String = router.reverse(rid!(target_key.schema))?;
             return Ok(target_key.with_location(&target_key.db, &schema, &target_key.tb));
         }
         Ok(target_key.clone())

@@ -1402,7 +1402,20 @@ impl RdbTestRunner {
         let mut dst_db_tbs = vec![];
         for (db, schema, tb) in src_db_tbs.iter() {
             let (dst_db, dst_schema, dst_tb) = match &self.router {
-                Some(router) => router.route_table(db, schema, tb)?,
+                Some(router) => {
+                    let id = if router.src_db_type() == &DbType::Mssql {
+                        rid!(db, schema, tb)
+                    } else {
+                        rid!(schema, tb)
+                    };
+                    if router.route_db_type() == &DbType::Mssql {
+                        router.forward::<(String, String, String)>(id)
+                    } else {
+                        router
+                            .forward::<(String, String)>(id)
+                            .map(|(schema, tb)| (String::new(), schema, tb))
+                    }
+                }?,
                 None => (db.clone(), schema.clone(), tb.clone()),
             };
             dst_db_tbs.push((dst_db.into(), dst_schema.into(), dst_tb.into()));

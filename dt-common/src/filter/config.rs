@@ -15,7 +15,9 @@ use crate::{
         dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
     },
-    resource::{config_parser as config, validate_rid, ResourceKind, REGEX_PREFIX, RID},
+    resource::{
+        config_parser as config, resource_depth, validate_rid, ResourceKind, REGEX_PREFIX, RID,
+    },
     utils::sql_util::SqlUtil,
 };
 
@@ -155,18 +157,15 @@ impl DtFilter {
             let Some(kind) = config::section_kind(name, &db_type, empty)? else {
                 continue;
             };
-            filter.set_resource_filter(
-                kind,
-                ResourceFilter {
-                    do_set: patterns(base.do_rules.as_deref().unwrap_or_default(), &db_type)
-                        .with_context(|| format!("{kind:?}.do"))?,
-                    ignore_set: patterns(
-                        base.ignore_rules.as_deref().unwrap_or_default(),
-                        &db_type,
-                    )
+            let resource_filter = ResourceFilter {
+                do_set: patterns(base.do_rules.as_deref().unwrap_or_default(), &db_type)
+                    .with_context(|| format!("{kind:?}.do"))?,
+                ignore_set: patterns(base.ignore_rules.as_deref().unwrap_or_default(), &db_type)
                     .with_context(|| format!("{kind:?}.ignore"))?,
-                },
-            )?;
+            };
+            let depth = resource_depth(&db_type, kind).context("unsupported resource kind")?;
+            resource_filter.validate(depth + 1, &filter.matcher)?;
+            filter.set_resource_filter(kind, resource_filter)?;
             for expression in &base.expression_filters {
                 let expression = match expression {
                     ExpressionFilterConfig::WhereConditions(value) => {
@@ -233,15 +232,15 @@ mod tests {
         let filter =
             DtFilter::from_config(&FilterConfig::Basic(bases.clone()), DbType::Mssql).unwrap();
         assert!(!filter
-            .filter_event(&rid!("market", "inventory", "order"), &RowType::Insert)
+            .filter_event(rid!("market", "inventory", "order"), &RowType::Insert)
             .unwrap());
         assert!(filter
-            .filter_event(&rid!("market", "inventory", "order"), &RowType::Update)
+            .filter_event(rid!("market", "inventory", "order"), &RowType::Update)
             .unwrap());
         assert!(filter
-            .filter(&rid!("market", "inventory", "secret"))
+            .filter(rid!("market", "inventory", "secret"))
             .unwrap());
-        assert!(filter.filter(&rid!("other", "inventory", "order")).unwrap());
+        assert!(filter.filter(rid!("other", "inventory", "order")).unwrap());
         bases.insert(
             "collection".to_owned(),
             FilterSectionConfig {
@@ -256,11 +255,11 @@ mod tests {
             let filter =
                 DtFilter::from_config(&FilterConfig::Basic(sections.clone()), DbType::Mysql)
                     .unwrap();
-            assert!(filter.filter(&rid!("db", "t")).unwrap());
+            assert!(filter.filter(rid!("db", "t")).unwrap());
         }
         sections.clear();
         let filter = DtFilter::from_config(&FilterConfig::Basic(sections), DbType::Mysql).unwrap();
-        assert!(filter.filter(&rid!("db", "t")).unwrap());
+        assert!(filter.filter(rid!("db", "t")).unwrap());
     }
 
     #[test]
@@ -284,17 +283,17 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
                 ("[rules.db]\nwhere_conditions=db:\"database\"\n[rules.table]\ndo=db.t", false, None),
             ] {
                 let f = filter(&format!("[filter]\n{legacy}\ndo_events=insert\n{section}"));
-                assert_eq!(f.filter(&rid!("db", "t", "id")).unwrap(), excluded, "{section}");
-                assert!(f.filter(&rid!("legacy", "t")).unwrap());
+                assert_eq!(f.filter(rid!("db", "t", "id")).unwrap(), excluded, "{section}");
+                assert!(f.filter(rid!("legacy", "t")).unwrap());
                 for event in [RowType::Insert, RowType::Update] {
-                    assert_eq!(f.filter_event(&rid!("db", "t"), &event).unwrap(), excluded, "{section}");
+                    assert_eq!(f.filter_event(rid!("db", "t"), &event).unwrap(), excluded, "{section}");
                 }
-                assert_eq!(f.where_condition(&rid!("db", "t")).unwrap(), condition, "{section}");
-                assert_eq!(f.where_condition(&rid!("db", "t", "id")).unwrap(), None);
+                assert_eq!(f.where_condition(rid!("db", "t")).unwrap(), condition, "{section}");
+                assert_eq!(f.where_condition(rid!("db", "t", "id")).unwrap(), None);
             }
         }
         let f = load_filter(&ini("[filter]\ndo_tbs=db.t\n[rules.db]\ndo="), DbType::Pg).unwrap();
-        assert!(f.filter(&rid!("db", "t")).unwrap());
+        assert!(f.filter(rid!("db", "t")).unwrap());
     }
 
     #[test]
@@ -307,8 +306,8 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
             let config =
                 FilterConfig::from_ini(&ini(&format!("[rules.{section}]\ndo=inventory"))).unwrap();
             let filter = DtFilter::from_config(&config, db_type).unwrap();
-            assert!(!filter.filter(&rid!("inventory", "order")).unwrap());
-            assert!(filter.filter(&rid!("other", "order")).unwrap());
+            assert!(!filter.filter(rid!("inventory", "order")).unwrap());
+            assert!(filter.filter(rid!("other", "order")).unwrap());
         }
         for (db_type, text) in [
             (DbType::Mysql, "[rules.unknown]\ndo=grant"),
@@ -328,7 +327,7 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
             DbType::Pg,
         )
         .unwrap();
-        assert!(!filter.filter(&rid!("inventory", "order")).unwrap());
+        assert!(!filter.filter(rid!("inventory", "order")).unwrap());
     }
 
     #[test]
@@ -431,13 +430,13 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"id > 1"}]
 [rules.event]
 ignore=update"#,
         );
-        assert!(f.filter(&rid!("db", "t")).unwrap());
-        assert_eq!(f.where_condition(&rid!("db", "t")).unwrap(), None);
+        assert!(f.filter(rid!("db", "t")).unwrap());
+        assert_eq!(f.where_condition(rid!("db", "t")).unwrap(), None);
         f.add_do(&rid!("db", "t")).unwrap();
-        assert!(!f.filter_event(&rid!("db", "t"), &RowType::Delete).unwrap());
-        assert!(f.filter_event(&rid!("db", "t"), &RowType::Update).unwrap());
+        assert!(!f.filter_event(rid!("db", "t"), &RowType::Delete).unwrap());
+        assert!(f.filter_event(rid!("db", "t"), &RowType::Update).unwrap());
         assert!(f
-            .filter_ddl(&rid!("db", "t"), &DdlType::CreateTable)
+            .filter_ddl(rid!("db", "t"), &DdlType::CreateTable)
             .unwrap());
         assert!(f.filter_dcl(&DclType::Grant));
         assert!(!f.filter_structure(&StructureType::Table));
@@ -517,7 +516,7 @@ ignore=update"#,
                 assert_eq!(filter.where_condition(&id).unwrap(), Some(condition));
                 let mut sibling = id.segments().to_vec();
                 *sibling.last_mut().unwrap() = "other".into();
-                assert_eq!(filter.where_condition(&RID::new(sibling)).unwrap(), None);
+                assert_eq!(filter.where_condition(RID::new(sibling)).unwrap(), None);
             }
         }
     }
@@ -673,15 +672,15 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
     #[test]
     fn legacy_mssql_and_new_resource_rules_use_separate_modes() {
         let f = load_filter(&ini("[filter]\ndo_tbs=market.orders"), DbType::Mssql).unwrap();
-        assert!(!f.filter(&rid!("market", "dbo", "orders")).unwrap());
-        assert!(f.filter(&rid!("market", "other", "orders")).unwrap());
+        assert!(!f.filter(rid!("market", "dbo", "orders")).unwrap());
+        assert!(f.filter(rid!("market", "other", "orders")).unwrap());
         let f = load_filter(&ini("[rules.schema]\ndo=inventory"), DbType::Pg).unwrap();
-        assert!(!f.filter(&rid!("inventory", "order")).unwrap());
+        assert!(!f.filter(rid!("inventory", "order")).unwrap());
         let f = filter("[filter]\ndo_tbs=db.t2,db.t1\n[rules.table]\ndo=db.t1,db.t2");
-        assert!(!f.filter(&rid!("db", "t1")).unwrap());
+        assert!(!f.filter(rid!("db", "t1")).unwrap());
         let f = filter("[filter]\ndo_tbs=db.t1\n[rules.table]\ndo=db.t2");
-        assert!(f.filter(&rid!("db", "t1")).unwrap());
-        assert!(!f.filter(&rid!("db", "t2")).unwrap());
+        assert!(f.filter(rid!("db", "t1")).unwrap());
+        assert!(!f.filter(rid!("db", "t2")).unwrap());
     }
 
     #[test]
@@ -733,7 +732,7 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
                 "{text}"
             );
         }
-        assert!(filter("").filter(&rid!("db", "t")).unwrap());
+        assert!(filter("").filter(rid!("db", "t")).unwrap());
     }
     #[test]
     fn tokenization_preserves_patterns_quotes_and_segment_boundaries() {
@@ -778,6 +777,6 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             DbType::Mssql,
         )
         .unwrap();
-        assert!(!mssql.filter(&rid!("a.b", "inv]entory", "ord.er")).unwrap());
+        assert!(!mssql.filter(rid!("a.b", "inv]entory", "ord.er")).unwrap());
     }
 }

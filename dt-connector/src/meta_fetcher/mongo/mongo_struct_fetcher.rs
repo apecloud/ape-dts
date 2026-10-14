@@ -35,7 +35,7 @@ impl MongoStructFetcher {
             let Some((db, collection)) = shard_collection.ns.split_once('.') else {
                 continue;
             };
-            if !self.dbs.contains(db) || self.filter.filter(&rid!(db, collection))? {
+            if !self.dbs.contains(db) || self.filter.filter(rid!(db, collection))? {
                 continue;
             }
             statements.push(MongoShardKeyStatement { shard_collection });
@@ -78,7 +78,7 @@ impl MongoStructFetcher {
                     collection_doc
                 )
             })?;
-            if Self::is_system_collection(name) || self.filter.filter(&rid!(db, name))? {
+            if Self::is_system_collection(name) || self.filter.filter(rid!(db, name))? {
                 continue;
             }
 

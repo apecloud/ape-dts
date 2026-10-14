@@ -1,6 +1,5 @@
 use std::fmt;
 
-use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
 /// Ordered resource segments; dots within segments are literal.
@@ -38,14 +37,15 @@ impl RID {
         self.segments.is_empty()
     }
 
-    pub fn prefix(&self, len: usize) -> Option<Self> {
-        (len > 0 && len <= self.len()).then(|| Self {
-            segments: self.segments[..len].to_vec(),
-        })
+    pub fn prefix(&self, len: usize) -> Self {
+        Self::new(self.segments.iter().take(len).cloned())
     }
 
     pub fn parent(&self) -> Option<Self> {
-        self.len().checked_sub(1).and_then(|len| self.prefix(len))
+        self.len()
+            .checked_sub(1)
+            .filter(|&len| len > 0)
+            .map(|len| self.prefix(len))
     }
 
     pub fn child(&self, name: impl Into<String>) -> Self {
@@ -58,14 +58,14 @@ impl RID {
         self.segments.starts_with(&prefix.segments)
     }
 
-    pub fn replace_prefix(&self, len: usize, target: &Self) -> Result<Self> {
-        ensure!(
-            len > 0 && len <= self.len(),
-            "invalid RID prefix length {len}"
-        );
-        Ok(Self::new(
-            target.segments.iter().chain(&self.segments[len..]).cloned(),
-        ))
+    pub fn replace_prefix(&self, len: usize, target: &Self) -> Self {
+        Self::new(
+            target
+                .segments
+                .iter()
+                .chain(self.segments.iter().skip(len))
+                .cloned(),
+        )
     }
 }
 
@@ -79,6 +79,33 @@ impl fmt::Display for RID {
 impl From<&RID> for RID {
     fn from(id: &RID) -> Self {
         id.clone()
+    }
+}
+
+impl From<RID> for String {
+    fn from(id: RID) -> Self {
+        id.segments.into_iter().next().unwrap_or_default()
+    }
+}
+
+impl From<RID> for (String, String) {
+    fn from(id: RID) -> Self {
+        let mut segments = id.segments.into_iter();
+        (
+            segments.next().unwrap_or_default(),
+            segments.next().unwrap_or_default(),
+        )
+    }
+}
+
+impl From<RID> for (String, String, String) {
+    fn from(id: RID) -> Self {
+        let mut segments = id.segments.into_iter();
+        (
+            segments.next().unwrap_or_default(),
+            segments.next().unwrap_or_default(),
+            segments.next().unwrap_or_default(),
+        )
     }
 }
 
@@ -119,8 +146,8 @@ mod tests {
         assert_eq!(id.parent(), Some(rid!("market", "inventory")));
         assert_eq!(id.parent().unwrap().child("order"), *id);
         assert!(id.starts_with(&rid!("market")));
-        assert_eq!(id.prefix(0), None);
-        assert_eq!(id.prefix(4), None);
+        assert!(id.prefix(0).is_empty());
+        assert_eq!(id.prefix(4), *id);
         assert_eq!(rid!("market").parent(), None);
     }
 
@@ -141,8 +168,8 @@ mod tests {
         let empty = RID::new(Vec::<String>::new());
         assert!(empty.is_empty());
         assert_eq!(empty.parent(), None);
-        assert_eq!(empty.prefix(1), None);
-        assert!(empty.replace_prefix(1, &rid!("db")).is_err());
+        assert_eq!(empty.prefix(1), empty);
+        assert_eq!(empty.replace_prefix(1, &rid!("db")), rid!("db"));
         assert_eq!(empty.child(""), empty);
         assert_eq!(rid!("db").child(""), rid!("db"));
         for json in ["\"db.table\"", "[1]", "null"] {
@@ -165,5 +192,48 @@ mod tests {
         let parts = [schema, "orders".to_owned()];
         assert_eq!(rid!(parts[0], parts[1]), id);
         assert_eq!(parts, ["inventory", "orders"]);
+    }
+
+    #[test]
+    fn owned_conversions_move_strings_in_order_and_default_missing_segments() {
+        for names in [
+            vec![],
+            vec!["inventory"],
+            vec!["inventory", "orders"],
+            vec!["market", "inventory", "orders"],
+            vec!["market", "inventory", "orders", "id"],
+        ] {
+            let expected = |index| names.get(index).copied().unwrap_or_default();
+
+            let id = RID::new(names.clone());
+            let first_ptr = id.segments().first().map(|name| name.as_ptr());
+            let first: String = id.into();
+            assert_eq!(first, expected(0));
+            if let Some(ptr) = first_ptr {
+                assert_eq!(first.as_ptr(), ptr);
+            }
+
+            let id = RID::new(names.clone());
+            let pointers: Vec<_> = id.segments().iter().map(|name| name.as_ptr()).collect();
+            let (first, second): (String, String) = id.into();
+            assert_eq!(
+                (first.as_str(), second.as_str()),
+                (expected(0), expected(1))
+            );
+            for (name, ptr) in [&first, &second].into_iter().zip(&pointers) {
+                assert_eq!(name.as_ptr(), *ptr);
+            }
+
+            let id = RID::new(names.clone());
+            let pointers: Vec<_> = id.segments().iter().map(|name| name.as_ptr()).collect();
+            let (first, second, third): (String, String, String) = id.into();
+            assert_eq!(
+                (first.as_str(), second.as_str(), third.as_str()),
+                (expected(0), expected(1), expected(2))
+            );
+            for (name, ptr) in [&first, &second, &third].into_iter().zip(&pointers) {
+                assert_eq!(name.as_ptr(), *ptr);
+            }
+        }
     }
 }

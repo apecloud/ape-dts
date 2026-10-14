@@ -11,6 +11,8 @@ use anyhow::{Context, Result};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use chrono::Local;
+use dt_common::config::config_enums::DbType;
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     error::{DtError, DtOptionExt, DtResultExt, Stage},
@@ -296,7 +298,20 @@ impl CheckContext {
         }
         self.summary.checked_count += checked_count;
         let (ref db, ref schema, ref tb) = match &self.router {
-            Some(router) => router.reverse_table(target_db, target_schema, target_tb)?,
+            Some(router) => {
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(target_db, target_schema, target_tb)
+                } else {
+                    rid!(target_schema, target_tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?,
             None => (
                 target_db.to_string(),
                 target_schema.to_string(),
@@ -1023,7 +1038,20 @@ impl<C: Checker> DataChecker<C> {
             }
 
             let (ref target_db, ref target_schema, ref target_tb) = match &self.ctx.router {
-                Some(router) => router.route_table(db, schema, tb)?,
+                Some(router) => {
+                    let id = if router.src_db_type() == &DbType::Mssql {
+                        rid!(db, schema, tb)
+                    } else {
+                        rid!(schema, tb)
+                    };
+                    if router.route_db_type() == &DbType::Mssql {
+                        router.forward::<(String, String, String)>(id)
+                    } else {
+                        router
+                            .forward::<(String, String)>(id)
+                            .map(|(schema, tb)| (String::new(), schema, tb))
+                    }
+                }?,
                 None => (db.to_string(), schema.to_string(), tb.to_string()),
             };
             let (target_db, target_schema, target_tb) = (
@@ -1353,53 +1381,86 @@ mod tests {
 
     #[tokio::test]
     async fn handle_control_item_routes_snapshot_finished_before_invalidate() {
-        let (_control_tx, control_rx) = mpsc::unbounded_channel();
-        let invalidated = Arc::new(StdMutex::new(Vec::new()));
-        let router = DtRouter::new(
-            DbType::Mysql,
-            DbType::Mysql,
-            [(rid!("src_schema", "src_tb"), rid!("dst_schema", "dst_tb"))],
-        )
-        .unwrap();
-        let mut checker = DataChecker::new(
-            CaptureInvalidateChecker {
-                invalidated: invalidated.clone(),
-            },
-            "task-1".to_string(),
-            CheckContext {
-                router: Some(router),
-                ..Default::default()
-            },
-            Some(CheckerIo {
-                batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
-                batch_notify: Arc::new(Notify::new()),
-                dropped_items: Arc::new(AtomicU64::new(0)),
-                control_rx,
-            }),
-            "unit-test",
-        );
+        for (src, dst, source, target) in [
+            (
+                DbType::Mysql,
+                DbType::Mysql,
+                ["connection_db", "src_schema", "src_tb"],
+                ["", "dst_schema", "dst_tb"],
+            ),
+            (
+                DbType::Pg,
+                DbType::Mssql,
+                ["connection_db", "src_schema", "src_tb"],
+                ["target_db", "dst_schema", "dst_tb"],
+            ),
+            (
+                DbType::Mssql,
+                DbType::Pg,
+                ["source_db", "src_schema", "src_tb"],
+                ["", "dst_schema", "dst_tb"],
+            ),
+        ] {
+            let (_control_tx, control_rx) = mpsc::unbounded_channel();
+            let invalidated = Arc::new(StdMutex::new(Vec::new()));
+            let source_db = if src == DbType::Mssql { source[0] } else { "" };
+            let router = DtRouter::new(
+                src.clone(),
+                dst,
+                [(
+                    rid!(source_db, source[1], source[2]),
+                    rid!(target[0], target[1], target[2]),
+                )],
+            )
+            .unwrap();
+            let mut checker = DataChecker::new(
+                CaptureInvalidateChecker {
+                    invalidated: invalidated.clone(),
+                },
+                "task-1".to_string(),
+                CheckContext {
+                    router: Some(router),
+                    ..Default::default()
+                },
+                Some(CheckerIo {
+                    batch_queue: Arc::new(StdMutex::new(LimitedQueue::new(1))),
+                    batch_notify: Arc::new(Notify::new()),
+                    dropped_items: Arc::new(AtomicU64::new(0)),
+                    control_rx,
+                }),
+                "unit-test",
+            );
 
-        let item = DtItem {
-            dt_data: DtData::Commit { xid: String::new() },
-            position: Position::RdbSnapshotFinished {
-                db_type: "mysql".to_string(),
-                db: String::new(),
-                schema: "src_schema".to_string(),
-                tb: "src_tb".to_string(),
-            },
-            data_origin_node: String::new(),
-        };
+            let item = DtItem {
+                dt_data: DtData::Commit { xid: String::new() },
+                position: Position::RdbSnapshotFinished {
+                    db_type: src.to_string(),
+                    db: source[0].into(),
+                    schema: source[1].into(),
+                    tb: source[2].into(),
+                },
+                data_origin_node: String::new(),
+            };
+            checker.handle_control_item(&item).await.unwrap();
+            assert_eq!(
+                invalidated.lock().unwrap().as_slice(),
+                &[(target[0].into(), target[1].into(), target[2].into())]
+            );
 
-        checker.handle_control_item(&item).await.unwrap();
-
-        assert_eq!(
-            invalidated.lock().unwrap().as_slice(),
-            &[((
-                String::new(),
-                "dst_schema".to_string(),
-                "dst_tb".to_string(),
-            ))]
-        );
+            checker
+                .ctx
+                .record_table_counts(target[0], target[1], target[2], 1, 0)
+                .unwrap();
+            let summary = &checker.ctx.summary.tables[0];
+            assert_eq!(
+                (
+                    summary.db.as_str(),
+                    summary.schema.as_str(),
+                    summary.tb.as_str()
+                ),
+                (source_db, source[1], source[2])
+            );
+        }
     }
 
     #[tokio::test]

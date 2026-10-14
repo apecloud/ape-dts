@@ -381,7 +381,7 @@ impl Prechecker for PostgresqlPrechecker {
                         && self
                             .fetcher
                             .filter
-                            .filter(&rid!(c.rel_schema_name.as_str(), c.rel_table_name))?
+                            .filter(rid!(c.rel_schema_name.as_str(), c.rel_table_name))?
                     {
                         fkref_nonexists_tables.insert(schema_table_name);
                     }

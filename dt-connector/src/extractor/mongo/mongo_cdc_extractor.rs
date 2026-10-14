@@ -760,7 +760,7 @@ impl MongoCdcExtractor {
 
         if self
             .filter
-            .filter_event(&rid!(row_data.schema, row_data.tb), &row_data.row_type)?
+            .filter_event(rid!(row_data.schema, row_data.tb), &row_data.row_type)?
         {
             self.extract_state.record_extracted_metrics_row(&row_data);
             return self

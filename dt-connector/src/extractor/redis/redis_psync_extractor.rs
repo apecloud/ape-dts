@@ -630,7 +630,7 @@ impl RedisPsyncExtractor {
     ) -> anyhow::Result<()> {
         // currently only support db filter
         entry.data_size = entry.get_data_malloc_size();
-        if filter.filter(&rid!(entry.db_id.to_string()))? {
+        if filter.filter(rid!(entry.db_id.to_string()))? {
             extract_state.record_extracted_metrics(1, entry.data_size as u64);
             base_extractor
                 .push_dt_data(extract_state, DtData::Heartbeat {}, position)

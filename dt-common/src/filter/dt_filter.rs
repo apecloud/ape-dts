@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::Result;
 use dashmap::DashMap;
 use strum::IntoEnumIterator;
 
@@ -11,7 +11,7 @@ use crate::{
         dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
     },
-    resource::{resource_depth, resource_kind, resource_levels, PatternMatcher, ResourceKind, RID},
+    resource::{resource_kind, resource_levels, PatternMatcher, ResourceKind, RID},
     utils::sql_util::SqlUtil,
 };
 
@@ -57,14 +57,15 @@ impl DtFilter {
 
     pub fn excluded_columns<'a>(
         &self,
-        table: &RID,
+        table: impl Into<RID>,
         columns: impl IntoIterator<Item = &'a String>,
     ) -> Result<HashSet<String>> {
         let mut excluded = HashSet::new();
         let Some(rules) = self.resource_filters.get(&ResourceKind::Column) else {
             return Ok(excluded);
         };
-        let selected = ResourceFilter::matches_prefix(&rules.do_set, table, &self.matcher);
+        let table = table.into();
+        let selected = ResourceFilter::matches_prefix(&rules.do_set, &table, &self.matcher);
         for column in columns {
             let id = table.child(column.clone());
             if ResourceFilter::matches(&rules.ignore_set, &id, &self.matcher)
@@ -94,9 +95,6 @@ impl DtFilter {
         kind: ResourceKind,
         filter: ResourceFilter,
     ) -> Result<()> {
-        let depth = resource_depth(&self.db_type, kind)
-            .ok_or_else(|| anyhow!("unsupported {kind:?} for {}", self.db_type))?;
-        filter.validate(depth + 1, &self.matcher)?;
         self.resource_filters.insert(kind, filter);
         self.cache.clear();
         Ok(())
@@ -105,8 +103,9 @@ impl DtFilter {
     /// Preserve RID tokens for `PatternMatcher`, including quotes and regex delimiters.
     pub fn add_do(&mut self, pattern: impl Into<RID>) -> Result<()> {
         let id: RID = pattern.into();
-        let kind = resource_kind(&self.db_type, &id)?;
-        self.matcher.validate(&id)?;
+        let Some(kind) = resource_kind(&self.db_type, &id) else {
+            return Ok(());
+        };
         self.resource_filters
             .entry(kind)
             .or_default()
@@ -118,8 +117,9 @@ impl DtFilter {
 
     pub fn add_ignore(&mut self, pattern: impl Into<RID>) -> Result<()> {
         let id: RID = pattern.into();
-        let kind = resource_kind(&self.db_type, &id)?;
-        self.matcher.validate(&id)?;
+        let Some(kind) = resource_kind(&self.db_type, &id) else {
+            return Ok(());
+        };
         self.resource_filters
             .entry(kind)
             .or_default()
@@ -129,29 +129,28 @@ impl DtFilter {
         Ok(())
     }
 
-    pub fn filter(&self, id: &RID) -> Result<bool> {
-        let kind = resource_kind(&self.db_type, id)?;
-        if kind == ResourceKind::Column {
-            let table = id
-                .parent()
-                .with_context(|| format!("column resource has no parent: {id}"))?;
-            let Some(columns) = self.resource_filters.get(&kind) else {
-                return self.filter(&table);
+    pub fn filter(&self, id: impl Into<RID>) -> Result<bool> {
+        let id = id.into();
+        let kind = resource_kind(&self.db_type, &id);
+        if kind == Some(ResourceKind::Column) {
+            let table = id.prefix(id.len().saturating_sub(1));
+            let Some(columns) = self.resource_filters.get(&ResourceKind::Column) else {
+                return self.filter(table);
             };
-            if ResourceFilter::matches(&columns.ignore_set, id, &self.matcher) {
+            if ResourceFilter::matches(&columns.ignore_set, &id, &self.matcher) {
                 return Ok(true);
             }
-            if ResourceFilter::matches(&columns.do_set, id, &self.matcher) {
+            if ResourceFilter::matches(&columns.do_set, &id, &self.matcher) {
                 return Ok(false);
             }
             if ResourceFilter::matches_prefix(&columns.do_set, &table, &self.matcher) {
                 return Ok(true);
             }
-            return self.filter(&table);
+            return self.filter(table);
         }
-        let cacheable = matches!(kind, ResourceKind::Table | ResourceKind::Collection);
+        let cacheable = matches!(kind, Some(ResourceKind::Table | ResourceKind::Collection));
         if cacheable {
-            if let Some(value) = self.cache.get(id) {
+            if let Some(value) = self.cache.get(&id) {
                 return Ok(*value);
             }
         }
@@ -165,9 +164,7 @@ impl DtFilter {
             };
             let (ignored, allowed) = if index < id.len() {
                 let depth = index + 1;
-                let prefix = id
-                    .prefix(depth)
-                    .with_context(|| format!("invalid filter prefix depth {depth}: {id}"))?;
+                let prefix = id.prefix(depth);
                 (
                     ResourceFilter::matches(&base.ignore_set, &prefix, &self.matcher),
                     ResourceFilter::matches(&base.do_set, &prefix, &self.matcher),
@@ -175,8 +172,8 @@ impl DtFilter {
             } else {
                 // Descendant includes keep namespaces available for enumeration.
                 (
-                    ResourceFilter::covers_descendants(&base.ignore_set, id, &self.matcher),
-                    ResourceFilter::matches_prefix(&base.do_set, id, &self.matcher),
+                    ResourceFilter::covers_descendants(&base.ignore_set, &id, &self.matcher),
+                    ResourceFilter::matches_prefix(&base.do_set, &id, &self.matcher),
                 )
             };
             if ignored || allowed {
@@ -185,32 +182,18 @@ impl DtFilter {
             }
         }
         if cacheable {
-            self.cache.insert(id.clone(), excluded);
+            self.cache.insert(id, excluded);
         }
         Ok(excluded)
     }
 
-    pub fn filter_event(&self, id: &RID, event: &RowType) -> Result<bool> {
-        let kind = resource_kind(&self.db_type, id)?;
-        ensure!(
-            matches!(
-                kind,
-                ResourceKind::Table
-                    | ResourceKind::Collection
-                    | ResourceKind::Topic
-                    | ResourceKind::Database
-            ) && id.len()
-                == resource_levels(&self.db_type)
-                    .iter()
-                    .take_while(|&&k| k != ResourceKind::Column)
-                    .count(),
-            "event filtering requires a data object"
-        );
+    pub fn filter_event(&self, id: impl Into<RID>, event: &RowType) -> Result<bool> {
+        let id = id.into();
         Ok(self.filter_common(CommonFilterKind::Event, &event.to_string()) || self.filter(id)?)
     }
 
-    pub fn filter_ddl(&self, id: &RID, ddl: &DdlType) -> Result<bool> {
-        resource_kind(&self.db_type, id)?;
+    pub fn filter_ddl(&self, id: impl Into<RID>, ddl: &DdlType) -> Result<bool> {
+        let id = id.into();
         Ok(self.filter_common(CommonFilterKind::Ddl, &ddl.to_string()) || self.filter(id)?)
     }
 
@@ -327,13 +310,13 @@ mod tests {
     #[test]
     fn namespace_discovery_and_projection_have_distinct_semantics() {
         let f = filter("[rules.table]\ndo=db1.t1,db1.t2\nignore=db1.t2\n[rules.column]\ndo=db1.t1.id,db2.t1.id\nignore=db1.t1.secret");
-        assert!(!f.filter(&rid!("db1")).unwrap());
-        assert!(f.filter(&rid!("db2")).unwrap());
-        assert!(!f.filter(&rid!("db1", "t1", "id")).unwrap());
-        assert!(f.filter(&rid!("db1", "t1", "other")).unwrap());
-        assert!(f.filter(&rid!("db1", "t1", "secret")).unwrap());
-        assert!(f.filter(&rid!("db1", "t2", "id")).unwrap());
-        assert!(!f.filter(&rid!("db2", "t1", "id")).unwrap());
+        assert!(!f.filter(rid!("db1")).unwrap());
+        assert!(f.filter(rid!("db2")).unwrap());
+        assert!(!f.filter(rid!("db1", "t1", "id")).unwrap());
+        assert!(f.filter(rid!("db1", "t1", "other")).unwrap());
+        assert!(f.filter(rid!("db1", "t1", "secret")).unwrap());
+        assert!(f.filter(rid!("db1", "t2", "id")).unwrap());
+        assert!(!f.filter(rid!("db2", "t1", "id")).unwrap());
         let columns = vec!["id".into(), "other".into(), "secret".into()];
         for (table, expected) in [
             (rid!("db1", "t1"), vec!["other", "secret"]),
@@ -346,9 +329,9 @@ mod tests {
             );
         }
         let f = filter("[rules.db]\ndo=db1\n[rules.column]\ndo=db1.t1.id");
-        assert!(!f.filter(&rid!("db1", "t2", "other")).unwrap());
+        assert!(!f.filter(rid!("db1", "t2", "other")).unwrap());
         let f = filter("[rules.db]\ndo=db1\n[rules.table]\nignore=db1.*");
-        assert!(f.filter(&rid!("db1")).unwrap());
+        assert!(f.filter(rid!("db1")).unwrap());
     }
 
     #[test]
@@ -366,19 +349,19 @@ mod tests {
         ] {
             assert!(!f.filter(&id).unwrap(), "{id}");
         }
-        assert!(f.filter(&rid!("db", "other")).unwrap());
-        assert!(f.filter(&rid!("db", "sales", "other")).unwrap());
+        assert!(f.filter(rid!("db", "other")).unwrap());
+        assert!(f.filter(rid!("db", "sales", "other")).unwrap());
         f.add_ignore(&rid!("db")).unwrap();
         assert!(!f.filter(&table).unwrap());
         assert!(!f.filter(&column).unwrap());
-        assert!(f.filter(&rid!("db", "sales", "other")).unwrap());
+        assert!(f.filter(rid!("db", "sales", "other")).unwrap());
         f.set_resource_filter(ResourceKind::Database, ResourceFilter::default())
             .unwrap();
         assert!(!f.filter(&column).unwrap());
 
         let mut columns_only = DtFilter::new(DbType::Mssql);
         columns_only.add_do(&column).unwrap();
-        assert!(columns_only.filter(&rid!("db")).unwrap());
+        assert!(columns_only.filter(rid!("db")).unwrap());
         assert!(columns_only.filter(&table).unwrap());
         assert!(!columns_only.filter(&column).unwrap());
     }
@@ -386,18 +369,18 @@ mod tests {
     #[test]
     fn three_level_scope_and_cache_updates_keep_databases_isolated() {
         let mut f = load_filter(&ini("[rules.schema]\ndo=a.inventory,b.inventory\nignore=a.audit\n[rules.table]\nignore=b.inventory.order"), DbType::Mssql).unwrap();
-        assert!(!f.filter(&rid!("a", "inventory", "order")).unwrap());
-        assert!(f.filter(&rid!("b", "inventory", "order")).unwrap());
+        assert!(!f.filter(rid!("a", "inventory", "order")).unwrap());
+        assert!(f.filter(rid!("b", "inventory", "order")).unwrap());
         f.add_ignore(rid!("a")).unwrap();
-        assert!(!f.filter(&rid!("a", "inventory", "order")).unwrap());
-        assert!(f.filter(&rid!("c")).unwrap());
+        assert!(!f.filter(rid!("a", "inventory", "order")).unwrap());
+        assert!(f.filter(rid!("c")).unwrap());
         f.add_do(rid!("c", "dbo", "new")).unwrap();
-        assert!(!f.filter(&rid!("c")).unwrap());
-        assert!(!f.filter(&rid!("c", "dbo", "new")).unwrap());
+        assert!(!f.filter(rid!("c")).unwrap());
+        assert!(!f.filter(rid!("c", "dbo", "new")).unwrap());
     }
 
     #[test]
-    fn resource_filters_accept_rid_sets_and_validate_resource_depths() {
+    fn resource_filters_preserve_patterns_without_depth_checks() {
         let mut f = DtFilter::new(DbType::Mysql);
         f.set_resource_filter(
             ResourceKind::Table,
@@ -407,20 +390,21 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(!f.filter(&rid!("db")).unwrap());
-        assert!(!f.filter(&rid!("db", "order10")).unwrap());
-        assert!(!f.filter(&rid!("db", "*")).unwrap());
-        assert!(f.filter(&rid!("db", "other")).unwrap());
-        assert!(f.filter(&rid!("db", "order_secret")).unwrap());
-        for invalid in [
-            ResourceFilter::new(HashSet::from([rid!("db")]), HashSet::new()),
-            ResourceFilter::new(HashSet::new(), HashSet::from([rid!("db")])),
-            ResourceFilter::new(HashSet::from([rid!("db", "r#[#")]), HashSet::new()),
-            ResourceFilter::new(HashSet::new(), HashSet::from([rid!("db", "r#[#")])),
-        ] {
-            assert!(f.set_resource_filter(ResourceKind::Table, invalid).is_err());
+        assert!(!f.filter(rid!("db")).unwrap());
+        assert!(!f.filter(rid!("db", "order10")).unwrap());
+        assert!(!f.filter(rid!("db", "*")).unwrap());
+        assert!(f.filter(rid!("db", "other")).unwrap());
+        assert!(f.filter(rid!("db", "order_secret")).unwrap());
+        for pattern in [rid!("db"), rid!("db", "t", "id")] {
+            f.set_resource_filter(
+                ResourceKind::Table,
+                ResourceFilter::new(HashSet::from([pattern.clone()]), HashSet::new()),
+            )
+            .unwrap();
+            assert!(f.resource_filters[&ResourceKind::Table]
+                .do_set
+                .contains(&pattern));
         }
-        assert!(!f.filter(&rid!("db", "order10")).unwrap());
     }
 
     #[test]
@@ -474,20 +458,28 @@ mod tests {
     }
 
     #[test]
-    fn invalid_added_patterns_leave_existing_rules_and_cache_intact() {
-        let mut f = DtFilter::new(DbType::Mysql);
-        f.add_do(&rid!("db", "order*")).unwrap();
-        let table = rid!("db", "orders");
-        assert!(!f.filter(&table).unwrap());
-        for pattern in [rid!("db", "r#[#"), rid!("db", "orders", "id", "extra")] {
-            assert!(f.add_do(&pattern).is_err());
-            assert!(f.add_ignore(&pattern).is_err());
-            assert!(!f.filter(&table).unwrap());
+    fn runtime_filtering_does_not_reject_resource_depths_or_kinds() {
+        let f = filter("[rules.table]\ndo=db.orders\n[rules.ddl]\ndo=*");
+        for (id, excluded) in [
+            (rid!(""), false),
+            (rid!("db"), false),
+            (rid!("db", "orders"), false),
+            (rid!("db", "orders", "id"), false),
+            (rid!("db", "orders", "id", "extra"), false),
+            (rid!("other", "orders", "id", "extra"), true),
+        ] {
+            assert_eq!(f.filter(&id).unwrap(), excluded, "{id}");
+            assert_eq!(
+                f.filter_event(&id, &RowType::Insert).unwrap(),
+                excluded,
+                "{id}"
+            );
+            assert_eq!(
+                f.filter_ddl(&id, &DdlType::CreateTable).unwrap(),
+                excluded,
+                "{id}"
+            );
         }
-        assert_eq!(f.resource_filters[&ResourceKind::Table].do_set.len(), 1);
-        assert!(f.resource_filters[&ResourceKind::Table]
-            .ignore_set
-            .is_empty());
     }
 
     #[test]
@@ -505,7 +497,7 @@ mod tests {
                 ("unselected", true),
             ] {
                 assert_eq!(
-                    f.filter(&RID::new([name])).unwrap(),
+                    f.filter(RID::new([name])).unwrap(),
                     excluded,
                     "{section} {name}"
                 );

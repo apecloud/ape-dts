@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use anyhow::{ensure, Result};
+use anyhow::Result;
 
 use super::DtFilter;
-use crate::resource::{resource_depth, resource_kind, validate_rid, ResourceKind, RID};
+use crate::resource::{resource_kind, ResourceKind, RID};
 
 #[derive(Debug, Clone)]
 pub enum ExpressionFilter {
@@ -15,34 +15,28 @@ pub enum ExpressionFilter {
 
 impl DtFilter {
     /// Exact lookup; parent conditions are not inherited.
-    pub fn where_condition(&self, id: &RID) -> Result<Option<&str>> {
-        let kind = resource_kind(&self.db_type, id)?;
+    pub fn where_condition(&self, id: impl Into<RID>) -> Result<Option<&str>> {
+        let id = id.into();
+        let Some(kind) = resource_kind(&self.db_type, &id) else {
+            return Ok(None);
+        };
         Ok(self
             .expression_filters
             .get(&kind)
             .and_then(|filter| match filter {
                 ExpressionFilter::WhereConditions { conditions } => {
-                    conditions.get(id).map(String::as_str)
+                    conditions.get(&id).map(String::as_str)
                 }
             }))
     }
 
-    /// Validate all conditions before merging.
     pub fn set_expression_filter(
         &mut self,
         kind: ResourceKind,
         filter: ExpressionFilter,
     ) -> Result<()> {
-        ensure!(
-            resource_depth(&self.db_type, kind).is_some(),
-            "unsupported {kind:?} for {}",
-            self.db_type
-        );
         match filter {
             ExpressionFilter::WhereConditions { conditions } => {
-                for id in conditions.keys() {
-                    validate_rid(&self.db_type, kind, id)?;
-                }
                 let ExpressionFilter::WhereConditions {
                     conditions: previous,
                 } = self.expression_filters.entry(kind).or_insert_with(|| {
@@ -59,7 +53,9 @@ impl DtFilter {
     }
 
     pub fn set_where_condition(&mut self, id: RID, condition: String) -> Result<()> {
-        let kind = resource_kind(&self.db_type, &id)?;
+        let Some(kind) = resource_kind(&self.db_type, &id) else {
+            return Ok(());
+        };
         let ExpressionFilter::WhereConditions { conditions } = self
             .expression_filters
             .entry(kind)
@@ -95,9 +91,12 @@ mod tests {
         ] {
             assert_eq!(filter.where_condition(&id).unwrap(), expected, "{id}");
         }
-        assert!(filter
-            .where_condition(&rid!("db", "s", "t", "id", "extra"))
-            .is_err());
+        assert_eq!(
+            filter
+                .where_condition(rid!("db", "s", "t", "id", "extra"))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -156,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn expression_updates_keep_first_conditions_and_validate_before_merging() {
+    fn expression_updates_keep_first_conditions_without_depth_checks() {
         let mut filter = DtFilter::new(DbType::Mysql);
         let table = rid!("db", "t");
         for condition in ["id > 1", "id > 1", "id > 2"] {
@@ -165,26 +164,9 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(filter.where_condition(&table).unwrap(), Some("id > 1"));
-        assert!(filter
-            .set_where_condition(rid!("db", "t", "id", "extra"), "invalid".into())
-            .is_err());
-        for (kind, conditions) in [
-            (ResourceKind::Schema, HashMap::new()),
-            (
-                ResourceKind::Table,
-                HashMap::from([
-                    (rid!("db", "other"), "must not be added".into()),
-                    (rid!("db"), "invalid depth".into()),
-                ]),
-            ),
-        ] {
-            assert!(filter
-                .set_expression_filter(kind, ExpressionFilter::WhereConditions { conditions })
-                .is_err());
-            assert_eq!(filter.where_condition(&table).unwrap(), Some("id > 1"));
-            assert_eq!(filter.where_condition(&rid!("db", "other")).unwrap(), None);
-            assert_eq!(filter.expression_filters.len(), 1);
-        }
+        filter
+            .set_where_condition(rid!("db", "t", "id", "extra"), "unused".into())
+            .unwrap();
         filter
             .set_where_condition(rid!("db"), "db condition".into())
             .unwrap();
@@ -195,17 +177,18 @@ mod tests {
                     conditions: HashMap::from([
                         (table.clone(), "later".into()),
                         (rid!("db", "other"), "other".into()),
+                        (rid!("db"), "different level".into()),
                     ]),
                 },
             )
             .unwrap();
         assert_eq!(filter.where_condition(&table).unwrap(), Some("id > 1"));
         assert_eq!(
-            filter.where_condition(&rid!("db", "other")).unwrap(),
+            filter.where_condition(rid!("db", "other")).unwrap(),
             Some("other")
         );
         assert_eq!(
-            filter.where_condition(&rid!("db")).unwrap(),
+            filter.where_condition(rid!("db")).unwrap(),
             Some("db condition")
         );
         assert_eq!(filter.expression_filters.len(), 2);

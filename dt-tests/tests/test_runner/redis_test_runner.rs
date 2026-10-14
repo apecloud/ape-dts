@@ -234,7 +234,7 @@ impl RedisTestRunner {
         let dst_db = self
             .router
             .as_ref()
-            .map(|router| router.route_namespace(db))
+            .map(|router| router.forward::<String>(rid!(db)))
             .transpose()?
             .unwrap_or_else(|| db.to_string());
         self.redis_util
@@ -373,7 +373,7 @@ impl RedisTestRunner {
                 src_kvs, dst_kvs
             );
 
-            if self.filter.filter(&rid!(db)).unwrap() {
+            if self.filter.filter(rid!(db)).unwrap() {
                 println!("filtered, db: {}, key: {}", db, key);
                 assert_eq!(dst_kvs.len(), 0);
             } else {
@@ -503,7 +503,7 @@ impl RedisTestRunner {
             cmd, src_to_compare, dst_to_compare
         );
 
-        if self.filter.filter(&rid!(db)).unwrap() {
+        if self.filter.filter(rid!(db)).unwrap() {
             println!("filtered, db: {}, key: {}", db, key);
             match dst_to_compare {
                 Value::Array(v) | Value::Set(v) => assert_eq!(v, &[]),

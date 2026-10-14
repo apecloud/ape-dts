@@ -2,6 +2,7 @@ use std::{cmp, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
@@ -159,7 +160,7 @@ impl Sinker for PgSinker {
             // Snapshot finished positions keep source table names, so route them before
             // invalidating target-side metadata cache.
             let (ref routed_schema, ref routed_tb) = if let Some(router) = &self.router {
-                router.route_schema_table(schema, tb)?
+                router.forward::<(String, String)>(rid!(schema, tb))?
             } else {
                 (schema.clone(), tb.clone())
             };

@@ -2,6 +2,8 @@ use std::{cmp, time::Instant};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use dt_common::config::config_enums::DbType;
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     log_error,
@@ -253,7 +255,12 @@ impl Sinker for MssqlSinker {
         {
             let (ref routed_db, ref routed_schema, ref routed_tb) =
                 if let Some(router) = &self.router {
-                    router.route_table(db, schema, tb)?
+                    let id = if router.src_db_type() == &DbType::Mssql {
+                        rid!(db, schema, tb)
+                    } else {
+                        rid!(schema, tb)
+                    };
+                    router.forward::<(String, String, String)>(id)?
                 } else {
                     (db.clone(), schema.clone(), tb.clone())
                 };
