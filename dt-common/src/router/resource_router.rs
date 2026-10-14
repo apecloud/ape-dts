@@ -4,7 +4,7 @@ use anyhow::{bail, ensure, Context, Result};
 
 use crate::{
     config::config_enums::DbType,
-    resource::{resource_depth, resource_kind, resource_levels, validate_rid, ResourceKind, RID},
+    resource::{resource_kind, resource_levels, ResourceKind, RID},
 };
 
 pub const WILDCARD: &str = "*";
@@ -53,55 +53,16 @@ impl ResourceRouter {
     }
 
     /// Recover the source RID, preferring explicit inverse routes over unchanged names.
-    pub fn to(
-        routers: &HashMap<ResourceKind, Self>,
-        src: &DbType,
-        dst: &DbType,
-        routed: &RID,
-    ) -> Result<RID> {
+    pub fn to(routers: &HashMap<ResourceKind, Self>, src: &DbType, routed: &RID) -> Result<RID> {
         if !routers.values().any(Self::has_to_map) {
-            resource_kind(dst, routed)?;
             return Ok(routed.clone());
         }
-        let source = Self::reverse(routers, src, dst, routed, None)?;
-        let kind = resource_kind(src, &source)?;
-        let router = routers
-            .get(&kind)
+        let source = Self::reverse(routers, src, routed)?;
+        let router = resource_kind(src, &source)
+            .and_then(|kind| routers.get(&kind))
             .filter(|router| router.has_to_map())
-            .with_context(|| format!("no destination dispatch rules for {kind:?}: {source}"))?;
-        let target = router.dispatch(&source)?;
-        resource_kind(dst, &target)?;
-        Ok(target)
-    }
-
-    pub fn validate_to_map(&self, src: &DbType, dst: &DbType, kind: ResourceKind) -> Result<()> {
-        if let Some(map) = &self.to_map {
-            ensure!(
-                resource_depth(src, kind).is_some(),
-                "{src} does not support {kind:?} dispatch sources"
-            );
-            for (source, target) in map {
-                validate_rid(src, kind, source)?;
-                resource_kind(dst, target)?;
-                Self::validate_to_pattern(source)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_to_pattern(pattern: &RID) -> Result<()> {
-        let mut wildcard = false;
-        for segment in pattern.segments() {
-            if segment == WILDCARD {
-                wildcard = true;
-            } else {
-                ensure!(
-                    !wildcard,
-                    "dispatch wildcards must form a trailing suffix: {pattern}"
-                );
-            }
-        }
-        Ok(())
+            .with_context(|| format!("no destination dispatch rules for {source}"))?;
+        router.dispatch(&source)
     }
 
     /// Any dispatch map makes all payload mappings source -> source.
@@ -144,37 +105,12 @@ impl ResourceRouter {
         self.reverse_map.get(target)
     }
 
-    pub fn validate_mapping(
-        src_db_type: &DbType,
-        dst_db_type: &DbType,
-        source: &RID,
-        target: &RID,
-    ) -> Result<ResourceKind> {
-        let src_kind = resource_kind(src_db_type, source)?;
-        let dst_kind = resource_kind(dst_db_type, target)?;
-        ensure!(
-            compatible_kind(src_kind, dst_kind),
-            "cannot route {src_kind:?} to {dst_kind:?}: {source} -> {target}"
-        );
-        ensure!(
-            resource_levels(src_db_type)
-                .iter()
-                .skip(source.len())
-                .eq(resource_levels(dst_db_type).iter().skip(target.len())),
-            "incompatible resource suffixes for {source} -> {target}; bind the complete namespace or object"
-        );
-        Ok(src_kind)
-    }
-
     /// Match the longest original prefix; routes do not cascade.
     pub fn forward(
         routers: &HashMap<ResourceKind, Self>,
         src_db_type: &DbType,
-        dst_db_type: &DbType,
         source: &RID,
     ) -> Result<RID> {
-        let dst_db_type = Self::route_db_type(routers, src_db_type, dst_db_type);
-        let source_kind = resource_kind(src_db_type, source)?;
         for (index, kind) in resource_levels(src_db_type)
             .iter()
             .take(source.len())
@@ -185,22 +121,11 @@ impl ResourceRouter {
                 continue;
             };
             let depth = index + 1;
-            let prefix = source
-                .prefix(depth)
-                .with_context(|| format!("invalid route prefix depth {depth}: {source}"))?;
+            let prefix = source.prefix(depth);
             if let Some(target) = router.route(&prefix) {
-                let target = source.replace_prefix(depth, target)?;
-                ensure!(
-                    compatible_kind(source_kind, resource_kind(dst_db_type, &target)?),
-                    "route changes resource kind: {source} -> {target}"
-                );
-                return Ok(target);
+                return Ok(source.replace_prefix(depth, target));
             }
         }
-        ensure!(
-            identity_compatible(src_db_type, dst_db_type),
-            "no namespace binding for {src_db_type} -> {dst_db_type}: {source}"
-        );
         Ok(source.clone())
     }
 
@@ -208,85 +133,42 @@ impl ResourceRouter {
     pub fn reverse(
         routers: &HashMap<ResourceKind, Self>,
         src_db_type: &DbType,
-        dst_db_type: &DbType,
         target: &RID,
-        selected_sources: Option<&HashSet<RID>>,
     ) -> Result<RID> {
-        let dst_db_type = Self::route_db_type(routers, src_db_type, dst_db_type);
-        if let Some(sources) = selected_sources {
-            for source in sources {
-                resource_kind(src_db_type, source)?;
-            }
-        }
-        let target_kind = resource_kind(dst_db_type, target)?;
-        let validate = |candidate: RID| -> Result<RID> {
+        let restore = |source: RID| -> Result<RID> {
             ensure!(
-                selected_sources.is_none_or(|sources| sources.contains(&candidate))
-                    && compatible_kind(resource_kind(src_db_type, &candidate)?, target_kind)
-                    && Self::forward(routers, src_db_type, dst_db_type, &candidate)? == *target,
+                Self::forward(routers, src_db_type, &source)? == *target,
                 "unmapped reverse route for {target}"
             );
-            Ok(candidate)
+            Ok(source)
         };
-        let src_levels = resource_levels(src_db_type);
-        let dst_levels = resource_levels(dst_db_type);
-        for (index, kind) in src_levels.iter().enumerate().rev() {
-            let Some(router) = routers.get(kind) else {
-                continue;
-            };
-            // Align unchanged suffixes across layouts, e.g. PG schema -> MSSQL db.schema.
-            let suffix_len = src_levels.len() - index - 1;
-            let Some(depth) = dst_levels
-                .len()
-                .checked_sub(suffix_len)
-                .filter(|&depth| depth > 0 && depth <= target.len())
-            else {
-                continue;
-            };
-            let prefix = target
-                .prefix(depth)
-                .with_context(|| format!("invalid reverse route prefix depth {depth}: {target}"))?;
-            if let Some(source) = router.reverse_route(&prefix) {
-                return validate(target.replace_prefix(depth, source)?);
+        for depth in (1..=target.len()).rev() {
+            let prefix = target.prefix(depth);
+            let mut source = None;
+            for router in routers.values() {
+                if let Some(candidate) = router.reverse_route(&prefix) {
+                    ensure!(
+                        source.is_none_or(|previous| previous == candidate),
+                        "conflicting reverse routes for {prefix}"
+                    );
+                    source = Some(candidate);
+                }
+            }
+            if let Some(source) = source {
+                return restore(target.replace_prefix(depth, source));
             }
         }
-        ensure!(
-            identity_compatible(src_db_type, dst_db_type),
-            "unmapped reverse route for {target}"
-        );
-        validate(target.clone())
-    }
-
-    /// Validate after all parent rules have been inserted.
-    pub fn validate_columns(
-        routers: &HashMap<ResourceKind, Self>,
-        src_db_type: &DbType,
-        dst_db_type: &DbType,
-    ) -> Result<()> {
-        if let Some(columns) = routers.get(&ResourceKind::Column) {
-            for (source, target) in &columns.forward_map {
-                let parent = source
-                    .parent()
-                    .with_context(|| format!("column resource has no parent: {source}"))?;
-                ensure!(
-                    Some(Self::forward(routers, src_db_type, dst_db_type, &parent)?)
-                        == target.parent(),
-                    "column route changes its parent table: {source} -> {target}"
-                );
-            }
-        }
-        Ok(())
+        restore(target.clone())
     }
 
     pub fn validate_unique_targets(
         routers: &HashMap<ResourceKind, Self>,
         src_db_type: &DbType,
-        dst_db_type: &DbType,
         selected_sources: &HashSet<RID>,
     ) -> Result<()> {
         let mut targets = HashMap::new();
         for source in selected_sources {
-            let target = Self::forward(routers, src_db_type, dst_db_type, source)?;
+            let target = Self::forward(routers, src_db_type, source)?;
             if let Some(previous) = targets.insert(target.clone(), source) {
                 ensure!(
                     previous == source,
@@ -296,21 +178,6 @@ impl ResourceRouter {
         }
         Ok(())
     }
-}
-
-fn compatible_kind(src: ResourceKind, dst: ResourceKind) -> bool {
-    let namespace = |kind| matches!(kind, ResourceKind::Database | ResourceKind::Schema);
-    src == dst || (namespace(src) && namespace(dst))
-}
-
-fn identity_compatible(src_db_type: &DbType, dst_db_type: &DbType) -> bool {
-    let src_levels = resource_levels(src_db_type);
-    let dst_levels = resource_levels(dst_db_type);
-    src_levels.len() == dst_levels.len()
-        && src_levels
-            .iter()
-            .zip(dst_levels)
-            .all(|(&src, &dst)| compatible_kind(src, dst))
 }
 
 #[cfg(test)]
@@ -344,10 +211,9 @@ mod tests {
             (rid!("db", "other"), rid!("database.topic")),
             (rid!("other", "t"), rid!("default.topic")),
         ] {
-            let routed =
-                ResourceRouter::forward(&routers, &DbType::Mysql, &DbType::Kafka, &source).unwrap();
+            let routed = ResourceRouter::forward(&routers, &DbType::Mysql, &source).unwrap();
             assert_eq!(
-                ResourceRouter::to(&routers, &DbType::Mysql, &DbType::Kafka, &routed).unwrap(),
+                ResourceRouter::to(&routers, &DbType::Mysql, &routed).unwrap(),
                 expected
             );
         }
@@ -361,14 +227,14 @@ mod tests {
     fn to_map_uses_the_longest_inverse_before_dispatch() {
         let id = rid!("schema", "t");
         assert_eq!(
-            ResourceRouter::to(&HashMap::new(), &DbType::Mysql, &DbType::Pg, &id).unwrap(),
+            ResourceRouter::to(&HashMap::new(), &DbType::Mysql, &id).unwrap(),
             id
         );
         let mut routers = HashMap::from([(
             ResourceKind::Table,
             ResourceRouter::new(Some(HashMap::new())),
         )]);
-        assert!(ResourceRouter::to(&routers, &DbType::Mysql, &DbType::Kafka, &id).is_err());
+        assert!(ResourceRouter::to(&routers, &DbType::Mysql, &id).is_err());
         let mut table = ResourceRouter::new(Some(HashMap::from([
             (rid!("a", "other"), rid!("explicit")),
             (rid!("a", "*"), rid!("inherited")),
@@ -380,10 +246,9 @@ mod tests {
         routers.insert(ResourceKind::Table, table);
         routers.insert(ResourceKind::Database, db);
         assert_eq!(
-            ResourceRouter::to(&routers, &DbType::Mysql, &DbType::Kafka, &rid!("x", "t")).unwrap(),
+            ResourceRouter::to(&routers, &DbType::Mysql, &rid!("x", "t")).unwrap(),
             rid!("explicit")
         );
-        assert!(ResourceRouter::validate_to_pattern(&rid!("*", "t")).is_err());
     }
 
     #[test]
@@ -395,7 +260,7 @@ mod tests {
             rid!("inventory", "order?"),
             rid!("inventory", "r#order.*#"),
         ] {
-            let target = source.replace_prefix(1, &rid!("archive")).unwrap();
+            let target = source.replace_prefix(1, &rid!("archive"));
             router.insert(source.clone(), target.clone()).unwrap();
             assert_eq!(router.route(&source), Some(&target));
             assert_eq!(router.reverse_route(&target), Some(&source));

@@ -1,3 +1,5 @@
+use dt_common::config::config_enums::DbType;
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     meta::row_data::RowData,
@@ -49,7 +51,20 @@ impl BaseSinker {
         };
 
         let (ref db, ref schema, ref tb) = match router {
-            Some(router) => router.reverse_table(&first.db, &first.schema, &first.tb)?,
+            Some(router) => {
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(&first.db, &first.schema, &first.tb)
+                } else {
+                    rid!(&first.schema, &first.tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?,
             None => (
                 first.db.to_string(),
                 first.schema.to_string(),

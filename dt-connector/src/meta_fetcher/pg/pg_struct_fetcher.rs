@@ -1503,14 +1503,14 @@ impl PgStructFetcher {
 
     fn filter_tb(&mut self, schema: &str, tb: &str) -> anyhow::Result<bool> {
         if let Some(filter) = &mut self.filter {
-            return filter.filter(&rid!(schema, tb));
+            return filter.filter(rid!(schema, tb));
         }
         Ok(false)
     }
 
     fn filter_schema(&mut self, schema: &str) -> anyhow::Result<bool> {
         if let Some(filter) = &mut self.filter {
-            return filter.filter(&rid!(schema));
+            return filter.filter(rid!(schema));
         }
         Ok(false)
     }

@@ -1473,6 +1473,7 @@ mod tests {
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
     use crate::error::{ErrorCode, ErrorReport};
+    use crate::resource::RID;
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
 
     fn cdc_inline_check_config(
@@ -1652,11 +1653,11 @@ parallel_type=rdb_merge
                 let router = router.unwrap();
                 assert_eq!(router.src_db_type(), src_engine, "{label}");
                 assert_eq!(router.dst_db_type(), dst_engine, "{label}");
-                let routed = router.route(&source).unwrap();
+                let routed = router.forward::<RID>(&source).unwrap();
                 assert_eq!(routed, target, "{label}");
-                assert_eq!(router.reverse_payload(&routed).unwrap(), source, "{label}");
+                assert_eq!(router.reverse::<RID>(&routed).unwrap(), source, "{label}");
                 if dst_engine == &DbType::Kafka {
-                    assert_eq!(router.to(&routed).unwrap(), rid!("test3"));
+                    assert_eq!(router.to::<RID>(&routed).unwrap(), rid!("test3"));
                 }
             }
         }
@@ -1705,8 +1706,8 @@ parallel_type=rdb_merge
             let router = config.build_router().unwrap().unwrap();
             assert_eq!(router.src_db_type(), &dst);
             assert_eq!(router.dst_db_type(), &dst);
-            assert_eq!(router.route(&source).unwrap(), target);
-            assert_eq!(router.reverse_payload(&target).unwrap(), source);
+            assert_eq!(router.forward::<RID>(&source).unwrap(), target);
+            assert_eq!(router.reverse::<RID>(&target).unwrap(), source);
         }
     }
 
@@ -1721,13 +1722,13 @@ parallel_type=rdb_merge
             let router = config.build_router().unwrap().unwrap();
             let source = rid!("inventory", "orders");
             assert!(!filter.filter(&source).unwrap());
-            assert!(filter.filter(&rid!("other", "orders")).unwrap());
+            assert!(filter.filter(rid!("other", "orders")).unwrap());
             assert!(filter
-                .filter(&rid!("inventory", "orders", "secret"))
+                .filter(rid!("inventory", "orders", "secret"))
                 .unwrap());
-            let target = router.route(&source).unwrap();
+            let target = router.forward::<RID>(&source).unwrap();
             assert_eq!(target, rid!("archive", "orders"));
-            assert_eq!(router.reverse_payload(&target).unwrap(), source);
+            assert_eq!(router.reverse::<RID>(&target).unwrap(), source);
         }
     }
 

@@ -98,7 +98,7 @@ impl Fetcher for PgFetcher {
                 while let Some(row) = rows.try_next().await? {
                     let (database_name, schema_name): (String, String) =
                         (row.try_get("catalog_name")?, row.try_get("schema_name")?);
-                    if !self.filter.filter(&rid!(schema_name))? {
+                    if !self.filter.filter(rid!(schema_name))? {
                         schemas.push(Schema {
                             database_name,
                             schema_name,
@@ -128,7 +128,7 @@ impl Fetcher for PgFetcher {
                         row.try_get("table_schema")?,
                         row.try_get("table_name")?,
                     );
-                    if !self.filter.filter(&rid!(schema_name, table_name))? {
+                    if !self.filter.filter(rid!(schema_name, table_name))? {
                         tables.push(Table {
                             database_name,
                             schema_name,
@@ -180,7 +180,7 @@ impl Fetcher for PgFetcher {
                         row.try_get("conname")?,
                         row.try_get("contype")?,
                     );
-                    if !self.filter.filter(&rid!(schema_name, table_name))? {
+                    if !self.filter.filter(rid!(schema_name, table_name))? {
                         constraints.push(Constraint {
                             database_name: String::from(""),
                             schema_name,

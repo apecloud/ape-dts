@@ -143,7 +143,7 @@ impl MssqlComponentTestContext {
                     .into_iter()
                     .filter(|tb| {
                         !pattern_filter
-                            .filter(&rid!(selector.db, selector.schema, tb))
+                            .filter(rid!(selector.db, selector.schema, tb))
                             .unwrap()
                     })
                     .collect::<Vec<_>>();
@@ -163,7 +163,7 @@ impl MssqlComponentTestContext {
                 ensure!(
                     !runner
                         .filter
-                        .filter(&rid!(selector.db, selector.schema, tb))?,
+                        .filter(rid!(selector.db, selector.schema, tb))?,
                     "MSSQL component test table is excluded by filter in {test_dir}: {}.{}.{}",
                     selector.db,
                     selector.schema,

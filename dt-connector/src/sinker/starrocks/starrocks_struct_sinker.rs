@@ -2,6 +2,7 @@ use std::cmp;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::router::DtRouter;
 use dt_common::{
     config::config_enums::{ConflictPolicyEnum, DbType},
@@ -60,10 +61,10 @@ impl Sinker for StarrocksStructSinker {
 
                 StructStatement::MysqlCreateTable(statement) => {
                     let (ref schema, ref tb) = if let Some(router) = &self.router {
-                        router.reverse_schema_table(
+                        router.reverse::<(String, String)>(rid!(
                             &statement.table.database_name,
                             &statement.table.table_name,
-                        )?
+                        ))?
                     } else {
                         (
                             statement.table.database_name.clone(),
@@ -87,10 +88,10 @@ impl Sinker for StarrocksStructSinker {
 
                 StructStatement::PgCreateTable(statement) => {
                     let (ref schema, ref tb) = if let Some(router) = &self.router {
-                        router.reverse_schema_table(
+                        router.reverse::<(String, String)>(rid!(
                             &statement.table.schema_name,
                             &statement.table.table_name,
-                        )?
+                        ))?
                     } else {
                         (
                             statement.table.schema_name.clone(),

@@ -533,7 +533,7 @@ impl TaskUtil {
             let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
             let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
-            if filter.filter(&rid!(schema, tb))? {
+            if filter.filter(rid!(schema, tb))? {
                 continue;
             }
             total_records += records;
@@ -587,7 +587,7 @@ WHERE
             let schema: String = row.try_get(0)?;
             let table_name: String = row.try_get(1)?;
             let row_count: i64 = row.try_get(2)?;
-            if filter.filter(&rid!(schema, table_name))? {
+            if filter.filter(rid!(schema, table_name))? {
                 continue;
             }
             // Convert to u64, handling negative values (which shouldn't happen but just in case)
@@ -624,7 +624,7 @@ WHERE
                 let schema =
                     MssqlColValueConvertor::from_query_required_string(&row, "schema_name")?;
                 let table = MssqlColValueConvertor::from_query_required_string(&row, "table_name")?;
-                if filter.filter(&rid!(db, schema, table))? {
+                if filter.filter(rid!(db, schema, table))? {
                     continue;
                 }
                 let row_count = MssqlColValueConvertor::from_query_required_i64(&row, "row_count")?

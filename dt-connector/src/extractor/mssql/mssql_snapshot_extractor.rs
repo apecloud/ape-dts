@@ -452,7 +452,7 @@ impl MssqlSnapshotExtractor {
         }
         let query = snapshot_query.create_mssql_query(&tb_meta, values)?;
         let ignore_cols = Some(shared.filter.excluded_columns(
-            &rid!(tb_meta.basic.db, tb_meta.basic.schema, tb_meta.basic.tb),
+            rid!(tb_meta.basic.db, tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
 
@@ -797,13 +797,13 @@ impl MssqlTableCtx {
         let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = *tb_meta.get_col_type(&partition_col)?;
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(
+            .where_condition(rid!(
                 self.table_id.db,
                 self.table_id.schema,
                 self.table_id.tb
@@ -867,13 +867,13 @@ impl MssqlTableCtx {
         order_cols: &[String],
     ) -> anyhow::Result<u64> {
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(
+            .where_condition(rid!(
                 self.table_id.db,
                 self.table_id.schema,
                 self.table_id.tb
@@ -1009,13 +1009,13 @@ impl MssqlTableCtx {
             MssqlSnapshotExtractor::quote(&self.table_id.tb)
         );
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(
+            .where_condition(rid!(
                 self.table_id.db,
                 self.table_id.schema,
                 self.table_id.tb
@@ -1064,13 +1064,13 @@ impl MssqlTableCtx {
             start_values = tb_meta.basic.get_default_order_col_values();
         }
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(
+            .where_condition(rid!(
                 self.table_id.db,
                 self.table_id.schema,
                 self.table_id.tb

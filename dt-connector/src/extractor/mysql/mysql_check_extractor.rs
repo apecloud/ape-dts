@@ -66,7 +66,7 @@ impl BatchCheckExtractor for MysqlCheckExtractor {
 
         let ignore_cols = Some(
             self.filter
-                .excluded_columns(&rid!(db, tb), &tb_meta.basic.cols)?,
+                .excluded_columns(rid!(db, tb), &tb_meta.basic.cols)?,
         );
         let query_builder = RdbQueryBuilder::new_for_mysql(tb_meta, ignore_cols.as_ref());
         let batch_refs: Vec<&RowData> = check_row_data_items.iter().collect();

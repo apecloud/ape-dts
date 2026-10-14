@@ -376,7 +376,7 @@ impl MysqlCdcExtractor {
         let tb_meta = self.meta_manager.get_tb_meta(db, tb).await?;
         let ignore_cols = Some(
             self.filter
-                .excluded_columns(&rid!(db, tb), &tb_meta.basic.cols)?,
+                .excluded_columns(rid!(db, tb), &tb_meta.basic.cols)?,
         );
 
         if included_columns.len() != event.column_values.len() {
@@ -483,7 +483,7 @@ impl MysqlCdcExtractor {
     ) -> anyhow::Result<bool> {
         let db = &table_map_event.database_name;
         let tb = &table_map_event.table_name;
-        let filtered = self.filter.filter_event(&rid!(db, tb), &row_type)?;
+        let filtered = self.filter.filter_event(rid!(db, tb), &row_type)?;
         if filtered {
             return Ok(!self.extract_state.is_data_marker_info("", db, tb));
         }

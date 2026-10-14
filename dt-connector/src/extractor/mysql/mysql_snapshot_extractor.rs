@@ -432,7 +432,7 @@ impl MysqlSnapshotExtractor {
         let mut extracted_cnt = 0u64;
         let mut partition_col_value = ColValue::None;
         let ignore_cols = Some(shared.filter.excluded_columns(
-            &rid!(tb_meta.basic.schema, tb_meta.basic.tb),
+            rid!(tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
         let mut rows = query.fetch(&shared.conn_pool);
@@ -776,13 +776,13 @@ impl MysqlTableCtx {
         let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = tb_meta.get_col_type(&partition_col)?.clone();
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(self.table_id.schema, self.table_id.tb))?
+            .where_condition(rid!(self.table_id.schema, self.table_id.tb))?
             .map(str::to_owned)
             .unwrap_or_default();
         let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
@@ -945,13 +945,13 @@ impl MysqlTableCtx {
 
         let base_count = extract_state.monitor.counters.pushed_record_count;
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(self.table_id.schema, self.table_id.tb))?
+            .where_condition(rid!(self.table_id.schema, self.table_id.tb))?
             .map(str::to_owned)
             .unwrap_or_default();
         let empty_ignore_cols = HashSet::new();
@@ -1010,13 +1010,13 @@ impl MysqlTableCtx {
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         let page_limit = self.sample_limit.unwrap_or(self.shared.batch_size);
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(self.table_id.schema, self.table_id.tb))?
+            .where_condition(rid!(self.table_id.schema, self.table_id.tb))?
             .map(str::to_owned)
             .unwrap_or_default();
         let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
@@ -1194,13 +1194,13 @@ impl MysqlTableCtx {
         let mut extracted_count = 0u64;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         let ignore_cols = Some(self.shared.filter.excluded_columns(
-            &rid!(self.table_id.schema, self.table_id.tb),
+            rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(self.table_id.schema, self.table_id.tb))?
+            .where_condition(rid!(self.table_id.schema, self.table_id.tb))?
             .map(str::to_owned)
             .unwrap_or_default();
         let empty_ignore_cols = HashSet::new();
@@ -1259,7 +1259,7 @@ impl MysqlTableCtx {
         let where_condition = self
             .shared
             .filter
-            .where_condition(&rid!(self.table_id.schema, self.table_id.tb))?
+            .where_condition(rid!(self.table_id.schema, self.table_id.tb))?
             .map(str::to_owned)
             .unwrap_or_default();
         if !where_condition.is_empty() {

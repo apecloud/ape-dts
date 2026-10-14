@@ -333,7 +333,7 @@ impl Prechecker for MySqlPrechecker {
                                     "{}.{}",
                                     constraint.rel_database_name, constraint.rel_table_name
                                 );
-                                if self.fetcher.filter.filter(&rid!(
+                                if self.fetcher.filter.filter(rid!(
                                     constraint.rel_database_name,
                                     constraint.rel_table_name
                                 ))? {
