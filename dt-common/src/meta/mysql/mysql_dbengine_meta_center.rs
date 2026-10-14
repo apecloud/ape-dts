@@ -38,9 +38,8 @@ impl MysqlDbEngineMetaCenter {
     }
 
     pub async fn sync_from_ddl(&mut self, ddl_data: &DdlData) -> anyhow::Result<()> {
-        let id: RID = ddl_data.get_id();
-        let [db, tb] = id.parts();
-        self.meta_fetcher.invalidate_cache(db, tb);
+        let [db, tb] = ddl_data.get_id::<RID>().into_left();
+        self.meta_fetcher.invalidate_cache(&db, &tb);
         log_info!(
             "sync ddl to meta_center, db: {}, query: {}",
             db,
@@ -52,7 +51,7 @@ impl MysqlDbEngineMetaCenter {
             match ddl_data.ddl_type {
                 DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {}
                 _ => {
-                    conn_options = conn_options.database(db);
+                    conn_options = conn_options.database(&db);
                 }
             }
         }

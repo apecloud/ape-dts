@@ -521,9 +521,8 @@ impl MongoSinker {
 
         match ddl_data.ddl_type {
             DdlType::MongoDropDatabase => {
-                let id: RID = ddl_data.get_id();
-                let [db] = id.parts();
-                self.mongo_client.database(db).drop().await?;
+                let [db] = ddl_data.get_id::<RID>().into_left();
+                self.mongo_client.database(&db).drop().await?;
             }
 
             DdlType::MongoShardCollection => {
@@ -545,9 +544,8 @@ impl MongoSinker {
             | DdlType::MongoCreateIndex
             | DdlType::MongoDropIndex
             | DdlType::MongoCollMod => {
-                let id: RID = ddl_data.get_id();
-                let [db] = id.parts();
-                self.mongo_client.database(db).run_command(command).await?;
+                let [db] = ddl_data.get_id::<RID>().into_left();
+                self.mongo_client.database(&db).run_command(command).await?;
             }
 
             _ => {}
@@ -596,8 +594,7 @@ impl MongoSinker {
     }
 
     fn rewrite_ddl_command_namespace(ddl_data: &DdlData, command: &mut Document) {
-        let id: RID = ddl_data.get_id();
-        let [db, tb] = id.parts();
+        let [db, tb] = ddl_data.get_id::<RID>().into_left();
         for command_name in ["create", "drop", "createIndexes", "dropIndexes", "collMod"] {
             if command.contains_key(command_name) && !tb.is_empty() {
                 command.insert(command_name, tb);
@@ -606,8 +603,7 @@ impl MongoSinker {
         }
 
         if command.contains_key("renameCollection") {
-            let target: RID = ddl_data.get_rename_id();
-            let [new_db, new_tb] = target.parts();
+            let [new_db, new_tb] = ddl_data.get_rename_id::<RID>().into_left();
             command.insert("renameCollection", format!("{}.{}", db, tb));
             command.insert("to", format!("{}.{}", new_db, new_tb));
             return;

@@ -59,7 +59,7 @@ impl DdlData {
     }
 
     /// Namespace DDL omits the trailing table segment. Read fixed resource levels
-    /// with `RID::parts`; tuple conversions align from the end.
+    /// with `RID::into_left`; tuple conversions align from the end.
     pub fn get_id<T: From<RID>>(&self) -> T {
         let (mut schema, tb) = self.statement.get_schema_tb();
         if schema.is_empty() {
