@@ -274,7 +274,8 @@ impl TaskConfig {
         match extract_type {
             ExtractType::Struct => Some(TaskKind::Struct),
             ExtractType::Snapshot => Some(TaskKind::Snapshot),
-            ExtractType::Cdc => Some(TaskKind::Cdc),
+            // TODO: a separate "SnapshotAndCdc" task type will be needed in the future.
+            ExtractType::Cdc | ExtractType::SnapshotAndCdc => Some(TaskKind::Cdc),
             _ => None,
         }
     }
@@ -1517,6 +1518,32 @@ parallel_type={parallel_type}
         ini.read(contents.to_owned())
             .map_err(|error| anyhow!(error))?;
         TaskConfig::from_loader(&IniLoader { ini })
+    }
+
+    #[test]
+    fn redis_snapshot_and_cdc_uses_cdc_task_type() {
+        let config = load_task_config(
+            r#"[extractor]
+db_type=redis
+extract_type=snapshot_and_cdc
+url=redis://127.0.0.1:6379
+
+[sinker]
+db_type=redis
+sink_type=write
+url=redis://127.0.0.1:6380
+
+[parallelizer]
+parallel_type=redis
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.task_type(), Some(TaskType::new(TaskKind::Cdc, None)));
+        assert!(matches!(
+            config.extractor,
+            ExtractorConfig::RedisSnapshotAndCdc { .. }
+        ));
     }
 
     fn snapshot_check_config(extra_checker: &str) -> String {
