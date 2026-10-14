@@ -207,29 +207,16 @@ impl<C: Checker> DataChecker<C> {
                     Some(&diff_col_values),
                 )?;
                 let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
-                let routed_diffs = if let Some(col_map) = ctx
-                    .router
-                    .as_ref()
-                    .map(|router| {
-                        router.reverse_column_map(
-                            &src_row_data.db,
-                            &src_row_data.schema,
-                            &src_row_data.tb,
-                        )
-                    })
-                    .transpose()?
-                    .flatten()
-                {
+                let routed_diffs = if let Some(columns) = ctx.router.as_ref().and_then(|router| {
+                    router.reverse_column_map(rid!(
+                        src_row_data.db,
+                        src_row_data.schema,
+                        src_row_data.tb
+                    ))
+                }) {
                     diff_col_values
                         .into_iter()
-                        .map(|(col, val)| {
-                            let key = col_map
-                                .get(&col)
-                                .filter(|c| *c != &col)
-                                .cloned()
-                                .unwrap_or(col);
-                            (key, val)
-                        })
+                        .map(|(col, val)| (columns.get(&col).cloned().unwrap_or(col), val))
                         .collect()
                 } else {
                     diff_col_values
@@ -764,49 +751,15 @@ impl<C: Checker> DataChecker<C> {
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let (ref mapped_db, ref mapped_schema, ref mapped_tb) = match &ctx.router {
-            Some(router) => {
-                let id = if router.route_db_type() == &DbType::Mssql {
-                    rid!(&src_row_data.db, &src_row_data.schema, &src_row_data.tb)
-                } else {
-                    rid!(&src_row_data.schema, &src_row_data.tb)
-                };
-                if router.src_db_type() == &DbType::Mssql {
-                    router.reverse::<(String, String, String)>(id)
-                } else {
-                    router
-                        .reverse::<(String, String)>(id)
-                        .map(|(schema, tb)| (String::new(), schema, tb))
-                }
-            }?,
-            None => (
-                src_row_data.db.to_string(),
-                src_row_data.schema.to_string(),
-                src_row_data.tb.to_string(),
-            ),
-        };
-        let has_col_map = ctx
-            .router
-            .as_ref()
-            .map(|router| {
-                router.reverse_column_map(&src_row_data.db, &src_row_data.schema, &src_row_data.tb)
-            })
-            .transpose()?
-            .flatten()
-            .is_some();
-        let db_changed = &src_row_data.db != mapped_db;
-        let schema_changed = &src_row_data.schema != mapped_schema || &src_row_data.tb != mapped_tb;
-
-        let routed_row = if let Some(router) = ctx.router.as_ref().filter(|_| has_col_map) {
+        let routed_row = if let Some(router) = ctx.router.as_ref() {
             Cow::Owned(router.reverse_route_row(src_row_data.clone())?)
         } else {
             Cow::Borrowed(src_row_data)
         };
-        let (schema, tb) = if has_col_map {
-            (routed_row.schema.clone(), routed_row.tb.clone())
-        } else {
-            (mapped_schema.to_string(), mapped_tb.to_string())
-        };
+        let db_changed = src_row_data.db != routed_row.db;
+        let schema_changed =
+            src_row_data.schema != routed_row.schema || src_row_data.tb != routed_row.tb;
+        let (schema, tb) = (routed_row.schema.clone(), routed_row.tb.clone());
 
         let id_col_values = if let Some(meta_manager) = ctx.extractor_meta_manager.as_mut() {
             let src_tb_meta = meta_manager
@@ -1186,6 +1139,8 @@ mod tests {
         config::config_enums::DbType,
         error::DtError,
         meta::mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
+        resource::RID,
+        router::DtRouter,
     };
 
     use super::super::{CheckContext, CheckerIo};
@@ -1481,6 +1436,111 @@ mod tests {
         assert!(entry.log.src_row.is_some());
         assert!(entry.log.dst_row.is_some());
         assert!(entry.revise_sql.is_some());
+    }
+
+    #[tokio::test]
+    async fn routed_check_logs_restore_source_names_and_columns() {
+        for (src_engine, dst_engine, source, target) in [
+            (
+                DbType::Mysql,
+                DbType::Mysql,
+                ["", "s1", "t1"],
+                ["", "s2", "t2"],
+            ),
+            (
+                DbType::Mssql,
+                DbType::Mssql,
+                ["db1", "s1", "t1"],
+                ["db2", "s2", "t2"],
+            ),
+            (
+                DbType::Pg,
+                DbType::Mssql,
+                ["", "s1", "t1"],
+                ["db2", "s2", "t2"],
+            ),
+            (
+                DbType::Mssql,
+                DbType::Pg,
+                ["db1", "s1", "t1"],
+                ["", "s2", "t2"],
+            ),
+        ] {
+            for column_table in [None, Some("t1"), Some("other")] {
+                let mut rules = vec![(RID::new(source), RID::new(target))];
+                if let Some(table) = column_table {
+                    let mapped_table = if table == "t1" { target[2] } else { table };
+                    rules.push((
+                        rid!(source[0], source[1], table, "name"),
+                        rid!(target[0], target[1], mapped_table, "new_name"),
+                    ));
+                }
+                let router = DtRouter::new(src_engine.clone(), dst_engine.clone(), rules).unwrap();
+                let mut original = build_insert_row(1, "src");
+                original.db = source[0].into();
+                let routed = router.route_row(original.clone()).unwrap();
+                let col = if column_table == Some("t1") {
+                    "new_name"
+                } else {
+                    "name"
+                };
+                let mut actual = routed.clone();
+                actual
+                    .after
+                    .as_mut()
+                    .unwrap()
+                    .insert(col.into(), ColValue::String("dst".into()));
+                let mut ctx = CheckContext {
+                    router: Some(router),
+                    output_full_row: true,
+                    ..Default::default()
+                };
+                let entry = DataChecker::<NoopChecker>::build_check_entry(
+                    CheckInconsistency::Diff(HashMap::from([(
+                        col.into(),
+                        DiffColValue {
+                            src: Some("src".into()),
+                            dst: Some("dst".into()),
+                            src_type: None,
+                            dst_type: None,
+                        },
+                    )])),
+                    &routed,
+                    Some(&actual),
+                    &mut ctx,
+                    &build_mysql_tb_meta(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    [
+                        entry.log.db.as_str(),
+                        entry.log.schema.as_str(),
+                        entry.log.tb.as_str()
+                    ],
+                    source
+                );
+                assert_eq!(
+                    entry.log.target_db.as_deref(),
+                    (source[0] != target[0]).then_some(target[0])
+                );
+                assert_eq!(entry.log.target_schema.as_deref(), Some(target[1]));
+                assert_eq!(entry.log.target_tb.as_deref(), Some(target[2]));
+                assert_eq!(entry.log.src_row, original.after);
+                assert_eq!(
+                    entry.log.dst_row.unwrap()["name"],
+                    ColValue::String("dst".into())
+                );
+                assert_eq!(
+                    entry.log.diff_col_values["name"].src.as_deref(),
+                    Some("src")
+                );
+                assert_eq!(
+                    entry.log.diff_col_values["name"].dst.as_deref(),
+                    Some("dst")
+                );
+            }
+        }
     }
 
     #[tokio::test]

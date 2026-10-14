@@ -89,7 +89,7 @@ impl RdbStructTestRunner {
         // show create database
         let mut tested_dbs = HashSet::new();
         for (source, target) in src_db_tbs.into_iter().zip(dst_db_tbs) {
-            let src_db = String::from(source);
+            let (src_db, _): (String, String) = source.into();
             if tested_dbs.contains(&src_db) {
                 continue;
             }
@@ -99,7 +99,7 @@ impl RdbStructTestRunner {
                 println!("src_ddl_sql: {}\n", src_ddl_sql);
             }
 
-            let dst_db = String::from(target);
+            let (dst_db, _): (String, String) = target.into();
             let dst_ddl_sql = dst_check_fetcher.fetch_database(&dst_db).await?;
             let expect_ddl_sql = expect_ddl_sqls.get(&dst_db).unwrap().to_owned();
 

@@ -283,7 +283,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(ddl.ddl_type, DdlType::MongoShardCollection);
-        assert_eq!(ddl.get_schema_tb(), ("db1".into(), "tb1".into()));
+        assert_eq!(
+            ddl.get_id::<(String, String)>(),
+            ("db1".into(), "tb1".into())
+        );
         let command = query_to_command(&ddl.query).unwrap();
         assert_eq!(command.get_str("shardCollection").unwrap(), "db1.tb1");
         assert_eq!(
@@ -306,9 +309,12 @@ mod tests {
 
         let ddl = change_stream_event_to_ddl(&event).unwrap();
         assert_eq!(ddl.ddl_type, DdlType::MongoRenameCollection);
-        assert_eq!(ddl.get_schema_tb(), ("db1".into(), "old_tb".into()));
         assert_eq!(
-            ddl.get_rename_to_schema_tb(),
+            ddl.get_id::<(String, String)>(),
+            ("db1".into(), "old_tb".into())
+        );
+        assert_eq!(
+            ddl.get_rename_id::<(String, String)>(),
             ("db2".into(), "new_tb".into())
         );
         let command = query_to_command(&ddl.query).unwrap();
@@ -348,6 +354,9 @@ mod tests {
 
         let ddl = raw_change_stream_event_to_ddl(&event).unwrap();
         assert_eq!(ddl.ddl_type, DdlType::MongoDropCollection);
-        assert_eq!(ddl.get_schema_tb(), ("db1".into(), "tb1".into()));
+        assert_eq!(
+            ddl.get_id::<(String, String)>(),
+            ("db1".into(), "tb1".into())
+        );
     }
 }

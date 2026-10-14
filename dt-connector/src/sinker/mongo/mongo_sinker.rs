@@ -16,6 +16,7 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
+    resource::RID,
     utils::limit_queue::LimitedQueue,
 };
 use mongodb::{
@@ -516,12 +517,13 @@ impl MongoSinker {
 
     async fn run_ddl(&mut self, ddl_data: &DdlData) -> Result<()> {
         let mut command = query_to_command(&ddl_data.query)?;
-        self.rewrite_ddl_command_namespace(ddl_data, &mut command);
+        Self::rewrite_ddl_command_namespace(ddl_data, &mut command);
 
         match ddl_data.ddl_type {
             DdlType::MongoDropDatabase => {
-                let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client.database(&db).drop().await?;
+                let id: RID = ddl_data.get_id();
+                let [db] = id.parts();
+                self.mongo_client.database(db).drop().await?;
             }
 
             DdlType::MongoShardCollection => {
@@ -543,8 +545,9 @@ impl MongoSinker {
             | DdlType::MongoCreateIndex
             | DdlType::MongoDropIndex
             | DdlType::MongoCollMod => {
-                let (db, _) = ddl_data.get_schema_tb();
-                self.mongo_client.database(&db).run_command(command).await?;
+                let id: RID = ddl_data.get_id();
+                let [db] = id.parts();
+                self.mongo_client.database(db).run_command(command).await?;
             }
 
             _ => {}
@@ -592,17 +595,19 @@ impl MongoSinker {
         Ok(true)
     }
 
-    fn rewrite_ddl_command_namespace(&self, ddl_data: &DdlData, command: &mut Document) {
-        let (db, tb) = ddl_data.get_schema_tb();
-        let (new_db, new_tb) = ddl_data.get_rename_to_schema_tb();
+    fn rewrite_ddl_command_namespace(ddl_data: &DdlData, command: &mut Document) {
+        let id: RID = ddl_data.get_id();
+        let [db, tb] = id.parts();
         for command_name in ["create", "drop", "createIndexes", "dropIndexes", "collMod"] {
             if command.contains_key(command_name) && !tb.is_empty() {
-                command.insert(command_name, tb.clone());
+                command.insert(command_name, tb);
                 return;
             }
         }
 
         if command.contains_key("renameCollection") {
+            let target: RID = ddl_data.get_rename_id();
+            let [new_db, new_tb] = target.parts();
             command.insert("renameCollection", format!("{}.{}", db, tb));
             command.insert("to", format!("{}.{}", new_db, new_tb));
             return;
@@ -1474,6 +1479,7 @@ impl MongoSinker {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::meta::ddl_meta::ddl_statement::{DdlStatement, MongoCommandStatement};
     use mongodb::bson::{doc, raw::RawDocumentBuf};
 
     use super::*;
@@ -1525,5 +1531,49 @@ mod tests {
             fields.get(MongoConstants::DOC),
             Some(ColValue::MongoDoc(_))
         ));
+    }
+
+    #[test]
+    fn ddl_commands_use_routed_collection_names() {
+        for (ddl_type, table, mut command, expected) in [
+            (
+                DdlType::MongoCreateCollection,
+                "orders.v2",
+                doc! { "create": "orders" },
+                doc! { "create": "orders.v2" },
+            ),
+            (
+                DdlType::MongoRenameCollection,
+                "orders.v2",
+                doc! { "renameCollection": "inventory.orders", "to": "inventory.events" },
+                doc! { "renameCollection": "archive.eu.orders.v2", "to": "history.events" },
+            ),
+            (
+                DdlType::MongoShardCollection,
+                "orders.v2",
+                doc! { "shardCollection": "inventory.orders", "key": { "id": 1 } },
+                doc! { "shardCollection": "archive.eu.orders.v2", "key": { "id": 1 } },
+            ),
+            (
+                DdlType::MongoDropDatabase,
+                "",
+                doc! { "dropDatabase": 1 },
+                doc! { "dropDatabase": 1 },
+            ),
+        ] {
+            let ddl = DdlData {
+                ddl_type,
+                statement: DdlStatement::MongoCommand(MongoCommandStatement {
+                    schema: "archive.eu".into(),
+                    tb: table.into(),
+                    new_schema: "history".into(),
+                    new_tb: "events".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            MongoSinker::rewrite_ddl_command_namespace(&ddl, &mut command);
+            assert_eq!(command, expected, "{:?}", ddl.ddl_type);
+        }
     }
 }

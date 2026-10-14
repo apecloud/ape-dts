@@ -36,6 +36,7 @@ use dt_common::{
         row_type::RowType,
         syncer::Syncer,
     },
+    resource::RID,
     utils::time_util::TimeUtil,
 };
 use futures::StreamExt;
@@ -534,8 +535,7 @@ impl PgCdcExtractor {
             for ddl_data in ddl_data.split_to_multi() {
                 // invalidate metadata cache
                 self.meta_manager.invalidate_cache_by_ddl_data(&ddl_data);
-                let (schema, tb) = ddl_data.get_schema_tb();
-                let id = rid!(schema, tb);
+                let id: RID = ddl_data.get_id();
 
                 if !self.filter.filter_ddl(&id, &ddl_data.ddl_type)? {
                     self.base_extractor

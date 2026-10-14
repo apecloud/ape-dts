@@ -31,6 +31,7 @@ use dt_common::{
         row_type::RowType,
         syncer::Syncer,
     },
+    resource::RID,
     system_dbs::SystemDb,
     utils::time_util::TimeUtil,
 };
@@ -1086,8 +1087,7 @@ impl MongoCdcExtractor {
         ddl_data: DdlData,
         position: Position,
     ) -> anyhow::Result<()> {
-        let (ddl_db, ddl_tb) = ddl_data.get_schema_tb();
-        let id = rid!(ddl_db, ddl_tb);
+        let id: RID = ddl_data.get_id();
         if !self.filter.filter_ddl(&id, &ddl_data.ddl_type)? {
             self.base_extractor
                 .push_ddl(&mut self.extract_state, ddl_data, position)

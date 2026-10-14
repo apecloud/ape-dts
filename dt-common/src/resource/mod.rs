@@ -24,7 +24,6 @@ mod pattern_matcher;
 mod resource_kind;
 mod rid;
 mod rmatcher;
-mod table_id;
 
 pub use exact_matcher::ExactMatcher;
 pub use pattern_matcher::PatternMatcher;
@@ -34,4 +33,3 @@ pub use resource_kind::{
 };
 pub use rid::RID;
 pub use rmatcher::RMatcher;
-pub use table_id::{TableId, TableIdRef};

@@ -15,6 +15,7 @@ use crate::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, DtOptionExt, DtResultExt, ErrorObject},
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY},
+    resource::RID,
 };
 
 #[derive(Clone)]
@@ -161,8 +162,9 @@ impl PgMetaManager {
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
-        let (schema, tb) = ddl_data.get_schema_tb();
-        self.invalidate_cache(&schema, &tb);
+        let id: RID = ddl_data.get_id();
+        let [schema, tb] = id.parts();
+        self.invalidate_cache(schema, tb);
     }
 
     async fn parse_cols(

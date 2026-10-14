@@ -4,7 +4,6 @@ use anyhow::{ensure, Result};
 
 use super::DtRouter;
 use crate::{
-    config::config_enums::DbType,
     meta::{
         col_value::ColValue,
         ddl_meta::{ddl_data::DdlData, ddl_statement::DdlStatement},
@@ -16,58 +15,6 @@ use crate::{
 };
 
 impl DtRouter {
-    pub fn column_map(
-        &self,
-        db: &str,
-        schema: &str,
-        table: &str,
-    ) -> Result<Option<HashMap<String, String>>> {
-        let id = if self.src_db_type() == &DbType::Mssql {
-            rid!(db, schema, table)
-        } else {
-            rid!(schema, table)
-        };
-        self.column_names(&id, false)
-    }
-
-    pub fn reverse_column_map(
-        &self,
-        db: &str,
-        schema: &str,
-        table: &str,
-    ) -> Result<Option<HashMap<String, String>>> {
-        let id = if self.route_db_type() == &DbType::Mssql {
-            rid!(db, schema, table)
-        } else {
-            rid!(schema, table)
-        };
-        self.column_names(&id, true)
-    }
-
-    fn column_names(&self, table: &RID, reverse: bool) -> Result<Option<HashMap<String, String>>> {
-        let Some(router) = self.resource_routers().get(&ResourceKind::Column) else {
-            return Ok(None);
-        };
-        let source = if reverse {
-            self.reverse::<RID>(table)?
-        } else {
-            table.clone()
-        };
-        let mut columns = HashMap::new();
-        for (from, to) in router.mappings() {
-            if from.parent().as_ref() == Some(&source) {
-                let from = from.segments().last().cloned().unwrap_or_default();
-                let to = to.segments().last().cloned().unwrap_or_default();
-                if reverse {
-                    columns.insert(to, from);
-                } else {
-                    columns.insert(from, to);
-                }
-            }
-        }
-        Ok((!columns.is_empty()).then_some(columns))
-    }
-
     pub fn route_row(&self, row: RowData) -> Result<RowData> {
         self.map_row(row, false)
     }
@@ -77,31 +24,18 @@ impl DtRouter {
     }
 
     fn map_row(&self, mut row: RowData, reverse: bool) -> Result<RowData> {
-        let input_db_type = if reverse {
-            self.route_db_type()
+        let source = rid!(row.db, row.schema, row.tb);
+        (row.db, row.schema, row.tb) = if reverse {
+            self.reverse(&source)?
         } else {
-            self.src_db_type()
+            self.forward(&source)?
         };
-        let source = if input_db_type == &DbType::Mssql {
-            rid!(row.db, row.schema, row.tb)
+        let columns = if reverse {
+            self.reverse_column_map(source)
         } else {
-            rid!(row.schema, row.tb)
+            self.column_map(source)
         };
-        let route = |id: &RID| {
-            if reverse {
-                self.reverse::<RID>(id)
-            } else {
-                self.forward::<RID>(id)
-            }
-        };
-        let target = route(&source)?;
-        let db_type = if reverse {
-            self.src_db_type()
-        } else {
-            self.route_db_type()
-        };
-        (row.db, row.schema, row.tb) = resource_parts(target, db_type);
-        let Some(columns) = self.column_names(&source, reverse)? else {
+        let Some(columns) = columns else {
             return Ok(row);
         };
         let map_values = |values: HashMap<String, ColValue>| -> Result<HashMap<String, ColValue>> {
@@ -122,15 +56,8 @@ impl DtRouter {
 
     pub fn route_ddl(&self, mut ddl_data: DdlData) -> Result<DdlData> {
         let src_db = ddl_data.default_db.clone();
-        let route = |schema: &str, table: &str| -> Result<(String, String, String)> {
-            let source = if self.src_db_type() == &DbType::Mssql {
-                rid!(src_db, schema, table)
-            } else {
-                rid!(schema, table)
-            };
-            Ok(resource_parts(self.forward(source)?, self.route_db_type()))
-        };
-        let has_rename_target = !ddl_data.get_rename_to_schema_tb().1.is_empty();
+        let source: RID = ddl_data.get_id();
+        let has_rename_target = !ddl_data.statement.get_rename_to_schema_tb().1.is_empty();
         match &mut ddl_data.statement {
             DdlStatement::MysqlAlterTableRename(_)
             | DdlStatement::PgAlterTableRename(_)
@@ -138,10 +65,8 @@ impl DtRouter {
             | DdlStatement::MongoCommand(_)
                 if has_rename_target =>
             {
-                let (_, src_schema, src_tb) = ddl_data.get_db_schema_tb();
-                let (_, src_new_schema, src_new_tb) = ddl_data.get_rename_to_db_schema_tb();
-                let (_, dst_schema, dst_tb) = route(&src_schema, &src_tb)?;
-                let (_, dst_new_schema, dst_new_tb) = route(&src_new_schema, &src_new_tb)?;
+                let (dst_schema, dst_tb) = self.forward(source)?;
+                let (dst_new_schema, dst_new_tb) = self.forward(ddl_data.get_rename_id::<RID>())?;
                 ddl_data.statement.route_rename_table(
                     dst_schema,
                     dst_tb,
@@ -151,8 +76,11 @@ impl DtRouter {
             }
 
             _ => {
-                let (_, src_schema, src_tb) = ddl_data.get_db_schema_tb();
-                let (_, dst_schema, dst_tb) = route(&src_schema, &src_tb)?;
+                let (dst_schema, dst_tb) = if ddl_data.statement.get_schema_tb().1.is_empty() {
+                    (self.forward::<String>(source)?, String::new())
+                } else {
+                    self.forward(source)?
+                };
                 ddl_data.statement.route(dst_schema, dst_tb);
             }
         }
@@ -167,19 +95,12 @@ impl DtRouter {
 
     pub fn route_struct(&self, mut struct_data: StructData) -> Result<StructData> {
         let src_db = struct_data.db.clone();
-        let route = |schema: &str, table: &str| -> Result<(String, String, String)> {
-            let source = if self.src_db_type() == &DbType::Mssql {
-                rid!(src_db, schema, table)
-            } else {
-                rid!(schema, table)
-            };
-            Ok(resource_parts(self.forward(source)?, self.route_db_type()))
-        };
         let mut dst_db = src_db.clone();
         match &mut struct_data.statement {
             StructStatement::MysqlCreateTable(s) => {
                 let (schema, tb) = (s.table.database_name.clone(), s.table.table_name.clone());
-                let (mapped_db, dst_schema, dst_tb) = route(&schema, &tb)?;
+                let (mapped_db, dst_schema, dst_tb): (String, String, String) =
+                    self.forward(rid!(src_db, schema, tb))?;
                 dst_db = mapped_db;
                 s.route(&dst_schema, &dst_tb)
             }
@@ -192,7 +113,8 @@ impl DtRouter {
 
             StructStatement::MongoCreateCollection(s) => {
                 let (schema, tb) = (s.database_name.clone(), s.collection_name.clone());
-                let (mapped_db, dst_schema, dst_tb) = route(&schema, &tb)?;
+                let (mapped_db, dst_schema, dst_tb): (String, String, String) =
+                    self.forward(rid!(src_db, schema, tb))?;
                 dst_db = mapped_db;
                 s.route(&dst_schema, &dst_tb)
             }
@@ -200,7 +122,8 @@ impl DtRouter {
             StructStatement::MongoShardKey(s) => {
                 let ns = s.shard_collection.ns.clone();
                 if let Some((schema, tb)) = ns.split_once('.') {
-                    let (mapped_db, dst_schema, dst_tb) = route(schema, tb)?;
+                    let (mapped_db, dst_schema, dst_tb): (String, String, String) =
+                        self.forward(rid!(src_db, schema, tb))?;
                     dst_db = mapped_db;
                     s.route(schema, tb, &dst_schema, &dst_tb)
                 }
@@ -208,7 +131,8 @@ impl DtRouter {
 
             StructStatement::PgCreateTable(s) => {
                 let (schema, tb) = (s.table.schema_name.clone(), s.table.table_name.clone());
-                let (mapped_db, dst_schema, dst_tb) = route(&schema, &tb)?;
+                let (mapped_db, dst_schema, dst_tb): (String, String, String) =
+                    self.forward(rid!(src_db, schema, tb))?;
                 dst_db = mapped_db;
                 s.route(&dst_schema, &dst_tb)
             }
@@ -225,14 +149,36 @@ impl DtRouter {
         struct_data.db = dst_db;
         Ok(struct_data)
     }
-}
 
-fn resource_parts(id: RID, db_type: &DbType) -> (String, String, String) {
-    if *db_type == DbType::Mssql {
-        id.into()
-    } else {
-        let (schema, table) = id.into();
-        (String::new(), schema, table)
+    /// Source column prefix, e.g. `rid!("inventory", "orders")` for MySQL.
+    pub fn column_map(&self, prefix: impl Into<RID>) -> Option<HashMap<String, String>> {
+        self.column_names(prefix.into(), false)
+    }
+
+    /// Routed column prefix; returns target column names mapped to source names.
+    pub fn reverse_column_map(&self, prefix: impl Into<RID>) -> Option<HashMap<String, String>> {
+        self.column_names(prefix.into(), true)
+    }
+
+    fn column_names(&self, prefix: RID, reverse: bool) -> Option<HashMap<String, String>> {
+        let router = self.resource_routers().get(&ResourceKind::Column)?;
+        let columns: HashMap<_, _> = router
+            .mappings()
+            .iter()
+            .filter_map(|(source, target)| {
+                let (from, to) = if reverse {
+                    (target, source)
+                } else {
+                    (source, target)
+                };
+                let (name, parent) = from.segments().split_last()?;
+                if parent != prefix.segments() {
+                    return None;
+                }
+                Some((name.clone(), to.segments().last()?.clone()))
+            })
+            .collect();
+        (!columns.is_empty()).then_some(columns)
     }
 }
 
@@ -260,11 +206,7 @@ mod tests {
             (DbType::Mssql, "inventory", "sales"),
             (DbType::Mongo, "", "inventory"),
         ] {
-            let source = if engine == DbType::Mssql {
-                rid!(db, schema, "orders")
-            } else {
-                rid!(schema, "orders")
-            };
+            let source = rid!(db, schema, "orders");
             let target = source.replace_prefix(1, &rid!("archive"));
             let mut rules = vec![(rid!("inventory"), rid!("archive"))];
             let has_columns = engine != DbType::Mongo;
@@ -272,6 +214,24 @@ mod tests {
                 rules.push((source.child("id"), target.child("order_id")));
             }
             let router = DtRouter::new(engine.clone(), engine.clone(), rules).unwrap();
+            assert_eq!(
+                router.has_resource_router(ResourceKind::Column),
+                has_columns
+            );
+            assert_eq!(
+                router.column_map(&source),
+                has_columns.then(|| HashMap::from([("id".into(), "order_id".into())]))
+            );
+            assert_eq!(
+                router.reverse_column_map(target.clone()),
+                has_columns.then(|| HashMap::from([("order_id".into(), "id".into())]))
+            );
+            for prefix in [target.clone(), source.prefix(1), source.child("id")] {
+                assert_eq!(router.column_map(prefix), None);
+            }
+            for prefix in [source.clone(), target.prefix(1), target.child("order_id")] {
+                assert_eq!(router.reverse_column_map(prefix), None);
+            }
             let values = HashMap::from([
                 ("id".into(), ColValue::Long(42)),
                 ("value".into(), ColValue::None),
@@ -306,6 +266,7 @@ mod tests {
                 } else {
                     "id"
                 }));
+                assert_eq!(values.as_ref().unwrap().get("value"), Some(&ColValue::None));
             }
             assert_eq!(router.reverse_route_row(routed).unwrap(), row, "{engine}");
             if has_columns {
@@ -343,13 +304,29 @@ mod tests {
             ddl.default_schema = "inventory".into();
             let routed = router.route_ddl(ddl).unwrap();
             assert_eq!(
-                routed.get_schema_tb(),
+                routed.get_id::<(String, String)>(),
                 ("archive".into(), "old_orders".into())
             );
             assert_eq!(
-                routed.get_rename_to_schema_tb(),
+                routed.get_rename_id::<(String, String)>(),
                 ("archive".into(), "new_events".into())
             );
+        }
+        for (engine, query) in [
+            (DbType::Mysql, "CREATE DATABASE inventory"),
+            (DbType::Mysql, "DROP DATABASE inventory"),
+            (DbType::Pg, "CREATE SCHEMA inventory"),
+            (DbType::Pg, "DROP SCHEMA inventory"),
+        ] {
+            let router = DtRouter::new(
+                engine.clone(),
+                engine.clone(),
+                [(rid!("inventory"), rid!("archive"))],
+            )
+            .unwrap();
+            let ddl = DdlParser::new(engine).parse(query).unwrap().unwrap();
+            let routed = router.route_ddl(ddl).unwrap();
+            assert_eq!(routed.get_id::<RID>(), rid!("archive"), "{query}");
         }
         let router = DtRouter::new(
             DbType::Mysql,
@@ -357,12 +334,6 @@ mod tests {
             [(rid!("inventory"), rid!("archive"))],
         )
         .unwrap();
-        let ddl = DdlParser::new(DbType::Mysql)
-            .parse("CREATE DATABASE inventory")
-            .unwrap()
-            .unwrap();
-        let routed = router.route_ddl(ddl).unwrap();
-        assert_eq!(routed.get_schema_tb().0, "archive");
         let routed = router
             .route_struct(StructData {
                 db: String::new(),
@@ -383,32 +354,8 @@ mod tests {
     }
 
     #[test]
-    fn table_adapters_preserve_namespace_depth_and_cross_engine_layouts() {
+    fn table_adapters_preserve_cross_engine_layouts() {
         for (src_engine, dst_engine, source, target, src_fields, dst_fields) in [
-            (
-                DbType::Pg,
-                DbType::Pg,
-                rid!("inventory"),
-                rid!("archive"),
-                ("", "inventory", ""),
-                ("", "archive", ""),
-            ),
-            (
-                DbType::Mssql,
-                DbType::Mssql,
-                rid!("inventory"),
-                rid!("archive"),
-                ("inventory", "", ""),
-                ("archive", "", ""),
-            ),
-            (
-                DbType::Mssql,
-                DbType::Mssql,
-                rid!("inventory", "sales"),
-                rid!("archive", "history"),
-                ("inventory", "sales", ""),
-                ("archive", "history", ""),
-            ),
             (
                 DbType::Pg,
                 DbType::Mssql,
@@ -426,43 +373,40 @@ mod tests {
                 ("", "archive", "events"),
             ),
         ] {
-            let router = DtRouter::new(src_engine, dst_engine, [(source.clone(), target)]).unwrap();
-            let target: RID = router.forward(&source).unwrap();
-            let routed = resource_parts(target.clone(), router.route_db_type());
-            assert_eq!(
-                (routed.0.as_str(), routed.1.as_str(), routed.2.as_str()),
-                dst_fields
+            let rules = [
+                (source.clone(), target.clone()),
+                (source.child("id"), target.child("order_id")),
+            ];
+            let router = DtRouter::new(src_engine, dst_engine, rules).unwrap();
+            assert_eq!(router.forward::<RID>(&source).unwrap(), target);
+            assert_eq!(router.reverse::<RID>(target).unwrap(), source);
+            let row = RowData::new(
+                src_fields.0.into(),
+                src_fields.1.into(),
+                src_fields.2.into(),
+                0,
+                RowType::Insert,
+                Some(HashMap::from([("id".into(), ColValue::Long(1))])),
+                Some(HashMap::from([("id".into(), ColValue::Long(2))])),
             );
-            let reversed = resource_parts(router.reverse(target).unwrap(), router.src_db_type());
+            let routed_row = router.route_row(row.clone()).unwrap();
             assert_eq!(
                 (
-                    reversed.0.as_str(),
-                    reversed.1.as_str(),
-                    reversed.2.as_str()
+                    routed_row.db.as_str(),
+                    routed_row.schema.as_str(),
+                    routed_row.tb.as_str()
                 ),
-                src_fields
+                dst_fields
             );
-            if !src_fields.2.is_empty() {
-                let row = RowData::new(
-                    src_fields.0.into(),
-                    src_fields.1.into(),
-                    src_fields.2.into(),
-                    0,
-                    RowType::Insert,
-                    None,
-                    None,
-                );
-                let routed_row = router.route_row(row.clone()).unwrap();
-                assert_eq!(
-                    (
-                        routed_row.db.clone(),
-                        routed_row.schema.clone(),
-                        routed_row.tb.clone()
-                    ),
-                    routed
-                );
-                assert_eq!(router.reverse_route_row(routed_row).unwrap(), row);
-            }
+            assert_eq!(
+                routed_row.before.as_ref().unwrap()["order_id"],
+                ColValue::Long(1)
+            );
+            assert_eq!(
+                routed_row.after.as_ref().unwrap()["order_id"],
+                ColValue::Long(2)
+            );
+            assert_eq!(router.reverse_route_row(routed_row).unwrap(), row);
         }
     }
 }
