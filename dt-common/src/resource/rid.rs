@@ -67,6 +67,14 @@ impl RID {
                 .cloned(),
         )
     }
+
+    /// Borrow a segment, returning an empty string when absent.
+    pub fn segment(&self, index: usize) -> &str {
+        self.segments
+            .get(index)
+            .map(String::as_str)
+            .unwrap_or_default()
+    }
 }
 
 impl fmt::Display for RID {
@@ -123,6 +131,25 @@ mod tests {
 
     use super::*;
     use crate::rid;
+
+    #[test]
+    fn borrowed_segments_support_variable_depths_and_missing_levels() {
+        for names in [
+            vec![],
+            vec!["orders"],
+            vec!["shop", "orders"],
+            vec!["db", "shop", "orders"],
+            vec!["server", "db", "shop", "orders"],
+        ] {
+            let id = RID::new(names.clone());
+            for (index, expected) in names.into_iter().enumerate() {
+                assert_eq!(id.segment(index), expected);
+            }
+            for index in [id.len(), usize::MAX] {
+                assert_eq!(id.segment(index), "");
+            }
+        }
+    }
 
     #[test]
     fn identity_preserves_boundaries_and_literal_names() {
