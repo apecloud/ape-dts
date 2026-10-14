@@ -9,6 +9,7 @@ use dt_common::{
         rdb_meta_manager::{RdbMetaManager, RDB_PRIMARY_KEY},
         rdb_tb_meta::SortDirection,
     },
+    rid,
 };
 
 use crate::{
@@ -201,17 +202,9 @@ pub async fn run_order_key_test(db_type: DbType) -> anyhow::Result<()> {
     };
     for (table, expected_payloads) in resume_cases {
         let target = if matches!(db_type, DbType::Mssql) {
-            (
-                "order_key_dst".to_string(),
-                "dbo".to_string(),
-                table.to_string(),
-            )
+            rid!("order_key_dst", "dbo", table)
         } else {
-            (
-                String::new(),
-                "order_key_dst".to_string(),
-                table.to_string(),
-            )
+            rid!("order_key_dst", table)
         };
         let rows = runner.fetch_data(&target, DST).await?;
         let mut payloads = rows

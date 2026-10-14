@@ -1,6 +1,7 @@
 use anyhow::bail;
 use dt_common::config::config_enums::DbType;
 use dt_common::meta::col_value::ColValue;
+use dt_common::resource::RID;
 use dt_common::utils::redis_util::RedisUtil;
 use dt_common::{
     config::{sinker_config::SinkerConfig, task_config::TaskConfig},
@@ -15,7 +16,7 @@ use super::{
     base_test_runner::BaseTestRunner, rdb_test_runner::RdbTestRunner,
     redis_test_util::RedisTestUtil,
 };
-use crate::test_runner::rdb_util::{DbSchemaTb, RdbUtil};
+use crate::test_runner::rdb_util::RdbUtil;
 
 pub struct RdbRedisTestRunner {
     pub base: BaseTestRunner,
@@ -144,13 +145,13 @@ impl RdbRedisTestRunner {
         Ok(())
     }
 
-    pub async fn compare_data_for_tbs(&mut self, db_tbs: &[DbSchemaTb]) {
+    pub async fn compare_data_for_tbs(&mut self, db_tbs: &[RID]) {
         for db_tb in db_tbs {
             assert!(self.compare_tb_data(db_tb).await.unwrap())
         }
     }
 
-    async fn compare_tb_data(&mut self, db_tb: &DbSchemaTb) -> anyhow::Result<bool> {
+    async fn compare_tb_data(&mut self, db_tb: &RID) -> anyhow::Result<bool> {
         if let Some(conn_pool) = &self.mysql_conn_pool {
             // mysql data
             let tb_meta = RdbUtil::get_tb_meta_mysql(conn_pool, db_tb).await?;
@@ -168,7 +169,7 @@ impl RdbRedisTestRunner {
                 };
 
                 // redis data
-                let redis_k = format!("{}.{}.{}", db_tb.1, db_tb.2, key);
+                let redis_k = format!("{}.{}.{}", db_tb.segment(0), db_tb.segment(1), key);
                 let redis_kvs = self
                     .redis_util
                     .get_hash_entry(&mut self.redis_conn, &redis_k);
@@ -181,7 +182,12 @@ impl RdbRedisTestRunner {
                         let redis_v_str = String::from_utf8(v.clone()).unwrap();
                         let expected = Self::redis_expected_value(db_v).unwrap_or_default();
                         if redis_v_str != expected {
-                            println!("compare db: {}, tb: {}, col: {}", db_tb.1, db_tb.2, col);
+                            println!(
+                                "compare db: {}, tb: {}, col: {}",
+                                db_tb.segment(0),
+                                db_tb.segment(1),
+                                col
+                            );
                         }
                         assert_eq!(redis_v_str, expected)
                     }
