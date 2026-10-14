@@ -9,6 +9,7 @@ use super::{CommonFilter, CommonFilterKind, DtFilter, ExpressionFilter, Resource
 use crate::{
     config::{
         config_enums::DbType,
+        config_token_parser::ConfigTokenParser,
         filter_config::{ExpressionFilterConfig, FilterConfig, FilterSectionConfig, RULES},
     },
     meta::{
@@ -16,123 +17,12 @@ use crate::{
         struct_meta::structure::structure_type::StructureType,
     },
     resource::{
-        config_parser as config, resource_depth, validate_rid, ResourceKind, REGEX_PREFIX, RID,
+        ResourceConfigParser, ResourceKind, MAPPING_SEPARATOR, REGEX_PREFIX, RESOURCE_DELIMITERS,
+        RESOURCE_SEPARATOR, RID, RULE_SEPARATOR, WILDCARD,
     },
-    utils::sql_util::SqlUtil,
 };
 
-fn patterns(value: &str, db_type: &DbType) -> Result<HashSet<RID>> {
-    config::paths(value, db_type)?
-        .into_iter()
-        .map(|path| {
-            for token in &path {
-                config::literal(token, db_type)?;
-            }
-            Ok(RID::new(path))
-        })
-        .collect()
-}
-
-fn common_values(value: &str, kind: CommonFilterKind) -> Result<HashSet<String>> {
-    ensure!(
-        kind == CommonFilterKind::Cmd || !value.trim_end().ends_with(','),
-        "trailing comma in {} filter values",
-        kind.as_ref()
-    );
-    let mut rules = HashSet::new();
-    let mut remaining = value.trim();
-    while !remaining.is_empty() {
-        // Keep commas inside r#...# in the same literal command token.
-        let (name, rest) = if kind == CommonFilterKind::Cmd && remaining.starts_with(REGEX_PREFIX) {
-            let (name, rest) = config::token(remaining, &[])?;
-            ensure!(
-                rest.is_empty() || rest.starts_with(','),
-                "expected comma after command value"
-            );
-            (name, rest.strip_prefix(',').unwrap_or(rest))
-        } else {
-            remaining.split_once(',').unwrap_or((remaining, ""))
-        };
-        let name = name.trim();
-        remaining = rest.trim_start();
-        if kind == CommonFilterKind::Cmd && name.is_empty() {
-            continue;
-        }
-        if name == "*" {
-            rules.insert(name.to_owned());
-            continue;
-        }
-        let valid = match kind {
-            CommonFilterKind::Event => RowType::from_str(name).is_ok(),
-            CommonFilterKind::Ddl => DdlType::from_str(name).is_ok(),
-            CommonFilterKind::Dcl => DclType::from_str(name).is_ok(),
-            CommonFilterKind::Structure => StructureType::from_str(name).is_ok(),
-            CommonFilterKind::Cmd => true,
-        };
-        ensure!(valid, "invalid {} filter value {name}", kind.as_ref());
-        rules.insert(name.to_owned());
-    }
-    Ok(rules)
-}
-
-fn common_filter(kind: CommonFilterKind, base: &FilterSectionConfig) -> Result<CommonFilter> {
-    let context = format!("[{RULES}.{}]", kind.as_ref());
-    Ok(CommonFilter {
-        do_set: common_values(
-            base.do_rules
-                .as_deref()
-                .unwrap_or_else(|| kind.default_do()),
-            kind,
-        )
-        .with_context(|| format!("{context}.do"))?,
-        ignore_set: common_values(base.ignore_rules.as_deref().unwrap_or_default(), kind)
-            .with_context(|| format!("{context}.ignore"))?,
-    })
-}
-
-fn where_conditions(value: &str, kind: ResourceKind, db_type: &DbType) -> Result<ExpressionFilter> {
-    let pairs = SqlUtil::get_escape_pairs(db_type);
-    let mut remaining = value.trim();
-    let mut conditions = HashMap::new();
-    while !remaining.is_empty() {
-        let mut segments = Vec::new();
-        loop {
-            let (token, rest) = config::token(remaining, &pairs)?;
-            segments.push(token.to_owned());
-            if let Some(rest) = rest.strip_prefix('.') {
-                remaining = rest;
-            } else {
-                remaining = rest
-                    .strip_prefix(':')
-                    .context("expected ':' after WHERE resource ID")?
-                    .trim_start();
-                break;
-            }
-        }
-        let id = config::exact_path(segments, db_type)?;
-        validate_rid(db_type, kind, &id)?;
-        ensure!(
-            remaining.starts_with('"'),
-            "WHERE expression must be enclosed in JSON double quotes"
-        );
-        // Decode one JSON string, then resume at its byte offset.
-        let mut strings = serde_json::Deserializer::from_str(remaining).into_iter::<String>();
-        let condition = strings
-            .next()
-            .context("missing WHERE expression")?
-            .context("invalid JSON string escape in WHERE expression")?;
-        remaining = remaining[strings.byte_offset()..].trim_start();
-        conditions.entry(id).or_insert(condition);
-        if !remaining.is_empty() {
-            remaining = remaining
-                .strip_prefix(',')
-                .context("expected ',' after WHERE expression")?
-                .trim_start();
-            ensure!(!remaining.is_empty(), "trailing comma in WHERE conditions");
-        }
-    }
-    Ok(ExpressionFilter::WhereConditions { conditions })
-}
+const VALUE_DELIMITERS: &[char] = &[','];
 
 impl DtFilter {
     pub fn from_config(config: &FilterConfig, db_type: DbType) -> Result<Self> {
@@ -147,29 +37,31 @@ impl DtFilter {
                     base.expression_filters.is_empty(),
                     "[{RULES}.{name}].where_conditions requires a resource section"
                 );
-                filter.set_common_filter(kind, common_filter(kind, base)?);
+                filter.set_common_filter(kind, CommonFilter::from_config(kind, base)?);
                 continue;
             }
-            let empty = [&base.do_rules, &base.ignore_rules]
-                .iter()
-                .all(|value| value.as_deref().unwrap_or_default().trim().is_empty())
-                && base.expression_filters.is_empty();
-            let Some(kind) = config::section_kind(name, &db_type, empty)? else {
+            let Some(kind) = ResourceKind::from_section(name, &db_type)? else {
                 continue;
             };
             let resource_filter = ResourceFilter {
-                do_set: patterns(base.do_rules.as_deref().unwrap_or_default(), &db_type)
-                    .with_context(|| format!("{kind:?}.do"))?,
-                ignore_set: patterns(base.ignore_rules.as_deref().unwrap_or_default(), &db_type)
-                    .with_context(|| format!("{kind:?}.ignore"))?,
+                do_set: ResourceFilter::parse_patterns(
+                    base.do_rules.as_deref().unwrap_or_default(),
+                    &db_type,
+                )
+                .with_context(|| format!("{kind:?}.do"))?,
+                ignore_set: ResourceFilter::parse_patterns(
+                    base.ignore_rules.as_deref().unwrap_or_default(),
+                    &db_type,
+                )
+                .with_context(|| format!("{kind:?}.ignore"))?,
             };
-            let depth = resource_depth(&db_type, kind).context("unsupported resource kind")?;
+            let depth = kind.depth(&db_type).context("unsupported resource kind")?;
             resource_filter.validate(depth + 1, &filter.matcher)?;
             filter.set_resource_filter(kind, resource_filter)?;
             for expression in &base.expression_filters {
                 let expression = match expression {
                     ExpressionFilterConfig::WhereConditions(value) => {
-                        where_conditions(value, kind, &db_type)
+                        ExpressionFilter::parse_where_conditions(value, kind, &db_type)
                             .with_context(|| format!("{kind:?}.where_conditions"))?
                     }
                 };
@@ -180,6 +72,127 @@ impl DtFilter {
     }
 }
 
+impl CommonFilter {
+    fn from_config(kind: CommonFilterKind, base: &FilterSectionConfig) -> Result<Self> {
+        let context = format!("[{RULES}.{}]", kind.as_ref());
+        Ok(Self {
+            do_set: Self::parse_values(
+                base.do_rules
+                    .as_deref()
+                    .unwrap_or_else(|| kind.default_do()),
+                kind,
+            )
+            .with_context(|| format!("{context}.do"))?,
+            ignore_set: Self::parse_values(base.ignore_rules.as_deref().unwrap_or_default(), kind)
+                .with_context(|| format!("{context}.ignore"))?,
+        })
+    }
+
+    fn parse_values(value: &str, kind: CommonFilterKind) -> Result<HashSet<String>> {
+        ensure!(
+            kind == CommonFilterKind::Cmd || !value.trim_end().ends_with(RULE_SEPARATOR),
+            "trailing comma in {} filter values",
+            kind.as_ref()
+        );
+        let pairs = ResourceConfigParser::escape_pairs(&[]);
+        let mut rules = HashSet::new();
+        let mut remaining = value.trim();
+        while !remaining.is_empty() {
+            // Keep commas inside r#...# in the same literal command token.
+            let (name, rest) = if kind == CommonFilterKind::Cmd
+                && remaining.starts_with(REGEX_PREFIX)
+            {
+                let (name, rest) = ConfigTokenParser::token(remaining, VALUE_DELIMITERS, &pairs)?;
+                ensure!(
+                    rest.is_empty() || rest.starts_with(RULE_SEPARATOR),
+                    "expected comma after command value"
+                );
+                (name, rest.strip_prefix(RULE_SEPARATOR).unwrap_or(rest))
+            } else {
+                remaining
+                    .split_once(RULE_SEPARATOR)
+                    .unwrap_or((remaining, ""))
+            };
+            let name = name.trim();
+            remaining = rest.trim_start();
+            if kind == CommonFilterKind::Cmd && name.is_empty() {
+                continue;
+            }
+            if name == WILDCARD {
+                rules.insert(name.to_owned());
+                continue;
+            }
+            let valid = match kind {
+                CommonFilterKind::Event => RowType::from_str(name).is_ok(),
+                CommonFilterKind::Ddl => DdlType::from_str(name).is_ok(),
+                CommonFilterKind::Dcl => DclType::from_str(name).is_ok(),
+                CommonFilterKind::Structure => StructureType::from_str(name).is_ok(),
+                CommonFilterKind::Cmd => true,
+            };
+            ensure!(valid, "invalid {} filter value {name}", kind.as_ref());
+            rules.insert(name.to_owned());
+        }
+        Ok(rules)
+    }
+}
+
+impl ExpressionFilter {
+    fn parse_where_conditions(value: &str, kind: ResourceKind, db_type: &DbType) -> Result<Self> {
+        let pairs = ResourceConfigParser::escape_pairs(&[db_type]);
+        let mut remaining = value.trim();
+        let mut conditions = HashMap::new();
+        while !remaining.is_empty() {
+            let mut segments = Vec::new();
+            loop {
+                let (token, rest) =
+                    ConfigTokenParser::token(remaining, RESOURCE_DELIMITERS, &pairs)?;
+                segments.push(token.to_owned());
+                if let Some(rest) = rest.strip_prefix(RESOURCE_SEPARATOR) {
+                    remaining = rest;
+                } else {
+                    remaining = rest
+                        .strip_prefix(MAPPING_SEPARATOR)
+                        .context("expected ':' after WHERE resource ID")?
+                        .trim_start();
+                    break;
+                }
+            }
+            let id = ResourceConfigParser::exact_path(segments, db_type)?;
+            kind.validate_rid(db_type, &id)?;
+            // Decode one JSON string, then resume at its byte offset.
+            let mut strings = serde_json::Deserializer::from_str(remaining).into_iter::<String>();
+            let condition = strings
+                .next()
+                .context("missing WHERE expression")?
+                .context("invalid JSON string escape in WHERE expression")?;
+            remaining = remaining[strings.byte_offset()..].trim_start();
+            conditions.entry(id).or_insert(condition);
+            if !remaining.is_empty() {
+                remaining = remaining
+                    .strip_prefix(RULE_SEPARATOR)
+                    .context("expected ',' after WHERE expression")?
+                    .trim_start();
+                ensure!(!remaining.is_empty(), "trailing comma in WHERE conditions");
+            }
+        }
+        Ok(Self::WhereConditions { conditions })
+    }
+}
+
+impl ResourceFilter {
+    fn parse_patterns(value: &str, db_type: &DbType) -> Result<HashSet<RID>> {
+        ResourceConfigParser::paths(value, db_type)?
+            .into_iter()
+            .map(|path| {
+                for token in &path {
+                    ResourceConfigParser::literal(token, db_type)?;
+                }
+                Ok(RID::new(path))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -187,7 +200,7 @@ mod tests {
     use configparser::ini::Ini;
 
     use super::*;
-    use crate::{resource::resource_levels, rid};
+    use crate::rid;
 
     fn load_filter(ini: &Ini, db_type: DbType) -> Result<DtFilter> {
         DtFilter::from_config(&FilterConfig::from_ini(ini)?, db_type)
@@ -248,7 +261,12 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(DtFilter::from_config(&FilterConfig::Basic(bases.clone()), DbType::Mssql).is_err());
+        assert!(
+            !DtFilter::from_config(&FilterConfig::Basic(bases.clone()), DbType::Mssql)
+                .unwrap()
+                .resource_filters()
+                .contains_key(&ResourceKind::Collection)
+        );
         let mut sections = BTreeMap::from([("table".to_owned(), FilterSectionConfig::default())]);
         for value in [None, Some(String::new())] {
             sections.get_mut("table").unwrap().do_rules = value;
@@ -311,12 +329,6 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
         }
         for (db_type, text) in [
             (DbType::Mysql, "[rules.unknown]\ndo=grant"),
-            (DbType::Pg, "[rules.database]\ndo=db"),
-            (DbType::Mysql, "[rules.schema]\ndo=schema"),
-            (DbType::Kafka, "[rules.db]\ndo=db"),
-            (DbType::Pg, "[rules.db]\ndo=db"),
-            (DbType::Mongo, "[rules.column]\nignore=db.c.field"),
-            (DbType::Mysql, "[rules.collection]\ndo=db.c"),
             (DbType::Mongo, "[rules.document]\ndo=db.c"),
         ] {
             let config = FilterConfig::from_ini(&ini(text)).unwrap();
@@ -328,6 +340,26 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
         )
         .unwrap();
         assert!(!filter.filter(rid!("inventory", "order")).unwrap());
+    }
+
+    #[test]
+    fn unsupported_resource_sections_are_skipped_before_parsing_values() {
+        for (engine, supported, ignored) in [
+            (DbType::Mysql, "db", "schema"),
+            (DbType::Mysql, "db", "collection"),
+            (DbType::Pg, "schema", "database"),
+            (DbType::Mssql, "db", "topic"),
+            (DbType::Mongo, "db", "column"),
+            (DbType::Redis, "db", "table"),
+            (DbType::Kafka, "topic", "db"),
+        ] {
+            let text = format!("[rules.{supported}]\ndo=selected\n[rules.{ignored}]\ndo=r#[#\nignore=invalid..path\nwhere_conditions=invalid");
+            let filter = load_filter(&ini(&text), engine).unwrap();
+            assert!(!filter.filter(rid!("selected")).unwrap(), "{text}");
+            assert!(filter.filter(rid!("other")).unwrap(), "{text}");
+            assert_eq!(filter.resource_filters().len(), 1);
+            assert!(filter.expression_filters.is_empty());
+        }
     }
 
     #[test]
@@ -392,7 +424,7 @@ ignore=SET"#))
             DbType::StarRocks,
             DbType::Doris,
         ] {
-            let depth = resource_levels(&engine)
+            let depth = ResourceKind::levels(&engine)
                 .iter()
                 .take_while(|&&kind| kind != ResourceKind::Column)
                 .count();
@@ -488,7 +520,7 @@ ignore=update"#,
         ] {
             let mut ini = ini("");
             let mut ids = Vec::new();
-            for &kind in resource_levels(&engine) {
+            for &kind in ResourceKind::levels(&engine) {
                 let name = match kind {
                     ResourceKind::Database => "db",
                     ResourceKind::Schema => "schema",
@@ -617,6 +649,17 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             (DbType::Mysql, "table", r#"db:"wrong depth""#),
             (DbType::Mysql, "db", r#"db.t:"wrong depth""#),
             (DbType::Mssql, "table", r#"db.t:"missing schema""#),
+            (
+                DbType::Mysql,
+                "table",
+                r#"[db].t:"wrong identifier quotes""#,
+            ),
+            (DbType::Pg, "table", r#"`db`.t:"wrong identifier quotes""#),
+            (
+                DbType::Mssql,
+                "table",
+                r#""db".dbo.t:"wrong identifier quotes""#,
+            ),
             (DbType::Mysql, "table", r#"db.*:"wildcard unsupported""#),
             (DbType::Mysql, "table", r#"db.t?:"wildcard unsupported""#),
             (
@@ -630,9 +673,6 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             (DbType::Mysql, "table", r#"db..t:"empty segment""#),
             (DbType::Mysql, "table", r#"db.t,db.other:"multiple paths""#),
             (DbType::Mysql, "event", ""),
-            (DbType::Mysql, "schema", ""),
-            (DbType::Pg, "db", ""),
-            (DbType::Mongo, "column", ""),
         ] {
             let config = FilterConfig::from_ini(&ini(&format!(
                 "[rules.{section}]\nwhere_conditions={value}"
@@ -663,7 +703,12 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             r#"db.t:"ok",,db.other:"extra comma""#,
         ] {
             assert!(
-                where_conditions(value, ResourceKind::Table, &DbType::Mysql).is_err(),
+                ExpressionFilter::parse_where_conditions(
+                    value,
+                    ResourceKind::Table,
+                    &DbType::Mysql
+                )
+                .is_err(),
                 "{value}"
             );
         }
@@ -704,7 +749,10 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             assert!(!f.filter_event(&selected, &RowType::Insert).unwrap());
             assert!(f.filter(&excluded).unwrap());
         }
-        assert!(load_filter(&ini("[filter]\ndo_dbs=topic"), DbType::Kafka).is_err());
+        assert!(load_filter(&ini("[filter]\ndo_dbs=topic"), DbType::Kafka)
+            .unwrap()
+            .resource_filters()
+            .is_empty());
     }
 
     #[test]
@@ -723,7 +771,7 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             "[rules.structure]\nignore=typo",
             "[rules.events]\ndo=insert",
             r#"[filter]
-    where_conditions=json:[{"id":["db","t"],"db":"other","tb":"t","condition":"id > 1"}]"#,
+    where_conditions=json:[{"id":["db","t"],"condition":"id > 1"}]"#,
         ] {
             let ini = ini(text);
             let config = FilterConfig::from_ini(&ini).unwrap();
@@ -743,13 +791,13 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             ("`a.b`.`order+*`", rid!("`a.b`", "`order+*`")),
         ] {
             assert_eq!(
-                patterns(value, &DbType::Mysql).unwrap(),
+                ResourceFilter::parse_patterns(value, &DbType::Mysql).unwrap(),
                 HashSet::from([expected]),
                 "{value}"
             );
         }
         assert_eq!(
-            patterns("`db`.`^.*$`,db.*,db.*", &DbType::Mysql).unwrap(),
+            ResourceFilter::parse_patterns("`db`.`^.*$`,db.*,db.*", &DbType::Mysql).unwrap(),
             HashSet::from([rid!("`db`", "`^.*$`"), rid!("db", "*")])
         );
     }

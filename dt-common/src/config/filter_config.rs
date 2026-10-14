@@ -4,13 +4,13 @@ use anyhow::{ensure, Result};
 use configparser::ini::Ini;
 
 use super::router_config::{ROUTE, TO_PREFIX};
+use crate::resource::{RESOURCE_SEPARATOR, WILDCARD};
 
 pub const FILTER: &str = "filter";
 pub const RULES: &str = "rules";
 pub const DO: &str = "do";
 pub const IGNORE: &str = "ignore";
 pub const WHERE_CONDITIONS: &str = "where_conditions";
-const DEFAULT_SELECTION: &str = "*";
 
 /// Any `[rules.*]` section, even empty, selects Basic and disables legacy `[filter]`.
 #[derive(Debug, Clone, Hash)]
@@ -63,7 +63,7 @@ pub enum ExpressionFilterConfig {
 
 impl FilterSectionConfig {
     pub fn from_ini(ini: &Ini) -> Result<BTreeMap<String, Self>> {
-        let prefix = format!("{RULES}.");
+        let prefix = format!("{RULES}{RESOURCE_SEPARATOR}");
         let mut result = BTreeMap::new();
         for (section, fields) in ini.get_map_ref() {
             let Some(name) = section.strip_prefix(prefix.as_str()) else {
@@ -105,11 +105,11 @@ impl LegacyFilterConfig {
             do_events: ini
                 .get(FILTER, "do_events")
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| DEFAULT_SELECTION.into()),
+                .unwrap_or_else(|| WILDCARD.into()),
             do_structures: ini
                 .get(FILTER, "do_structures")
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| DEFAULT_SELECTION.into()),
+                .unwrap_or_else(|| WILDCARD.into()),
             do_ddls: ini.get(FILTER, "do_ddls").unwrap_or_default(),
             do_dcls: ini.get(FILTER, "do_dcls").unwrap_or_default(),
             ignore_cmds: ini.get(FILTER, "ignore_cmds").unwrap_or_default(),

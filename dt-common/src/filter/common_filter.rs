@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use strum::{AsRefStr, EnumIter, EnumString};
 
+use crate::resource::WILDCARD;
+
 #[derive(Debug, Clone, Default)]
 pub struct CommonFilter {
     pub do_set: HashSet<String>,
@@ -15,7 +17,7 @@ impl CommonFilter {
 
     /// Only `do={"*"}` selects all; ignore values are literal and take precedence.
     pub fn excludes_value(&self, value: &str) -> bool {
-        let all = self.do_set.len() == 1 && self.do_set.contains("*");
+        let all = self.do_set.len() == 1 && self.do_set.contains(WILDCARD);
         self.ignore_set.contains(value) || (!all && !self.do_set.contains(value))
     }
 }
@@ -33,7 +35,7 @@ pub enum CommonFilterKind {
 impl CommonFilterKind {
     pub fn default_do(self) -> &'static str {
         match self {
-            Self::Event | Self::Structure | Self::Cmd => "*",
+            Self::Event | Self::Structure | Self::Cmd => WILDCARD,
             Self::Ddl | Self::Dcl => "",
         }
     }

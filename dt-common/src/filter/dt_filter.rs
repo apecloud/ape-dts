@@ -11,7 +11,7 @@ use crate::{
         dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
         struct_meta::structure::structure_type::StructureType,
     },
-    resource::{resource_kind, resource_levels, PatternMatcher, ResourceKind, RID},
+    resource::{PatternMatcher, ResourceKind, RID, WILDCARD},
     utils::sql_util::SqlUtil,
 };
 
@@ -86,7 +86,7 @@ impl DtFilter {
     pub fn filter_common(&self, kind: CommonFilterKind, value: &str) -> bool {
         match self.common_filters.get(&kind) {
             Some(filter) => filter.excludes_value(value),
-            None => kind.default_do() != "*",
+            None => kind.default_do() != WILDCARD,
         }
     }
 
@@ -103,7 +103,7 @@ impl DtFilter {
     /// Preserve RID tokens for `PatternMatcher`, including quotes and regex delimiters.
     pub fn add_do(&mut self, pattern: impl Into<RID>) -> Result<()> {
         let id: RID = pattern.into();
-        let Some(kind) = resource_kind(&self.db_type, &id) else {
+        let Some(kind) = ResourceKind::from_rid(&self.db_type, &id) else {
             return Ok(());
         };
         self.resource_filters
@@ -117,7 +117,7 @@ impl DtFilter {
 
     pub fn add_ignore(&mut self, pattern: impl Into<RID>) -> Result<()> {
         let id: RID = pattern.into();
-        let Some(kind) = resource_kind(&self.db_type, &id) else {
+        let Some(kind) = ResourceKind::from_rid(&self.db_type, &id) else {
             return Ok(());
         };
         self.resource_filters
@@ -131,7 +131,7 @@ impl DtFilter {
 
     pub fn filter(&self, id: impl Into<RID>) -> Result<bool> {
         let id = id.into();
-        let kind = resource_kind(&self.db_type, &id);
+        let kind = ResourceKind::from_rid(&self.db_type, &id);
         if kind == Some(ResourceKind::Column) {
             let table = id.prefix(id.len().saturating_sub(1));
             let Some(columns) = self.resource_filters.get(&ResourceKind::Column) else {
@@ -155,7 +155,7 @@ impl DtFilter {
             }
         }
         let mut excluded = true;
-        for (index, kind) in resource_levels(&self.db_type).iter().enumerate().rev() {
+        for (index, kind) in ResourceKind::levels(&self.db_type).iter().enumerate().rev() {
             if *kind == ResourceKind::Column {
                 continue;
             }
@@ -417,7 +417,7 @@ mod tests {
             (DbType::Redis, "r#order[0-9]+#", "order12", "order12tail"),
             (DbType::Kafka, "r#order*#", "orde", "order1"),
         ] {
-            let levels = resource_levels(&engine);
+            let levels = ResourceKind::levels(&engine);
             let depth = levels
                 .iter()
                 .take_while(|&&kind| kind != ResourceKind::Column)

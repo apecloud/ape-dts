@@ -7,129 +7,13 @@ use strum::IntoEnumIterator;
 use super::{CommonFilter, CommonFilterKind, DtFilter, ExpressionFilter, ResourceFilter};
 use crate::{
     config::{
-        config_enums::DbType,
-        config_token_parser::{ConfigTokenParser, TokenEscapePair},
+        config_enums::DbType, config_token_parser::ConfigTokenParser,
         filter_config::LegacyFilterConfig,
     },
-    resource::{
-        config_parser as config, legacy, resource_depth, resource_levels, validate_rid,
-        ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID,
-    },
+    resource::{ResourceConfigParser, ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID, WILDCARD},
 };
 
-impl DtFilter {
-    pub fn from_legacy_config(options: &LegacyFilterConfig, db_type: DbType) -> Result<Self> {
-        let mut filter = Self::new(db_type.clone());
-        resource_filters(options, &db_type, &mut filter)?;
-        for kind in CommonFilterKind::iter() {
-            if let Some(common) = common_filter(kind, options, &db_type)? {
-                filter.set_common_filter(kind, common);
-            }
-        }
-        if !options.where_conditions.trim().is_empty() {
-            let expression = where_conditions(&options.where_conditions, &db_type)
-                .context("[filter].where_conditions")?;
-            let ExpressionFilter::WhereConditions { conditions } = &expression;
-            if !conditions.is_empty() {
-                filter.set_expression_filter(ResourceKind::Table, expression)?;
-            }
-        }
-        Ok(filter)
-    }
-}
-
-fn common_filter(
-    kind: CommonFilterKind,
-    options: &LegacyFilterConfig,
-    db_type: &DbType,
-) -> Result<Option<CommonFilter>> {
-    let (key, value) = match kind {
-        CommonFilterKind::Event => ("do_events", options.do_events.as_str()),
-        CommonFilterKind::Ddl => ("do_ddls", options.do_ddls.as_str()),
-        CommonFilterKind::Dcl => ("do_dcls", options.do_dcls.as_str()),
-        CommonFilterKind::Structure => ("do_structures", options.do_structures.as_str()),
-        CommonFilterKind::Cmd => ("ignore_cmds", "*"),
-    };
-    let value = if value.trim().is_empty() {
-        kind.default_do()
-    } else {
-        value
-    };
-    let ignore_set = if kind == CommonFilterKind::Cmd {
-        common_values(&options.ignore_cmds, db_type).context("[filter].ignore_cmds")?
-    } else {
-        HashSet::new()
-    };
-    if value == kind.default_do() && ignore_set.is_empty() {
-        return Ok(None);
-    }
-    let do_set = common_values(value, db_type).with_context(|| format!("[filter].{key}"))?;
-    Ok(Some(CommonFilter::new(do_set, ignore_set)))
-}
-
-fn common_values(value: &str, db_type: &DbType) -> Result<HashSet<String>> {
-    let pairs = [TokenEscapePair::from((
-        REGEX_PREFIX.into(),
-        REGEX_SUFFIX.into(),
-    ))];
-    ConfigTokenParser::parse_config(value, db_type, &[',', '.'], Some(&pairs))?
-        .into_iter()
-        .map(|token| {
-            // Legacy parsing validates regex syntax even though common values match literally.
-            if let Some(pattern) = token
-                .strip_prefix(REGEX_PREFIX)
-                .and_then(|inner| inner.strip_suffix(REGEX_SUFFIX))
-            {
-                regex::Regex::new(pattern)
-                    .with_context(|| format!("invalid filter regex {token}"))?;
-            }
-            Ok(token)
-        })
-        .collect()
-}
-
-/// Escape exact legacy JSON names for use as resource patterns.
-fn literal_pattern(id: RID) -> RID {
-    RID::new(
-        id.segments()
-            .iter()
-            .map(|segment| format!("{REGEX_PREFIX}(?:{}){REGEX_SUFFIX}", regex::escape(segment))),
-    )
-}
-
-fn patterns(value: &str, db_type: &DbType, table: bool) -> Result<HashSet<RID>> {
-    let paths = if table && matches!(db_type, DbType::Mssql) {
-        config::paths(value, db_type)?
-    } else {
-        // Legacy non-MSSQL table rules and namespace rules flatten commas and dots.
-        let pairs = [TokenEscapePair::from((
-            REGEX_PREFIX.into(),
-            REGEX_SUFFIX.into(),
-        ))];
-        let tokens =
-            ConfigTokenParser::parse_config(value.trim(), db_type, &[',', '.'], Some(&pairs))?;
-        let depth = if table { 2 } else { 1 };
-        ensure!(
-            tokens.len() % depth == 0,
-            "incomplete legacy resource pattern"
-        );
-        tokens.chunks(depth).map(|chunk| chunk.to_vec()).collect()
-    };
-    paths
-        .into_iter()
-        .map(|path| {
-            let path = if table {
-                legacy::table(path, db_type)?
-            } else {
-                path
-            };
-            for token in &path {
-                config::quoted_literal(token, db_type)?;
-            }
-            Ok(RID::new(path))
-        })
-        .collect()
-}
+const FILTER_DELIMITERS: &[char] = &['.', ','];
 
 #[derive(Deserialize)]
 struct IgnoreColumns {
@@ -138,98 +22,6 @@ struct IgnoreColumns {
     ignore_cols: Vec<String>,
 }
 
-fn resource_filters(
-    options: &LegacyFilterConfig,
-    db_type: &DbType,
-    filter: &mut DtFilter,
-) -> Result<()> {
-    if matches!(db_type, DbType::Kafka) {
-        for (key, value) in [
-            ("do_dbs", &options.do_schemas),
-            ("ignore_dbs", &options.ignore_schemas),
-        ] {
-            ensure!(
-                value.trim().is_empty(),
-                "[filter].{key} is not supported by {db_type}; use [rules.topic]"
-            );
-        }
-    }
-    if matches!(db_type, DbType::Redis | DbType::Kafka) {
-        for (key, value) in [
-            ("do_tbs", &options.do_tbs),
-            ("ignore_tbs", &options.ignore_tbs),
-        ] {
-            ensure!(
-                value.trim().is_empty(),
-                "[filter].{key} is not supported by {db_type}"
-            );
-        }
-    }
-    for (index, &kind) in resource_levels(db_type).iter().enumerate() {
-        let (do_key, do_value, ignore_key, ignore_value, table) = if index == 0 {
-            (
-                "do_dbs",
-                &options.do_schemas,
-                "ignore_dbs",
-                &options.ignore_schemas,
-                false,
-            )
-        } else if matches!(kind, ResourceKind::Table | ResourceKind::Collection) {
-            (
-                "do_tbs",
-                &options.do_tbs,
-                "ignore_tbs",
-                &options.ignore_tbs,
-                true,
-            )
-        } else {
-            continue;
-        };
-        let resource_filter = ResourceFilter::new(
-            patterns(do_value, db_type, table).with_context(|| format!("[filter].{do_key}"))?,
-            patterns(ignore_value, db_type, table)
-                .with_context(|| format!("[filter].{ignore_key}"))?,
-        );
-        resource_filter.validate(index + 1, &filter.matcher)?;
-        filter.set_resource_filter(kind, resource_filter)?;
-    }
-    if !options.ignore_cols.trim().is_empty() {
-        let depth = resource_depth(db_type, ResourceKind::Column)
-            .with_context(|| format!("{db_type} does not support column filtering"))?;
-        let mut tables = BTreeMap::new();
-        for row in config::json::<Vec<IgnoreColumns>>(&options.ignore_cols)
-            .context("[filter].ignore_cols")?
-        {
-            tables.insert(
-                legacy::json_table(&row.db, &row.tb, db_type)?,
-                row.ignore_cols,
-            );
-        }
-        let mut columns = HashSet::new();
-        for (table, names) in tables {
-            for name in names {
-                columns.insert(literal_pattern(table.child(name)));
-            }
-        }
-        let resource_filter = ResourceFilter::new(HashSet::new(), columns);
-        resource_filter.validate(depth + 1, &filter.matcher)?;
-        filter.set_resource_filter(ResourceKind::Column, resource_filter)?;
-    }
-    Ok(())
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum WhereRule {
-    Resource(ResourceWhere),
-    Legacy(LegacyWhere),
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResourceWhere {
-    id: RID,
-    condition: String,
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LegacyWhere {
@@ -238,19 +30,200 @@ struct LegacyWhere {
     condition: String,
 }
 
-fn where_conditions(value: &str, db_type: &DbType) -> Result<ExpressionFilter> {
-    let mut conditions = HashMap::new();
-    for rule in config::json::<Vec<WhereRule>>(value)? {
-        let (id, condition) = match rule {
-            WhereRule::Resource(ResourceWhere { id, condition }) => (id, condition),
-            WhereRule::Legacy(LegacyWhere { db, tb, condition }) => {
-                (legacy::json_table(&db, &tb, db_type)?, condition)
+impl DtFilter {
+    pub fn from_legacy_config(options: &LegacyFilterConfig, db_type: DbType) -> Result<Self> {
+        let mut filter = Self::new(db_type.clone());
+        filter.load_legacy_resource_filters(options, &db_type)?;
+        for kind in CommonFilterKind::iter() {
+            if let Some(common) = CommonFilter::from_legacy_config(kind, options, &db_type)? {
+                filter.set_common_filter(kind, common);
             }
-        };
-        validate_rid(db_type, ResourceKind::Table, &id)?;
-        conditions.entry(id).or_insert(condition);
+        }
+        if ResourceKind::Table.depth(&db_type).is_some()
+            && !options.where_conditions.trim().is_empty()
+        {
+            let expression = ExpressionFilter::parse_legacy_where_conditions(
+                &options.where_conditions,
+                &db_type,
+            )
+            .context("[filter].where_conditions")?;
+            let ExpressionFilter::WhereConditions { conditions } = &expression;
+            if !conditions.is_empty() {
+                filter.set_expression_filter(ResourceKind::Table, expression)?;
+            }
+        }
+        Ok(filter)
     }
-    Ok(ExpressionFilter::WhereConditions { conditions })
+
+    fn load_legacy_resource_filters(
+        &mut self,
+        options: &LegacyFilterConfig,
+        db_type: &DbType,
+    ) -> Result<()> {
+        for (index, &kind) in ResourceKind::levels(db_type).iter().enumerate() {
+            let (do_key, do_value, ignore_key, ignore_value, table) =
+                if index == 0 && matches!(kind, ResourceKind::Database | ResourceKind::Schema) {
+                    (
+                        "do_dbs",
+                        &options.do_schemas,
+                        "ignore_dbs",
+                        &options.ignore_schemas,
+                        false,
+                    )
+                } else if matches!(kind, ResourceKind::Table | ResourceKind::Collection) {
+                    (
+                        "do_tbs",
+                        &options.do_tbs,
+                        "ignore_tbs",
+                        &options.ignore_tbs,
+                        true,
+                    )
+                } else {
+                    continue;
+                };
+            let resource_filter = ResourceFilter::new(
+                ResourceFilter::parse_legacy_patterns(do_value, db_type, table)
+                    .with_context(|| format!("[filter].{do_key}"))?,
+                ResourceFilter::parse_legacy_patterns(ignore_value, db_type, table)
+                    .with_context(|| format!("[filter].{ignore_key}"))?,
+            );
+            resource_filter.validate(index + 1, &self.matcher)?;
+            self.set_resource_filter(kind, resource_filter)?;
+        }
+        if let Some(depth) = ResourceKind::Column
+            .depth(db_type)
+            .filter(|_| !options.ignore_cols.trim().is_empty())
+        {
+            let mut tables = BTreeMap::new();
+            for row in ResourceConfigParser::legacy_json::<Vec<IgnoreColumns>>(&options.ignore_cols)
+                .context("[filter].ignore_cols")?
+            {
+                tables.insert(
+                    ResourceConfigParser::legacy_json_table(&row.db, &row.tb, db_type)?,
+                    row.ignore_cols,
+                );
+            }
+            let mut columns = HashSet::new();
+            for (table, names) in tables {
+                for name in names {
+                    columns.insert(ResourceFilter::literal_pattern(table.child(name)));
+                }
+            }
+            let resource_filter = ResourceFilter::new(HashSet::new(), columns);
+            resource_filter.validate(depth + 1, &self.matcher)?;
+            self.set_resource_filter(ResourceKind::Column, resource_filter)?;
+        }
+        Ok(())
+    }
+}
+
+impl CommonFilter {
+    fn from_legacy_config(
+        kind: CommonFilterKind,
+        options: &LegacyFilterConfig,
+        db_type: &DbType,
+    ) -> Result<Option<Self>> {
+        let (key, value) = match kind {
+            CommonFilterKind::Event => ("do_events", options.do_events.as_str()),
+            CommonFilterKind::Ddl => ("do_ddls", options.do_ddls.as_str()),
+            CommonFilterKind::Dcl => ("do_dcls", options.do_dcls.as_str()),
+            CommonFilterKind::Structure => ("do_structures", options.do_structures.as_str()),
+            CommonFilterKind::Cmd => ("ignore_cmds", WILDCARD),
+        };
+        let value = if value.trim().is_empty() {
+            kind.default_do()
+        } else {
+            value
+        };
+        let ignore_set = if kind == CommonFilterKind::Cmd {
+            Self::parse_legacy_values(&options.ignore_cmds, db_type)
+                .context("[filter].ignore_cmds")?
+        } else {
+            HashSet::new()
+        };
+        if value == kind.default_do() && ignore_set.is_empty() {
+            return Ok(None);
+        }
+        let do_set =
+            Self::parse_legacy_values(value, db_type).with_context(|| format!("[filter].{key}"))?;
+        Ok(Some(Self::new(do_set, ignore_set)))
+    }
+
+    fn parse_legacy_values(value: &str, db_type: &DbType) -> Result<HashSet<String>> {
+        let pairs = ResourceConfigParser::escape_pairs(&[]);
+        ConfigTokenParser::parse_config(value, db_type, FILTER_DELIMITERS, Some(&pairs))?
+            .into_iter()
+            .map(|token| {
+                // Legacy parsing validates regex syntax even though common values match literally.
+                if let Some(pattern) = token
+                    .strip_prefix(REGEX_PREFIX)
+                    .and_then(|inner| inner.strip_suffix(REGEX_SUFFIX))
+                {
+                    regex::Regex::new(pattern)
+                        .with_context(|| format!("invalid filter regex {token}"))?;
+                }
+                Ok(token)
+            })
+            .collect()
+    }
+}
+
+impl ExpressionFilter {
+    fn parse_legacy_where_conditions(value: &str, db_type: &DbType) -> Result<Self> {
+        let mut conditions = HashMap::new();
+        for rule in ResourceConfigParser::legacy_json::<Vec<LegacyWhere>>(value)? {
+            let id = ResourceConfigParser::legacy_json_table(&rule.db, &rule.tb, db_type)?;
+            ResourceKind::Table.validate_rid(db_type, &id)?;
+            conditions.entry(id).or_insert(rule.condition);
+        }
+        Ok(Self::WhereConditions { conditions })
+    }
+}
+
+impl ResourceFilter {
+    fn parse_legacy_patterns(value: &str, db_type: &DbType, table: bool) -> Result<HashSet<RID>> {
+        let paths = if table && matches!(db_type, DbType::Mssql) {
+            ResourceConfigParser::paths(value, db_type)?
+        } else {
+            // Legacy non-MSSQL table rules and namespace rules flatten commas and dots.
+            let pairs = ResourceConfigParser::escape_pairs(&[]);
+            let tokens = ConfigTokenParser::parse_config(
+                value.trim(),
+                db_type,
+                FILTER_DELIMITERS,
+                Some(&pairs),
+            )?;
+            let depth = if table { 2 } else { 1 };
+            ensure!(
+                tokens.len() % depth == 0,
+                "incomplete legacy resource pattern"
+            );
+            tokens.chunks(depth).map(|chunk| chunk.to_vec()).collect()
+        };
+        paths
+            .into_iter()
+            .map(|path| {
+                let path = if table {
+                    ResourceConfigParser::legacy_table(path, db_type)?
+                } else {
+                    path
+                };
+                for token in &path {
+                    ResourceConfigParser::quoted_literal(token, db_type)?;
+                }
+                Ok(RID::new(path))
+            })
+            .collect()
+    }
+
+    /// Escape exact legacy JSON names for use as resource patterns.
+    fn literal_pattern(id: RID) -> RID {
+        RID::new(
+            id.segments().iter().map(|segment| {
+                format!("{REGEX_PREFIX}(?:{}){REGEX_SUFFIX}", regex::escape(segment))
+            }),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -330,7 +303,7 @@ mod tests {
     do_dcls=grant
     do_ddls=create_table
     ignore_cmds=FLUSHDB
-    where_conditions=json:[{"id":["db","t"],"condition":"id > 1"}]
+    where_conditions=json:[{"db":"db","tb":"t","condition":"id > 1"}]
     do_dbs=db
     "#,
         );
@@ -501,6 +474,31 @@ ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
         }
         for command in ["GET", "SET", "SETEX"] {
             assert!(!f.filter_cmd(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn unsupported_legacy_options_are_skipped_before_parsing_values() {
+        for (engine, options, selected) in [
+            (DbType::Mongo,
+             "do_tbs=db.c\nignore_cols=json:invalid\nwhere_conditions=json:invalid",
+             Some(rid!("db", "c"))),
+            (DbType::Redis,
+             "do_dbs=0\ndo_tbs=r#[#\nignore_tbs=invalid\nignore_cols=json:invalid\nwhere_conditions=json:invalid",
+             Some(rid!("0"))),
+            (DbType::Kafka,
+             "do_dbs=r#[#\nignore_dbs=r#[#\ndo_tbs=r#[#\nignore_tbs=r#[#\nignore_cols=json:invalid\nwhere_conditions=json:invalid",
+             None),
+        ] {
+            let f = load_filter(&ini(&format!("[filter]\ndo_events=insert\n{options}")), engine).unwrap();
+            if let Some(id) = selected {
+                assert!(!f.filter(id).unwrap(), "{options}");
+            } else {
+                assert!(f.resource_filters().is_empty());
+            }
+            assert!(f.expression_filters.is_empty());
+            assert!(!f.filter_common(CommonFilterKind::Event, "insert"));
+            assert!(f.filter_common(CommonFilterKind::Event, "update"));
         }
     }
 

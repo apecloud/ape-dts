@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use anyhow::{ensure, Context, Result};
-use serde::Deserialize;
 
-use super::{resource_router::WILDCARD, DtRouter};
+use super::DtRouter;
 use crate::{
     config::{
         config_enums::DbType,
@@ -11,74 +10,8 @@ use crate::{
         router_config::{RouterConfig, TO_PREFIX},
     },
     filter::CommonFilterKind,
-    resource::{
-        config_parser as config, resource_depth, resource_kind, resource_levels, validate_rid,
-        ResourceKind, RID,
-    },
+    resource::{ResourceConfigParser, ResourceKind, RESOURCE_SEPARATOR, RID, WILDCARD},
 };
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RouteRule {
-    pub from: RID,
-    pub to: RID,
-}
-
-fn routes(value: &str, src: &DbType, dst: &DbType) -> Result<Vec<(RID, RID)>> {
-    if value.trim().starts_with("json:") {
-        return Ok(config::json::<Vec<RouteRule>>(value)?
-            .into_iter()
-            .map(|r| (r.from, r.to))
-            .collect());
-    }
-    config::pairs(value, src, dst)?
-        .into_iter()
-        .map(|(from, to)| Ok((config::exact_path(from, src)?, config::exact_path(to, dst)?)))
-        .collect()
-}
-
-fn to_routes(
-    value: &str,
-    src: &DbType,
-    dst: &DbType,
-    dst_kind: ResourceKind,
-) -> Result<Vec<(RID, RID)>> {
-    if value.trim().starts_with("json:") {
-        return Ok(config::json::<Vec<RouteRule>>(value)?
-            .into_iter()
-            .map(|r| (r.from, r.to))
-            .collect());
-    }
-    config::pairs(value, src, dst)?
-        .into_iter()
-        .map(|(from, to)| {
-            let source = RID::new(
-                from.into_iter()
-                    .map(|segment| {
-                        if segment == WILDCARD {
-                            return Ok(segment);
-                        }
-                        let id = config::exact_path(vec![segment], src)?;
-                        Ok(id.segments().join(""))
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            );
-            let source = if matches!(src, DbType::Kafka) {
-                RID::new([source.segments().join(".")])
-            } else {
-                source
-            };
-            let target = config::exact_path(to, dst)?;
-            // Dots belong to the topic name.
-            let target = if dst_kind == ResourceKind::Topic {
-                RID::new([target.segments().join(".")])
-            } else {
-                target
-            };
-            Ok((source, target))
-        })
-        .collect()
-}
 
 impl DtRouter {
     pub fn from_config(config: &RouterConfig, src: DbType, dst: DbType) -> Result<Self> {
@@ -95,9 +28,7 @@ impl DtRouter {
                 );
                 continue;
             }
-            let empty =
-                base.route.as_deref().unwrap_or_default().trim().is_empty() && base.to.is_empty();
-            if let Some(kind) = config::section_kind(name, &src, empty)? {
+            if let Some(kind) = ResourceKind::from_section(name, &src)? {
                 bases.push((kind, base));
             }
         }
@@ -110,15 +41,14 @@ impl DtRouter {
                 let dst_kind = name
                     .parse::<ResourceKind>()
                     .with_context(|| format!("unknown destination resource kind in {key}"))?;
-                ensure!(
-                    resource_depth(&dst, dst_kind).is_some(),
-                    "{dst} does not support [{key}]"
-                );
+                if dst_kind.depth(&dst).is_none() {
+                    continue;
+                }
                 let map = to_maps.entry(kind).or_insert_with(HashMap::new);
-                for (from, to) in to_routes(value, &src, &dst, dst_kind)
+                for (from, to) in Self::parse_to_routes(value, &src, &dst, dst_kind)
                     .with_context(|| format!("{kind:?}.{key}"))?
                 {
-                    validate_rid(&dst, dst_kind, &to)?;
+                    dst_kind.validate_rid(&dst, &to)?;
                     if let Some(previous) = map.insert(from.clone(), to.clone()) {
                         ensure!(
                             previous == to,
@@ -131,75 +61,127 @@ impl DtRouter {
         let route_dst = if to_maps.is_empty() { &dst } else { &src };
         let mut rules = Vec::new();
         for (kind, base) in bases {
-            let mappings = routes(base.route.as_deref().unwrap_or_default(), &src, route_dst)
-                .with_context(|| format!("{kind:?}.route"))?;
+            if !Self::supports_route(kind, route_dst) {
+                continue;
+            }
+            let mappings =
+                Self::parse_routes(base.route.as_deref().unwrap_or_default(), &src, route_dst)
+                    .with_context(|| format!("{kind:?}.route"))?;
             for (from, to) in mappings {
-                validate_rid(&src, kind, &from)?;
+                kind.validate_rid(&src, &from)?;
                 rules.push((from, to));
             }
         }
-        build_router(src, dst, rules, to_maps)
+        Self::build_router(src, dst, rules, to_maps)
     }
-}
 
-pub fn build_router(
-    src: DbType,
-    dst: DbType,
-    rules: Vec<(RID, RID)>,
-    to_maps: HashMap<ResourceKind, HashMap<RID, RID>>,
-) -> Result<DtRouter> {
-    let route_dst = if to_maps.is_empty() { &dst } else { &src };
-    for (source, target) in &rules {
-        let src_kind = resource_kind(&src, source)
-            .with_context(|| format!("invalid {src} resource: {source}"))?;
-        let dst_kind = resource_kind(route_dst, target)
-            .with_context(|| format!("invalid {route_dst} resource: {target}"))?;
-        let namespace = |kind| matches!(kind, ResourceKind::Database | ResourceKind::Schema);
-        ensure!(
-            src_kind == dst_kind || namespace(src_kind) && namespace(dst_kind),
-            "cannot route {src_kind:?} to {dst_kind:?}: {source} -> {target}"
-        );
-        ensure!(
-            resource_levels(&src).iter().skip(source.len())
-                .eq(resource_levels(route_dst).iter().skip(target.len())),
-            "incompatible resource suffixes for {source} -> {target}; bind the complete namespace or object"
-        );
-    }
-    for (&kind, map) in &to_maps {
-        ensure!(
-            resource_depth(&src, kind).is_some(),
-            "{src} does not support {kind:?} dispatch sources"
-        );
-        for (source, target) in map {
-            validate_rid(&src, kind, source)?;
-            resource_kind(&dst, target)
-                .with_context(|| format!("invalid {dst} resource: {target}"))?;
-            let mut wildcard = false;
-            for segment in source.segments() {
-                if segment == WILDCARD {
-                    wildcard = true;
-                } else {
-                    ensure!(
-                        !wildcard,
-                        "dispatch wildcards must form a trailing suffix: {source}"
-                    );
+    pub fn build_router(
+        src: DbType,
+        dst: DbType,
+        rules: Vec<(RID, RID)>,
+        to_maps: HashMap<ResourceKind, HashMap<RID, RID>>,
+    ) -> Result<Self> {
+        let route_dst = if to_maps.is_empty() { &dst } else { &src };
+        for (source, target) in &rules {
+            let src_kind = ResourceKind::from_rid(&src, source)
+                .with_context(|| format!("invalid {src} resource: {source}"))?;
+            let dst_kind = ResourceKind::from_rid(route_dst, target)
+                .with_context(|| format!("invalid {route_dst} resource: {target}"))?;
+            let namespace = |kind| matches!(kind, ResourceKind::Database | ResourceKind::Schema);
+            ensure!(
+                src_kind == dst_kind || namespace(src_kind) && namespace(dst_kind),
+                "cannot route {src_kind:?} to {dst_kind:?}: {source} -> {target}"
+            );
+            ensure!(
+                ResourceKind::levels(&src).iter().skip(source.len())
+                    .eq(ResourceKind::levels(route_dst).iter().skip(target.len())),
+                "incompatible resource suffixes for {source} -> {target}; bind the complete namespace or object"
+            );
+        }
+        for (&kind, map) in &to_maps {
+            for source in map.keys() {
+                kind.validate_rid(&src, source)?;
+                let mut wildcard = false;
+                for segment in source.segments() {
+                    if segment == WILDCARD {
+                        wildcard = true;
+                    } else {
+                        ensure!(
+                            !wildcard,
+                            "dispatch wildcards must form a trailing suffix: {source}"
+                        );
+                    }
                 }
             }
         }
-    }
-    let router = DtRouter::new_with_to_maps(src, dst, rules, to_maps)?;
-    if let Some(columns) = router.resource_routers().get(&ResourceKind::Column) {
-        for (source, target) in columns.mappings() {
-            let parent = source
-                .parent()
-                .with_context(|| format!("column resource has no parent: {source}"))?;
-            ensure!(
-                Some(router.forward::<RID>(parent)?) == target.parent(),
-                "column route changes its parent table: {source} -> {target}"
-            );
+        let router = Self::new_with_to_maps(src, dst, rules, to_maps)?;
+        if let Some(columns) = router.resource_routers().get(&ResourceKind::Column) {
+            for (source, target) in columns.mappings() {
+                ensure!(
+                    router.forward::<RID>(source.prefix(source.len() - 1))?
+                        == target.prefix(target.len() - 1),
+                    "column route changes its parent table: {source} -> {target}"
+                );
+            }
         }
+        Ok(router)
     }
-    Ok(router)
+
+    fn parse_routes(value: &str, src: &DbType, dst: &DbType) -> Result<Vec<(RID, RID)>> {
+        ResourceConfigParser::pairs(value, src, dst)?
+            .into_iter()
+            .map(|(from, to)| {
+                Ok((
+                    ResourceConfigParser::exact_path(from, src)?,
+                    ResourceConfigParser::exact_path(to, dst)?,
+                ))
+            })
+            .collect()
+    }
+
+    fn parse_to_routes(
+        value: &str,
+        src: &DbType,
+        dst: &DbType,
+        dst_kind: ResourceKind,
+    ) -> Result<Vec<(RID, RID)>> {
+        ResourceConfigParser::pairs(value, src, dst)?
+            .into_iter()
+            .map(|(from, to)| {
+                let source = RID::new(
+                    from.into_iter()
+                        .map(|segment| {
+                            if segment == WILDCARD {
+                                return Ok(segment);
+                            }
+                            ResourceConfigParser::exact_token(segment, src)
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                );
+                let source = if matches!(src, DbType::Kafka) {
+                    RID::new([source.segments().join(RESOURCE_SEPARATOR)])
+                } else {
+                    source
+                };
+                let target = ResourceConfigParser::exact_path(to, dst)?;
+                // Dots belong to the topic name.
+                let target = if dst_kind == ResourceKind::Topic {
+                    RID::new([target.segments().join(RESOURCE_SEPARATOR)])
+                } else {
+                    target
+                };
+                Ok((source, target))
+            })
+            .collect()
+    }
+
+    pub fn supports_route(kind: ResourceKind, dst: &DbType) -> bool {
+        ResourceKind::levels(dst).iter().any(|&target| {
+            kind == target
+                || matches!(kind, ResourceKind::Database | ResourceKind::Schema)
+                    && matches!(target, ResourceKind::Database | ResourceKind::Schema)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -323,16 +305,19 @@ mod tests {
     #[test]
     fn dispatch_rejects_invalid_kinds_depths_patterns_and_conflicts() {
         for (dst, text) in [
-            (DbType::Pg, "[rules.table]\nto_topic=db.t:events"),
             (DbType::Kafka, "[rules.table]\nto_future=db.t:events"),
             (DbType::Kafka, "[rules.table]\nto_=db.t:events"),
-            (DbType::Kafka, "[rules.schema]\nto_topic="),
             (DbType::Kafka, "[rules.event]\nto_topic="),
             (DbType::Kafka, "[rules.table]\nto_topic=db:events"),
             (DbType::Kafka, "[rules.table]\nto_topic=*.t:events"),
             (DbType::Kafka, "[rules.table]\nto_topic=db.order*:events"),
             (DbType::Kafka, "[rules.table]\nto_topic=db.t:one,db.t:two"),
             (DbType::Pg, "[rules.table]\nto_table=db.t:queue"),
+            (
+                DbType::Kafka,
+                r#"[rules.table]
+to_topic=json:[{"from":["db","t"],"to":["events"]}]"#,
+            ),
         ] {
             assert!(
                 load_router(&ini(text), DbType::Mysql, dst).is_err(),
@@ -380,12 +365,16 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(DtRouter::from_config(
+        let router = DtRouter::from_config(
             &RouterConfig::Basic(bases.clone()),
             DbType::Mysql,
-            DbType::Pg
+            DbType::Pg,
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(
+            router.forward::<RID>(rid!("db", "t", "id")).unwrap(),
+            rid!("archive", "orders", "order_id")
+        );
         let mut sections = BTreeMap::from([("table".to_owned(), RouterSectionConfig::default())]);
         for value in [None, Some(String::new())] {
             sections.get_mut("table").unwrap().route = value;
@@ -498,12 +487,6 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
         }
         for (db_type, text) in [
             (DbType::Mysql, "[rules.future]\nroute=a:b"),
-            (DbType::Pg, "[rules.database]\nroute=a:b"),
-            (DbType::Mysql, "[rules.schema]\nroute=a:b"),
-            (DbType::Kafka, "[rules.db]\nroute=a:b"),
-            (DbType::Pg, "[rules.db]\nroute=a:b"),
-            (DbType::Mongo, "[rules.column]\nroute=db.c.field:db.c.other"),
-            (DbType::Mysql, "[rules.collection]\nroute=db.c:db.other"),
             (DbType::Mongo, "[rules.document]\nroute=db.c:db.other"),
         ] {
             let config = RouterConfig::from_ini(&ini(text)).unwrap();
@@ -528,29 +511,43 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
     }
 
     #[test]
-    fn ini_handles_endpoint_dialects_and_json() {
-        let r = load_router(
-            &ini("[rules.table]\nroute=`a.b`.`order`:\"archive\".\"order.2026\""),
-            DbType::Mysql,
-            DbType::Pg,
-        )
-        .unwrap();
-        assert_eq!(
-            r.forward::<RID>(rid!("a.b", "order")).unwrap(),
-            rid!("archive", "order.2026")
-        );
-        let r = load_router(
-            &ini(r#"[rules.table]
-    route=json:[{"from":["a.b","order"],"to":["archive","order.2026"]}]
-    "#),
-            DbType::Mysql,
-            DbType::Pg,
-        )
-        .unwrap();
-        assert_eq!(
-            r.forward::<RID>(rid!("a.b", "order")).unwrap(),
-            rid!("archive", "order.2026")
-        );
+    fn ini_routes_preserve_endpoint_quotes_and_literal_names() {
+        for (src, dst, text, source, target) in [
+            (
+                DbType::Mysql,
+                DbType::Pg,
+                r#"[rules.table]
+route=`a.b`.`order`:"archive"."order.2026""#,
+                rid!("a.b", "order"),
+                rid!("archive", "order.2026"),
+            ),
+            (
+                DbType::Mssql,
+                DbType::Mysql,
+                r#"[rules.table]
+route=[db].[sales].[a]]b]:`archive`.`order*`"#,
+                rid!("db", "sales", "a]b"),
+                rid!("archive", "order*"),
+            ),
+            (
+                DbType::Mysql,
+                DbType::Mysql,
+                "[rules.db]\nroute=json:archive",
+                rid!("json"),
+                rid!("archive"),
+            ),
+            (
+                DbType::Mysql,
+                DbType::Mysql,
+                "[router]\ndb_map=json:archive",
+                rid!("json"),
+                rid!("archive"),
+            ),
+        ] {
+            let router = load_router(&ini(text), src, dst).unwrap();
+            assert_eq!(router.forward::<RID>(&source).unwrap(), target);
+            assert_eq!(router.reverse::<RID>(&target).unwrap(), source);
+        }
         for text in [
             "[rules.table]\nroute=a.t:b.t:c.t",
             "[rules.table]\nroute=a.*:b.t",
@@ -559,6 +556,10 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
             "[rules.table]\nroute=a.t:b",
             "[rules.db]\nroute=a:b.t.id.extra",
             "[rules.column]\nroute=a.t.id:b.other.new_id",
+            r#"[rules.table]
+route=json:[{"from":["a","t"],"to":["b","t"]}]"#,
+            r#"[router]
+db_map=json:[{"from":["a"],"to":["b"]}]"#,
         ] {
             let ini = ini(text);
             let config = RouterConfig::from_ini(&ini).unwrap();
@@ -570,13 +571,42 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
     }
 
     #[test]
+    fn unsupported_routes_are_skipped_without_changing_the_destination_engine() {
+        for (src, dst, text, source, target) in [
+            (DbType::Mysql, DbType::Pg,
+             "[rules.table]\nroute=db.t:archive.t\nto_topic=invalid\n[rules.schema]\nroute=invalid\nto_table=invalid",
+             rid!("db", "t"), rid!("archive", "t")),
+            (DbType::Pg, DbType::Mysql,
+             "[rules.table]\nroute=db.t:archive.t\nto_schema=invalid\n[rules.database]\nroute=invalid",
+             rid!("db", "t"), rid!("archive", "t")),
+            (DbType::Mongo, DbType::Mongo,
+             "[rules.collection]\nroute=db.c:archive.c\n[rules.column]\nroute=invalid",
+             rid!("db", "c"), rid!("archive", "c")),
+            (DbType::Redis, DbType::Redis,
+             "[rules.db]\nroute=0:1\n[rules.table]\nroute=invalid",
+             rid!("0"), rid!("1")),
+            (DbType::Kafka, DbType::Kafka,
+             "[rules.topic]\nroute=orders:archive\n[rules.db]\nroute=invalid",
+             rid!("orders"), rid!("archive")),
+            (DbType::Mysql, DbType::Kafka,
+             "[rules.table]\nroute=invalid\nto_db=invalid",
+             rid!("db", "t"), rid!("db", "t")),
+            (DbType::Mysql, DbType::Mongo,
+             "[rules.column]\nroute=invalid",
+             rid!("db", "t", "id"), rid!("db", "t", "id")),
+        ] {
+            let router = load_router(&ini(text), src, dst.clone()).unwrap();
+            assert_eq!(router.route_db_type(), &dst, "{text}");
+            assert_eq!(router.forward::<RID>(&source).unwrap(), target, "{text}");
+            assert_eq!(router.reverse::<RID>(&target).unwrap(), source, "{text}");
+            assert_eq!(router.to::<RID>(&target).unwrap(), target, "{text}");
+            assert_eq!(router.has_rules(), source != target, "{text}");
+        }
+    }
+
+    #[test]
     fn configured_routes_require_compatible_resource_layouts() {
         for (src, dst, text) in [
-            (
-                DbType::Mysql,
-                DbType::Kafka,
-                "[rules.table]\nroute=db.t:topic",
-            ),
             (DbType::Mssql, DbType::Pg, "[rules.db]\nroute=db:schema"),
             (DbType::Pg, DbType::Mssql, "[rules.schema]\nroute=schema:db"),
         ] {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use super::DtFilter;
-use crate::resource::{resource_kind, ResourceKind, RID};
+use crate::resource::{ResourceKind, RID};
 
 #[derive(Debug, Clone)]
 pub enum ExpressionFilter {
@@ -17,7 +17,7 @@ impl DtFilter {
     /// Exact lookup; parent conditions are not inherited.
     pub fn where_condition(&self, id: impl Into<RID>) -> Result<Option<&str>> {
         let id = id.into();
-        let Some(kind) = resource_kind(&self.db_type, &id) else {
+        let Some(kind) = ResourceKind::from_rid(&self.db_type, &id) else {
             return Ok(None);
         };
         Ok(self
@@ -53,7 +53,7 @@ impl DtFilter {
     }
 
     pub fn set_where_condition(&mut self, id: RID, condition: String) -> Result<()> {
-        let Some(kind) = resource_kind(&self.db_type, &id) else {
+        let Some(kind) = ResourceKind::from_rid(&self.db_type, &id) else {
             return Ok(());
         };
         let ExpressionFilter::WhereConditions { conditions } = self

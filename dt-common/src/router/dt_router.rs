@@ -5,7 +5,7 @@ use anyhow::{ensure, Result};
 use super::ResourceRouter;
 use crate::{
     config::config_enums::DbType,
-    resource::{resource_kind, ResourceKind, RID},
+    resource::{ResourceKind, RID},
 };
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ impl DtRouter {
                 .insert(kind, ResourceRouter::new(Some(map)));
         }
         for (src, dst) in rules {
-            if let Some(kind) = resource_kind(&router.src_db_type, &src) {
+            if let Some(kind) = ResourceKind::from_rid(&router.src_db_type, &src) {
                 router
                     .resource_routers
                     .entry(kind)

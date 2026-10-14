@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::{bail, Result};
 use dt_common::{
     filter::DtFilter,
-    resource::{config_parser, ResourceKind},
+    resource::{ResourceConfigParser, ResourceKind},
 };
 
 pub struct DbTable {
@@ -18,7 +18,7 @@ impl DbTable {
         for (kind, rules) in filter.resource_filters() {
             if *kind != ResourceKind::Column {
                 for id in &rules.do_set {
-                    ids.insert(config_parser::exact_path(
+                    ids.insert(ResourceConfigParser::exact_path(
                         id.segments().to_vec(),
                         filter.db_type(),
                     )?);

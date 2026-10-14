@@ -17,19 +17,21 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
-pub mod config_parser;
+mod config_parser;
 mod exact_matcher;
-pub mod legacy;
+mod legacy;
 mod pattern_matcher;
 mod resource_kind;
 mod rid;
 mod rmatcher;
 
+pub use config_parser::{
+    ResourceConfigParser, MAPPING_SEPARATOR, RESOURCE_DELIMITERS, RESOURCE_SEPARATOR,
+    RULE_SEPARATOR,
+};
 pub use exact_matcher::ExactMatcher;
 pub use pattern_matcher::PatternMatcher;
-pub use pattern_matcher::{REGEX_PREFIX, REGEX_SUFFIX};
-pub use resource_kind::{
-    resource_depth, resource_kind, resource_levels, validate_rid, ResourceKind,
-};
+pub use pattern_matcher::{OPTIONAL_WILDCARD, REGEX_PREFIX, REGEX_SUFFIX, WILDCARD};
+pub use resource_kind::ResourceKind;
 pub use rid::RID;
 pub use rmatcher::RMatcher;
