@@ -78,8 +78,7 @@ impl Sinker for PgSinker {
         let mut last_monitor_time = Instant::now();
 
         for ddl_data in data.iter() {
-            let id: RID = ddl_data.get_id();
-            let [schema] = id.parts();
+            let [schema] = ddl_data.get_id::<RID>().into_left();
             data_size += ddl_data.get_data_size();
             data_len += 1;
 

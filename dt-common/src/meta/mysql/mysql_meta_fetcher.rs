@@ -73,9 +73,8 @@ impl MysqlMetaFetcher {
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
-        let id: RID = ddl_data.get_id();
-        let [schema, tb] = id.parts();
-        self.invalidate_cache(schema, tb);
+        let [schema, tb] = ddl_data.get_id::<RID>().into_left();
+        self.invalidate_cache(&schema, &tb);
     }
 
     pub async fn get_tb_meta_by_row_data<'a>(
