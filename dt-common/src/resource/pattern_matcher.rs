@@ -6,6 +6,8 @@ use crate::utils::sql_util::{CharEscapePair, SqlUtil};
 
 pub const REGEX_PREFIX: &str = "r#";
 pub const REGEX_SUFFIX: &str = "#";
+pub const WILDCARD: &str = "*";
+pub const OPTIONAL_WILDCARD: &str = "?";
 
 /// Legacy matching: SQL quotes are exact; `r#...#` is regex; bare `*` / `?` become `.*` / `.?`.
 /// Regex anchors wrap the raw expression; use `r#(?:a|b)#` to anchor all alternatives.
@@ -21,7 +23,9 @@ impl PatternMatcher {
 
     pub fn is_pattern(&self, value: &str) -> bool {
         self.character_escape(value).is_none()
-            && (value.contains('*') || value.contains('?') || value.starts_with(REGEX_PREFIX))
+            && (value.contains(WILDCARD)
+                || value.contains(OPTIONAL_WILDCARD)
+                || value.starts_with(REGEX_PREFIX))
     }
 
     pub fn is_match_segments(&self, input: &[String], pattern: &[String]) -> bool {
@@ -32,13 +36,6 @@ impl PatternMatcher {
                 .all(|(input, pattern)| self.is_match_segment(input, pattern))
     }
 
-    fn is_match_segment(&self, input: &str, pattern: &str) -> bool {
-        if let Some(pair) = self.character_escape(pattern) {
-            return pattern == SqlUtil::escape(input, pair);
-        }
-        Self::regex(pattern).is_ok_and(|regex| regex.is_match(input))
-    }
-
     pub fn validate(&self, pattern: &RID) -> Result<()> {
         for segment in pattern.segments() {
             if self.character_escape(segment).is_none() {
@@ -47,6 +44,13 @@ impl PatternMatcher {
             }
         }
         Ok(())
+    }
+
+    fn is_match_segment(&self, input: &str, pattern: &str) -> bool {
+        if let Some(pair) = self.character_escape(pattern) {
+            return pattern == SqlUtil::escape(input, pair);
+        }
+        Self::regex(pattern).is_ok_and(|regex| regex.is_match(input))
     }
 
     fn character_escape(&self, pattern: &str) -> Option<&CharEscapePair> {
@@ -63,8 +67,8 @@ impl PatternMatcher {
             Some(raw) => raw.to_owned(),
             None => pattern
                 .replace('.', "\\.")
-                .replace('*', ".*")
-                .replace('?', ".?"),
+                .replace(WILDCARD, ".*")
+                .replace(OPTIONAL_WILDCARD, ".?"),
         };
         Regex::new(&format!("^{expression}$"))
     }

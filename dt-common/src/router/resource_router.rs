@@ -4,10 +4,8 @@ use anyhow::{bail, ensure, Context, Result};
 
 use crate::{
     config::config_enums::DbType,
-    resource::{resource_kind, resource_levels, ResourceKind, RID},
+    resource::{ResourceKind, RID, WILDCARD},
 };
-
-pub const WILDCARD: &str = "*";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResourceRouter {
@@ -35,30 +33,13 @@ impl ResourceRouter {
         &self.forward_map
     }
 
-    fn dispatch(&self, source: &RID) -> Result<RID> {
-        let Some(map) = &self.to_map else {
-            return Ok(source.clone());
-        };
-        if let Some(target) = map.get(source) {
-            return Ok(target.clone());
-        }
-        let mut segments = source.segments().to_vec();
-        for index in (0..segments.len()).rev() {
-            segments[index] = WILDCARD.into();
-            if let Some(target) = map.get(&RID::new(segments.clone())) {
-                return Ok(target.clone());
-            }
-        }
-        bail!("no destination dispatch rule for {source}")
-    }
-
     /// Recover the source RID, preferring explicit inverse routes over unchanged names.
     pub fn to(routers: &HashMap<ResourceKind, Self>, src: &DbType, routed: &RID) -> Result<RID> {
         if !routers.values().any(Self::has_to_map) {
             return Ok(routed.clone());
         }
         let source = Self::reverse(routers, src, routed)?;
-        let router = resource_kind(src, &source)
+        let router = ResourceKind::from_rid(src, &source)
             .and_then(|kind| routers.get(&kind))
             .filter(|router| router.has_to_map())
             .with_context(|| format!("no destination dispatch rules for {source}"))?;
@@ -111,7 +92,7 @@ impl ResourceRouter {
         src_db_type: &DbType,
         source: &RID,
     ) -> Result<RID> {
-        for (index, kind) in resource_levels(src_db_type)
+        for (index, kind) in ResourceKind::levels(src_db_type)
             .iter()
             .take(source.len())
             .enumerate()
@@ -177,6 +158,23 @@ impl ResourceRouter {
             }
         }
         Ok(())
+    }
+
+    fn dispatch(&self, source: &RID) -> Result<RID> {
+        let Some(map) = &self.to_map else {
+            return Ok(source.clone());
+        };
+        if let Some(target) = map.get(source) {
+            return Ok(target.clone());
+        }
+        let mut segments = source.segments().to_vec();
+        for index in (0..segments.len()).rev() {
+            segments[index] = WILDCARD.into();
+            if let Some(target) = map.get(&RID::new(segments.clone())) {
+                return Ok(target.clone());
+            }
+        }
+        bail!("no destination dispatch rule for {source}")
     }
 }
 

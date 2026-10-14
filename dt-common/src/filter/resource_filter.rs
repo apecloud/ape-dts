@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{ensure, Result};
 
-use crate::resource::{PatternMatcher, RMatcher, RID};
+use crate::resource::{PatternMatcher, RMatcher, RID, WILDCARD};
 
 #[derive(Debug, Clone, Default)]
 pub struct ResourceFilter {
@@ -13,6 +13,20 @@ pub struct ResourceFilter {
 impl ResourceFilter {
     pub fn new(do_set: HashSet<RID>, ignore_set: HashSet<RID>) -> Self {
         Self { do_set, ignore_set }
+    }
+
+    pub fn validate(&self, depth: usize, matcher: &PatternMatcher) -> Result<()> {
+        ensure!(
+            self.do_set
+                .iter()
+                .chain(&self.ignore_set)
+                .all(|id| id.len() == depth),
+            "resource patterns require {depth} segments"
+        );
+        for pattern in self.do_set.iter().chain(&self.ignore_set) {
+            matcher.validate(pattern)?;
+        }
+        Ok(())
     }
 
     pub fn matches(rules: &HashSet<RID>, id: &RID, matcher: &PatternMatcher) -> bool {
@@ -35,23 +49,9 @@ impl ResourceFilter {
             prefix.len() < pattern.len()
                 && pattern.segments()[prefix.len()..]
                     .iter()
-                    .all(|segment| segment == "*")
+                    .all(|segment| segment == WILDCARD)
                 && matcher.is_match_segments(prefix.segments(), &pattern.segments()[..prefix.len()])
         })
-    }
-
-    pub fn validate(&self, depth: usize, matcher: &PatternMatcher) -> Result<()> {
-        ensure!(
-            self.do_set
-                .iter()
-                .chain(&self.ignore_set)
-                .all(|id| id.len() == depth),
-            "resource patterns require {depth} segments"
-        );
-        for pattern in self.do_set.iter().chain(&self.ignore_set) {
-            matcher.validate(pattern)?;
-        }
-        Ok(())
     }
 }
 

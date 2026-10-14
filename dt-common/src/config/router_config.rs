@@ -4,6 +4,7 @@ use anyhow::{ensure, Result};
 use configparser::ini::Ini;
 
 use super::filter_config::{DO, IGNORE, RULES, WHERE_CONDITIONS};
+use crate::resource::RESOURCE_SEPARATOR;
 
 pub const ROUTER: &str = "router";
 pub const ROUTE: &str = "route";
@@ -44,7 +45,7 @@ pub struct RouterSectionConfig {
 
 impl RouterSectionConfig {
     pub fn from_ini(ini: &Ini) -> Result<BTreeMap<String, Self>> {
-        let prefix = format!("{RULES}.");
+        let prefix = format!("{RULES}{RESOURCE_SEPARATOR}");
         let mut result = BTreeMap::new();
         for (section, fields) in ini.get_map_ref() {
             let Some(name) = section.strip_prefix(prefix.as_str()) else {

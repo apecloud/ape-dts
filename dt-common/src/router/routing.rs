@@ -23,37 +23,6 @@ impl DtRouter {
         self.map_row(row, true)
     }
 
-    fn map_row(&self, mut row: RowData, reverse: bool) -> Result<RowData> {
-        let source = rid!(row.db, row.schema, row.tb);
-        (row.db, row.schema, row.tb) = if reverse {
-            self.reverse(&source)?
-        } else {
-            self.forward(&source)?
-        };
-        let columns = if reverse {
-            self.reverse_column_map(source)
-        } else {
-            self.column_map(source)
-        };
-        let Some(columns) = columns else {
-            return Ok(row);
-        };
-        let map_values = |values: HashMap<String, ColValue>| -> Result<HashMap<String, ColValue>> {
-            let mut mapped = HashMap::new();
-            for (name, value) in values {
-                let name = columns.get(&name).cloned().unwrap_or(name);
-                ensure!(
-                    mapped.insert(name.clone(), value).is_none(),
-                    "column route collision: {name}"
-                );
-            }
-            Ok(mapped)
-        };
-        row.before = row.before.map(map_values).transpose()?;
-        row.after = row.after.map(map_values).transpose()?;
-        Ok(row)
-    }
-
     pub fn route_ddl(&self, mut ddl_data: DdlData) -> Result<DdlData> {
         let src_db = ddl_data.default_db.clone();
         let source: RID = ddl_data.get_id();
@@ -158,6 +127,37 @@ impl DtRouter {
     /// Routed column prefix; returns target column names mapped to source names.
     pub fn reverse_column_map(&self, prefix: impl Into<RID>) -> Option<HashMap<String, String>> {
         self.column_names(prefix.into(), true)
+    }
+
+    fn map_row(&self, mut row: RowData, reverse: bool) -> Result<RowData> {
+        let source = rid!(row.db, row.schema, row.tb);
+        (row.db, row.schema, row.tb) = if reverse {
+            self.reverse(&source)?
+        } else {
+            self.forward(&source)?
+        };
+        let columns = if reverse {
+            self.reverse_column_map(source)
+        } else {
+            self.column_map(source)
+        };
+        let Some(columns) = columns else {
+            return Ok(row);
+        };
+        let map_values = |values: HashMap<String, ColValue>| -> Result<HashMap<String, ColValue>> {
+            let mut mapped = HashMap::new();
+            for (name, value) in values {
+                let name = columns.get(&name).cloned().unwrap_or(name);
+                ensure!(
+                    mapped.insert(name.clone(), value).is_none(),
+                    "column route collision: {name}"
+                );
+            }
+            Ok(mapped)
+        };
+        row.before = row.before.map(map_values).transpose()?;
+        row.after = row.after.map(map_values).transpose()?;
+        Ok(row)
     }
 
     fn column_names(&self, prefix: RID, reverse: bool) -> Option<HashMap<String, String>> {
