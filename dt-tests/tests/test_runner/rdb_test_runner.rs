@@ -104,7 +104,8 @@ impl RdbTestRunner {
         let mut databases = HashSet::new();
         for sqls in sql_groups {
             for table in mssql_ddl_scanner::extract_created_tables(sqls)? {
-                databases.insert(String::from(table));
+                let (db, _, _): (String, String, String) = table.into();
+                databases.insert(db);
             }
         }
         for db in databases {
@@ -966,19 +967,6 @@ impl RdbTestRunner {
 
         let src_db_type = self.get_db_type(SRC);
         let dst_db_type = self.get_db_type(DST);
-        // router: col_map
-        let col_map = self.router.as_ref().and_then(|router| {
-            let (db, schema, tb) = if src_db_type == DbType::Mssql {
-                (
-                    src_db_tb.segment(0),
-                    src_db_tb.segment(1),
-                    src_db_tb.segment(2),
-                )
-            } else {
-                ("", src_db_tb.segment(0), src_db_tb.segment(1))
-            };
-            router.column_map(db, schema, tb).unwrap()
-        });
         let columns: HashSet<String> = src_data
             .iter()
             .flat_map(|row| {
@@ -988,6 +976,10 @@ impl RdbTestRunner {
                     .flat_map(|values| values.keys().cloned())
             })
             .collect();
+        let col_map = self
+            .router
+            .as_ref()
+            .and_then(|router| router.column_map(src_db_tb));
         let ignore_cols = self.filter.excluded_columns(src_db_tb, &columns).unwrap();
         let col_map = col_map.as_ref();
         let ignore_cols = Some(&ignore_cols);
@@ -1415,7 +1407,7 @@ impl RdbTestRunner {
 
             let ddl = parser.parse(&sql).unwrap().unwrap();
             if ddl.ddl_type == DdlType::CreateTable {
-                let (mut db, tb) = ddl.get_schema_tb();
+                let (mut db, tb): (String, String) = ddl.get_id();
                 if db.is_empty() {
                     db = PUBLIC.to_string();
                 }

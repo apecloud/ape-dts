@@ -22,6 +22,7 @@ use dt_common::{
         dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
         row_data::RowData, row_type::RowType, syncer::Syncer,
     },
+    resource::RID,
     utils::time_util::TimeUtil,
 };
 use mysql_binlog_connector_rust::{
@@ -450,10 +451,9 @@ impl MysqlCdcExtractor {
                 .await
             {
                 for sub_ddl_data in ddl_data.clone().split_to_multi() {
-                    let (db, tb) = sub_ddl_data.get_schema_tb();
-                    // invalidate metadata cache
-                    self.meta_manager.invalidate_cache(&db, &tb);
-                    let id = rid!(db, tb);
+                    self.meta_manager
+                        .invalidate_cache_by_ddl_data(&sub_ddl_data);
+                    let id: RID = sub_ddl_data.get_id();
                     if !self.filter.filter_ddl(&id, &sub_ddl_data.ddl_type)? {
                         self.base_extractor
                             .push_ddl(

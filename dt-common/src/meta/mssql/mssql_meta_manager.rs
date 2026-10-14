@@ -17,6 +17,7 @@ use crate::{
         rdb_tb_meta::{RdbTbMeta, SortDirection},
         row_data::RowData,
     },
+    resource::RID,
     utils::sql_util::SqlUtil,
 };
 
@@ -275,8 +276,9 @@ impl MssqlMetaManager {
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
-        let (db, schema, tb) = ddl_data.get_db_schema_tb();
-        self.invalidate_cache(&db, &schema, &tb);
+        let id: RID = ddl_data.get_id();
+        let [db, schema, tb] = id.parts();
+        self.invalidate_cache(db, schema, tb);
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {

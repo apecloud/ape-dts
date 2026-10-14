@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{array, fmt};
 
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +75,11 @@ impl RID {
             .map(String::as_str)
             .unwrap_or_default()
     }
+
+    /// Borrow the first N segments, padding missing segments with empty strings.
+    pub fn parts<const N: usize>(&self) -> [&str; N] {
+        array::from_fn(|index| self.segment(index))
+    }
 }
 
 impl fmt::Display for RID {
@@ -92,28 +97,26 @@ impl From<&RID> for RID {
 
 impl From<RID> for String {
     fn from(id: RID) -> Self {
-        id.segments.into_iter().next().unwrap_or_default()
+        id.segments.into_iter().next_back().unwrap_or_default()
     }
 }
 
 impl From<RID> for (String, String) {
     fn from(id: RID) -> Self {
-        let mut segments = id.segments.into_iter();
-        (
-            segments.next().unwrap_or_default(),
-            segments.next().unwrap_or_default(),
-        )
+        let mut segments = id.segments.into_iter().rev();
+        let second = segments.next().unwrap_or_default();
+        let first = segments.next().unwrap_or_default();
+        (first, second)
     }
 }
 
 impl From<RID> for (String, String, String) {
     fn from(id: RID) -> Self {
-        let mut segments = id.segments.into_iter();
-        (
-            segments.next().unwrap_or_default(),
-            segments.next().unwrap_or_default(),
-            segments.next().unwrap_or_default(),
-        )
+        let mut segments = id.segments.into_iter().rev();
+        let third = segments.next().unwrap_or_default();
+        let second = segments.next().unwrap_or_default();
+        let first = segments.next().unwrap_or_default();
+        (first, second, third)
     }
 }
 
@@ -133,15 +136,29 @@ mod tests {
     use crate::rid;
 
     #[test]
-    fn borrowed_segments_support_variable_depths_and_missing_levels() {
-        for names in [
-            vec![],
-            vec!["orders"],
-            vec!["shop", "orders"],
-            vec!["db", "shop", "orders"],
-            vec!["server", "db", "shop", "orders"],
+    fn borrowed_accessors_support_variable_depths_and_missing_levels() {
+        for (names, expected_parts) in [
+            (vec![], ["", "", ""]),
+            (vec!["db"], ["db", "", ""]),
+            (vec!["shop", "orders"], ["shop", "orders", ""]),
+            (vec!["db", "shop", "orders"], ["db", "shop", "orders"]),
+            (
+                vec!["server", "db", "shop", "orders"],
+                ["server", "db", "shop"],
+            ),
         ] {
             let id = RID::new(names.clone());
+            let [db, schema, table] = id.parts();
+            assert_eq!([db, schema, table], expected_parts);
+            let [first, second] = id.parts();
+            assert_eq!([first, second], expected_parts[..2]);
+            let [first] = id.parts();
+            assert_eq!(first, expected_parts[0]);
+            let empty: [&str; 0] = id.parts();
+            assert!(empty.is_empty());
+            for (part, segment) in [db, schema, table].into_iter().zip(id.segments()) {
+                assert_eq!(part.as_ptr(), segment.as_ptr());
+            }
             for (index, expected) in names.into_iter().enumerate() {
                 assert_eq!(id.segment(index), expected);
             }
@@ -222,43 +239,55 @@ mod tests {
     }
 
     #[test]
-    fn owned_conversions_move_strings_in_order_and_default_missing_segments() {
-        for names in [
-            vec![],
-            vec!["inventory"],
-            vec!["inventory", "orders"],
-            vec!["market", "inventory", "orders"],
-            vec!["market", "inventory", "orders", "id"],
+    fn owned_conversions_move_strings_and_right_align_tuples() {
+        for (names, pair, triple) in [
+            (vec![], ["", ""], ["", "", ""]),
+            (vec!["orders"], ["", "orders"], ["", "", "orders"]),
+            (
+                vec!["inventory", "orders"],
+                ["inventory", "orders"],
+                ["", "inventory", "orders"],
+            ),
+            (
+                vec!["market", "inventory", "orders"],
+                ["inventory", "orders"],
+                ["market", "inventory", "orders"],
+            ),
+            (
+                vec!["market", "inventory", "orders", "id"],
+                ["orders", "id"],
+                ["inventory", "orders", "id"],
+            ),
         ] {
-            let expected = |index| names.get(index).copied().unwrap_or_default();
-
             let id = RID::new(names.clone());
-            let first_ptr = id.segments().first().map(|name| name.as_ptr());
-            let first: String = id.into();
-            assert_eq!(first, expected(0));
-            if let Some(ptr) = first_ptr {
-                assert_eq!(first.as_ptr(), ptr);
+            let last_ptr = id.segments().last().map(|name| name.as_ptr());
+            let last: String = id.into();
+            assert_eq!(last, names.last().copied().unwrap_or_default());
+            if let Some(ptr) = last_ptr {
+                assert_eq!(last.as_ptr(), ptr);
             }
 
             let id = RID::new(names.clone());
             let pointers: Vec<_> = id.segments().iter().map(|name| name.as_ptr()).collect();
             let (first, second): (String, String) = id.into();
-            assert_eq!(
-                (first.as_str(), second.as_str()),
-                (expected(0), expected(1))
-            );
-            for (name, ptr) in [&first, &second].into_iter().zip(&pointers) {
+            assert_eq!([first.as_str(), second.as_str()], pair);
+            for (name, ptr) in [&first, &second]
+                .into_iter()
+                .rev()
+                .zip(pointers.iter().rev())
+            {
                 assert_eq!(name.as_ptr(), *ptr);
             }
 
             let id = RID::new(names.clone());
             let pointers: Vec<_> = id.segments().iter().map(|name| name.as_ptr()).collect();
             let (first, second, third): (String, String, String) = id.into();
-            assert_eq!(
-                (first.as_str(), second.as_str(), third.as_str()),
-                (expected(0), expected(1), expected(2))
-            );
-            for (name, ptr) in [&first, &second, &third].into_iter().zip(&pointers) {
+            assert_eq!([first.as_str(), second.as_str(), third.as_str()], triple);
+            for (name, ptr) in [&first, &second, &third]
+                .into_iter()
+                .rev()
+                .zip(pointers.iter().rev())
+            {
                 assert_eq!(name.as_ptr(), *ptr);
             }
         }

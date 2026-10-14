@@ -16,6 +16,7 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
+    resource::RID,
     utils::limit_queue::LimitedQueue,
 };
 use sqlx::{
@@ -79,7 +80,8 @@ impl Sinker for MysqlSinker {
             data_size += ddl_data.get_data_size();
             data_len += 1;
             let query = sqlx::query(&sql);
-            let (db, _tb) = ddl_data.get_schema_tb();
+            let id: RID = ddl_data.get_id();
+            let [db] = id.parts();
             log_info!("sink ddl, db: {}, sql: {}", db, sql);
 
             // create a tmp connection with database since sqlx conn pool does NOT support `USE db`
@@ -93,7 +95,7 @@ impl Sinker for MysqlSinker {
                 match ddl_data.ddl_type {
                     DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {}
                     _ => {
-                        conn_options = conn_options.database(&db);
+                        conn_options = conn_options.database(db);
                     }
                 }
             }

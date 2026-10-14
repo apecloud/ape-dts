@@ -110,6 +110,10 @@ impl DtRouter {
         let id = id.into();
         ResourceRouter::to(&self.resource_routers, &self.src_db_type, &id).map(Into::into)
     }
+
+    pub fn has_resource_router(&self, kind: ResourceKind) -> bool {
+        self.resource_routers.contains_key(&kind)
+    }
 }
 
 #[cfg(test)]

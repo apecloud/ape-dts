@@ -3,6 +3,7 @@ use dt_common::router::DtRouter;
 use dt_common::{
     config::config_enums::DbType,
     meta::{avro::avro_converter::AvroConverter, ddl_meta::ddl_data::DdlData, row_data::RowData},
+    resource::RID,
     rid,
     utils::limit_queue::LimitedQueue,
 };
@@ -33,12 +34,7 @@ impl Sinker for KafkaSinker {
     async fn sink_ddl(&mut self, data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {
         let mut payloads = Vec::new();
         for ddl_data in data {
-            let (db, schema, table) = ddl_data.get_db_schema_tb();
-            let id = match self.router.route_db_type() {
-                DbType::Mssql => rid!(db, schema, table),
-                _ => rid!(schema, table),
-            };
-            let topic: String = self.router.to(id)?;
+            let topic: String = self.router.to(ddl_data.get_id::<RID>())?;
             let payload = self.avro_converter.ddl_data_to_avro_value(ddl_data).await?;
             payloads.push((topic, String::new(), payload));
         }

@@ -15,6 +15,7 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
+    resource::RID,
     utils::limit_queue::LimitedQueue,
 };
 use sqlx::{
@@ -77,7 +78,8 @@ impl Sinker for PgSinker {
         let mut last_monitor_time = Instant::now();
 
         for ddl_data in data.iter() {
-            let (schema, _tb) = ddl_data.get_schema_tb();
+            let id: RID = ddl_data.get_id();
+            let [schema] = id.parts();
             data_size += ddl_data.get_data_size();
             data_len += 1;
 
