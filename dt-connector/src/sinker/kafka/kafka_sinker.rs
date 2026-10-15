@@ -52,8 +52,7 @@ impl Sinker for KafkaSinker {
     }
 
     async fn refresh_meta(&mut self, data: Vec<DdlData>) -> anyhow::Result<()> {
-        self.avro_converter.refresh_meta(&data);
-        Ok(())
+        self.avro_converter.refresh_meta(&data)
     }
 }
 

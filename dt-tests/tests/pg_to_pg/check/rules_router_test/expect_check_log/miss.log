@@ -1,0 +1,1 @@
+{"schema": "rules_inventory", "tb": "orders", "id_col_values": {"id": "2"}, "target_schema": "rules_special", "target_tb": "renamed"}

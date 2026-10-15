@@ -5,6 +5,7 @@ use dt_common::resource::RID;
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
     meta::ddl_meta::{ddl_parser::DdlParser, ddl_statement::DdlStatement},
+    meta::struct_meta::structure::structure_type::StructureType,
 };
 use dt_connector::meta_fetcher::{
     mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher,
@@ -55,7 +56,11 @@ impl RdbStructTestRunner {
         };
 
         let (src_db_tbs, dst_db_tbs) = self.base.get_compare_db_tbs().unwrap();
+        let filtered_db_tbs = self.base.get_filtered_db_tbs();
         for i in 0..src_db_tbs.len() {
+            if filtered_db_tbs.contains(&src_db_tbs[i]) {
+                continue;
+            }
             if let Some(src_check_fetcher) = &src_check_fetcher {
                 let src_ddl_sql = src_check_fetcher
                     .fetch_table(src_db_tbs[i].segment(0), src_db_tbs[i].segment(1))
@@ -125,13 +130,24 @@ impl RdbStructTestRunner {
         };
 
         let (src_db_tbs, dst_db_tbs) = self.base.get_compare_db_tbs().unwrap();
+        let filtered_db_tbs = self.base.get_filtered_db_tbs();
         for i in 0..src_db_tbs.len() {
             let src_db_tb = &src_db_tbs[i];
             let dst_db_tb = &dst_db_tbs[i];
+            if filtered_db_tbs.contains(src_db_tb) {
+                continue;
+            }
 
-            let src_table = src_check_fetcher
+            let mut src_table = src_check_fetcher
                 .fetch_table(src_db_tb.segment(0), src_db_tb.segment(1))
                 .await?;
+            if self.base.filter.filter_structure(&StructureType::Index) {
+                src_table.indexes.retain(|index| {
+                    index
+                        .get("indisunique")
+                        .is_some_and(|value| value == "true")
+                });
+            }
             let mut dst_table = dst_check_fetcher
                 .fetch_table(dst_db_tb.segment(0), dst_db_tb.segment(1))
                 .await?;
@@ -145,7 +161,7 @@ impl RdbStructTestRunner {
                 println!("src_table: {:?}\n", src_table);
                 println!("dst_table: {:?}\n", dst_table);
                 assert_eq!(src_table, dst_table);
-                return Ok(());
+                continue;
             }
 
             assert_eq!(src_table.columns, dst_table.columns);

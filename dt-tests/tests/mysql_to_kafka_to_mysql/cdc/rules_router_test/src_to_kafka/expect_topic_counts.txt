@@ -1,0 +1,3 @@
+rules.mysql.cdc.router.default=8
+rules.mysql.cdc.router.namespace=16
+rules.mysql.cdc.router.exact=8
