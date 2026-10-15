@@ -3,12 +3,12 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use dt_common::{
     config::task_config::DEFAULT_DB_BATCH_SIZE,
+    filter::DtFilter,
     log_info, log_warn,
     meta::struct_meta::{
         statement::struct_statement::StructStatement, struct_data::StructData,
         structure::structure_type::StructureType,
     },
-    rdb_filter::RdbFilter,
 };
 use sqlx::{Pool, Postgres};
 
@@ -24,7 +24,7 @@ pub struct PgStructExtractor {
     pub conn_pool: Pool<Postgres>,
     pub schemas: Vec<String>,
     pub do_global_structs: bool,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub db_batch_size: usize,
 }
 

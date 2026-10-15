@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::{fs, io::ErrorKind};
 
-use anyhow::{bail, Error, Ok};
+use anyhow::{bail, Error, Ok, Result};
 
 use super::{
     checker_config::{
@@ -40,9 +40,11 @@ use crate::{
         limiter_config::{CapacityLimiterConfig, RateLimiterConfig},
     },
     error::{DtError, DtOptionExt, DtResultExt},
+    filter::DtFilter,
     meta::{
         mongo::mongo_cdc_source::MongoCdcSource, mssql::mssql_connection_pool::MssqlConnectionPool,
     },
+    router::DtRouter,
     utils::task_util::TaskUtil,
 };
 
@@ -78,8 +80,6 @@ const SINKER: &str = "sinker";
 const PIPELINE: &str = "pipeline";
 const PARALLELIZER: &str = "parallelizer";
 const RUNTIME: &str = "runtime";
-const FILTER: &str = "filter";
-const ROUTER: &str = "router";
 const RESUMER: &str = "resumer";
 const DATA_MARKER: &str = "data_marker";
 const PROCESSOR: &str = "processor";
@@ -135,22 +135,21 @@ const LEGACY_CHECKER_ENABLE: &str = "enable";
 
 // default values
 pub const APE_DTS: &str = "APE_DTS";
-const ASTRISK: &str = "*";
 const RESUMER_CONNECTION_LIMIT_DEFAULT: usize = 5;
 
 impl TaskConfig {
-    pub fn new(task_config_file: &str) -> anyhow::Result<Self> {
+    pub fn new(task_config_file: &str) -> Result<Self> {
         let loader = IniLoader::new(task_config_file)?;
         Self::from_loader(&loader)
     }
 
-    pub fn from_loader(loader: &IniLoader) -> anyhow::Result<Self> {
+    pub fn from_loader(loader: &IniLoader) -> Result<Self> {
         let pipeline = Self::load_pipeline_config(loader)?;
         let runtime = Self::load_runtime_config(loader)?;
         let (sinker_basic, sinker) = Self::load_sinker_config(loader)?;
         let (extractor_basic, extractor) = Self::load_extractor_config(loader, &pipeline)?;
-        let filter = Self::load_filter_config(loader)?;
-        let router = Self::load_router_config(loader)?;
+        let filter = FilterConfig::from_ini(&loader.ini)?;
+        let router = RouterConfig::from_ini(&loader.ini)?;
         let parallelizer = Self::load_parallelizer_config(loader, &sinker_basic, &pipeline)?;
         let checker =
             Self::load_checker_config(loader, &extractor_basic.extract_type, &sinker_basic)?;
@@ -326,7 +325,7 @@ impl TaskConfig {
         sinker_basic: &BasicSinkerConfig,
         filter: &FilterConfig,
         router: &RouterConfig,
-    ) -> anyhow::Result<GlobalConfig> {
+    ) -> Result<GlobalConfig> {
         Ok(GlobalConfig {
             task_id: loader.get_with_default(
                 GLOBAL,
@@ -339,7 +338,7 @@ impl TaskConfig {
     fn load_extractor_config(
         loader: &IniLoader,
         pipeline: &PipelineConfig,
-    ) -> anyhow::Result<(BasicExtractorConfig, ExtractorConfig)> {
+    ) -> Result<(BasicExtractorConfig, ExtractorConfig)> {
         let db_type: DbType = loader.get_required(EXTRACTOR, DB_TYPE)?;
         let extract_type: ExtractType = loader.get_required(EXTRACTOR, "extract_type")?;
         let url: String = loader.get_optional(EXTRACTOR, URL)?;
@@ -696,7 +695,7 @@ impl TaskConfig {
         Ok((basic, extractor))
     }
 
-    fn load_sinker_config(loader: &IniLoader) -> anyhow::Result<(BasicSinkerConfig, SinkerConfig)> {
+    fn load_sinker_config(loader: &IniLoader) -> Result<(BasicSinkerConfig, SinkerConfig)> {
         let has_sinker = loader.ini.sections().contains(&SINKER.to_string());
         if !has_sinker {
             bail!(DtError::invalid_config("config [sinker] is required"));
@@ -944,7 +943,7 @@ impl TaskConfig {
         loader: &IniLoader,
         sinker_basic: &BasicSinkerConfig,
         _pipeline: &PipelineConfig,
-    ) -> anyhow::Result<ParallelizerConfig> {
+    ) -> Result<ParallelizerConfig> {
         let parallel_size = loader.get_with_default(PARALLELIZER, PARALLEL_SIZE, 1)?;
         let parallel_type =
             loader.get_with_default(PARALLELIZER, "parallel_type", ParallelType::Serial)?;
@@ -1017,7 +1016,7 @@ impl TaskConfig {
         })
     }
 
-    fn load_pipeline_config(loader: &IniLoader) -> anyhow::Result<PipelineConfig> {
+    fn load_pipeline_config(loader: &IniLoader) -> Result<PipelineConfig> {
         let capacity_limiter = CapacityLimiterConfig {
             buffer_size: loader.get_with_default(PIPELINE, "buffer_size", 16000)?,
             buffer_memory_mb: loader.get_optional(PIPELINE, "buffer_memory_mb")?,
@@ -1048,7 +1047,7 @@ impl TaskConfig {
         loader: &IniLoader,
         extract_type: &ExtractType,
         sinker_basic: &BasicSinkerConfig,
-    ) -> anyhow::Result<Option<CheckerConfig>> {
+    ) -> Result<Option<CheckerConfig>> {
         if loader.contains(CHECKER, LEGACY_CHECKER_ENABLE) {
             bail!(DtError::invalid_config(
                 "config [checker].enable is no longer supported; use [sinker].sink_type=check for standalone check, [checker] for snapshot inline check, or [checker_cdc].is_enabled=true for CDC inline check",
@@ -1188,7 +1187,7 @@ impl TaskConfig {
         }))
     }
 
-    fn load_runtime_config(loader: &IniLoader) -> anyhow::Result<RuntimeConfig> {
+    fn load_runtime_config(loader: &IniLoader) -> Result<RuntimeConfig> {
         Ok(RuntimeConfig {
             log_level: loader.get_with_default(RUNTIME, "log_level", "info".to_string())?,
             log_dir: loader.get_with_default(RUNTIME, "log_dir", "./logs".to_string())?,
@@ -1205,7 +1204,7 @@ impl TaskConfig {
         })
     }
 
-    fn load_tracing_config(loader: &IniLoader) -> anyhow::Result<TracingConfig> {
+    fn load_tracing_config(loader: &IniLoader) -> Result<TracingConfig> {
         let default = TracingConfig::default();
         Ok(TracingConfig {
             task_summary_mode: loader.get_with_default(
@@ -1221,7 +1220,7 @@ impl TaskConfig {
         })
     }
 
-    fn load_snapshot_parallel_size(loader: &IniLoader) -> anyhow::Result<usize> {
+    fn load_snapshot_parallel_size(loader: &IniLoader) -> Result<usize> {
         Ok(if loader.contains(EXTRACTOR, PARALLEL_SIZE) {
             loader.get_with_default(EXTRACTOR, PARALLEL_SIZE, 1)?
         } else {
@@ -1229,39 +1228,11 @@ impl TaskConfig {
         })
     }
 
-    fn load_filter_config(loader: &IniLoader) -> anyhow::Result<FilterConfig> {
-        // The public configuration uses db/tb. It currently maps db to the common schema field;
-        // the common physical db field remains empty.
-        Ok(FilterConfig {
-            do_schemas: loader.get_optional(FILTER, "do_dbs")?,
-            ignore_schemas: loader.get_optional(FILTER, "ignore_dbs")?,
-            do_tbs: loader.get_optional(FILTER, "do_tbs")?,
-            ignore_tbs: loader.get_optional(FILTER, "ignore_tbs")?,
-            ignore_cols: loader.get_optional(FILTER, "ignore_cols")?,
-            do_events: loader.get_with_default(FILTER, "do_events", ASTRISK.to_string())?,
-            do_ddls: loader.get_optional(FILTER, "do_ddls")?,
-            do_dcls: loader.get_optional(FILTER, "do_dcls")?,
-            do_structures: loader.get_with_default(FILTER, "do_structures", ASTRISK.to_string())?,
-            ignore_cmds: loader.get_optional(FILTER, "ignore_cmds")?,
-            where_conditions: loader.get_optional(FILTER, "where_conditions")?,
-        })
-    }
-
-    fn load_router_config(loader: &IniLoader) -> anyhow::Result<RouterConfig> {
-        // Keep db_map as the public key while routing on the common schema namespace internally.
-        Ok(RouterConfig::Rdb {
-            schema_map: loader.get_optional(ROUTER, "db_map")?,
-            tb_map: loader.get_optional(ROUTER, "tb_map")?,
-            col_map: loader.get_optional(ROUTER, "col_map")?,
-            topic_map: loader.get_optional(ROUTER, "topic_map")?,
-        })
-    }
-
     fn load_resumer_config(
         loader: &IniLoader,
         runtime: &RuntimeConfig,
         sinker_basic: &BasicSinkerConfig,
-    ) -> anyhow::Result<ResumerConfig> {
+    ) -> Result<ResumerConfig> {
         let legacy_keys = ["resume_from_log", "resume_log_dir", "resume_config_file"]
             .into_iter()
             .filter(|key| loader.contains(RESUMER, key))
@@ -1315,7 +1286,7 @@ impl TaskConfig {
         }
     }
 
-    fn load_data_marker_config(loader: &IniLoader) -> anyhow::Result<Option<DataMarkerConfig>> {
+    fn load_data_marker_config(loader: &IniLoader) -> Result<Option<DataMarkerConfig>> {
         if !loader.ini.sections().contains(&DATA_MARKER.to_string()) {
             return Ok(None);
         }
@@ -1331,7 +1302,7 @@ impl TaskConfig {
         }))
     }
 
-    fn load_processor_config(loader: &IniLoader) -> anyhow::Result<Option<ProcessorConfig>> {
+    fn load_processor_config(loader: &IniLoader) -> Result<Option<ProcessorConfig>> {
         if !loader.ini.sections().contains(&PROCESSOR.to_string()) {
             return Ok(None);
         }
@@ -1358,7 +1329,7 @@ impl TaskConfig {
         }))
     }
 
-    fn load_meta_center_config(loader: &IniLoader) -> anyhow::Result<Option<MetaCenterConfig>> {
+    fn load_meta_center_config(loader: &IniLoader) -> Result<Option<MetaCenterConfig>> {
         let mut config = MetaCenterConfig::Basic;
         let db_type: DbType = loader.get_required(EXTRACTOR, DB_TYPE)?;
         let meta_type = loader.get_with_default(META_CENTER, "type", MetaCenterType::Basic)?;
@@ -1395,7 +1366,7 @@ impl TaskConfig {
         Ok(Some(config))
     }
 
-    fn get_is_cluster_config(loader: &IniLoader, section: &str) -> anyhow::Result<Option<bool>> {
+    fn get_is_cluster_config(loader: &IniLoader, section: &str) -> Result<Option<bool>> {
         let key = "is_cluster";
         Ok(match loader.ini.get(section, key) {
             Some(value) if !value.trim().is_empty() => Some(loader.get_optional(section, key)?),
@@ -1409,7 +1380,7 @@ impl TaskConfig {
         connection_auth: &ConnectionAuthConfig,
         application_name: Option<&str>,
         max_connections: u32,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if max_connections == 0 {
             bail!(DtError::invalid_config(format!(
                 "config [{}].{} must be greater than 0",
@@ -1428,7 +1399,7 @@ impl TaskConfig {
         Ok(())
     }
 
-    fn load_connection_timeout_secs(loader: &IniLoader, section: &str) -> anyhow::Result<u64> {
+    fn load_connection_timeout_secs(loader: &IniLoader, section: &str) -> Result<u64> {
         let connection_timeout_secs =
             loader.get_with_default(section, CONNECTION_TIMEOUT_SECS, 15)?;
         if connection_timeout_secs == 0 {
@@ -1441,7 +1412,7 @@ impl TaskConfig {
     }
 
     #[cfg(feature = "metrics")]
-    fn load_metrics_config(loader: &IniLoader) -> anyhow::Result<MetricsConfig> {
+    fn load_metrics_config(loader: &IniLoader) -> Result<MetricsConfig> {
         let metrics_section = "metrics";
         let labels_str: String = loader.get_optional(metrics_section, "labels")?;
         let mut metrics_labels = HashMap::new();
@@ -1463,30 +1434,48 @@ impl TaskConfig {
             metrics_labels,
         })
     }
+
+    pub fn src_db_type(&self) -> DbType {
+        if self.extractor_basic.db_type == DbType::Kafka {
+            // Kafka payloads use the destination engine's resource layout.
+            self.destination_target()
+                .map(|target| target.db_type)
+                .unwrap_or_else(|| self.sinker_basic.db_type.clone())
+        } else {
+            self.extractor_basic.db_type.clone()
+        }
+    }
+
+    pub fn build_filter(&self) -> Result<DtFilter> {
+        DtFilter::from_config(&self.filter, self.src_db_type())
+    }
+
+    pub fn build_router(&self) -> Result<Option<DtRouter>> {
+        let dst = self
+            .destination_target()
+            .map(|target| target.db_type)
+            .unwrap_or_else(|| self.sinker_basic.db_type.clone());
+        let router = DtRouter::from_config(&self.router, self.src_db_type(), dst)?;
+        Ok(router.has_rules().then_some(router))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        env::temp_dir,
-        fs,
-        path::PathBuf,
-        process,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use anyhow::{anyhow, Result};
+    use configparser::ini::Ini;
 
     use super::{
         CheckMode, DbType, ExtractorConfig, ParallelType, RdbParallelType, SinkerConfig,
         TaskConfig, TaskKind, TaskType,
     };
+    use crate::config::ini_loader::IniLoader;
     use crate::config::parallelizer_config::{
         ChunkPartitionerRebalanceCost, ChunkPartitionerRebalanceStrategy,
     };
-    use crate::config::router_config::RouterConfig;
     use crate::error::{ErrorCode, ErrorReport};
+    use crate::resource::RID;
     use crate::runtime_trace::{TaskSummaryMode, TraceOutputFormat};
-
-    static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(0);
 
     fn cdc_inline_check_config(
         parallel_type: &str,
@@ -1523,27 +1512,17 @@ parallel_type={parallel_type}
         )
     }
 
-    fn write_temp_task_config(contents: &str) -> PathBuf {
-        let unique_id = NEXT_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
-        let path = temp_dir().join(format!(
-            "ape_dts_task_config_{}_{}.ini",
-            process::id(),
-            unique_id
-        ));
-        fs::write(&path, contents).unwrap();
-        path
-    }
-
-    fn load_temp_task_config(contents: &str) -> anyhow::Result<TaskConfig> {
-        let config_path = write_temp_task_config(contents);
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
-        result
+    fn load_task_config(contents: &str) -> Result<TaskConfig> {
+        let mut ini = Ini::new();
+        ini.set_inline_comment_symbols(Some(&Vec::new()));
+        ini.read(contents.to_owned())
+            .map_err(|error| anyhow!(error))?;
+        TaskConfig::from_loader(&IniLoader { ini })
     }
 
     #[test]
     fn redis_snapshot_and_cdc_uses_cdc_task_type() {
-        let config = load_temp_task_config(
+        let config = load_task_config(
             r#"[extractor]
 db_type=redis
 extract_type=snapshot_and_cdc
@@ -1610,37 +1589,179 @@ parallel_type=rdb_merge
     }
 
     #[test]
-    fn public_db_keys_map_to_internal_schema_fields() {
-        let config = load_temp_task_config(&basic_snapshot_config(
-            r#"[filter]
-do_dbs=source_namespace
-ignore_dbs=ignored_namespace
-do_tbs=source_namespace.*
+    fn task_topologies_build_resource_filters_and_routers() {
+        use crate::rid;
 
-[router]
-db_map=source_namespace:target_namespace
-tb_map=source_namespace.source_tb:target_namespace.target_tb
-"#,
-        ))
-        .expect("db/tb configuration should map to the common schema/tb model");
+        let mysql = (DbType::Mysql, "mysql://127.0.0.1:3306");
+        let pg = (DbType::Pg, "postgresql://127.0.0.1:5432");
+        let mssql = (DbType::Mssql, "mssql://127.0.0.1:1433?database=ape_dts");
+        let mongo = (DbType::Mongo, "mongodb://127.0.0.1:27017");
+        let redis = (DbType::Redis, "redis://127.0.0.1:6379");
+        let kafka = (DbType::Kafka, "127.0.0.1:9092");
+        let clickhouse = (DbType::ClickHouse, "http://127.0.0.1:8123");
+        for (src, dst, source, rules, target) in [
+            (
+                &mysql,
+                &mysql,
+                rid!("db", "orders"),
+                "db_map=db:archive",
+                Some(rid!("archive", "orders")),
+            ),
+            (
+                &pg,
+                &clickhouse,
+                rid!("db", "orders"),
+                "db_map=db:archive",
+                Some(rid!("archive", "orders")),
+            ),
+            (
+                &mssql,
+                &mssql,
+                rid!("db", "dbo", "orders"),
+                "db_map=db:archive",
+                Some(rid!("archive", "dbo", "orders")),
+            ),
+            (
+                &mongo,
+                &mongo,
+                rid!("db", "orders"),
+                "db_map=db:archive",
+                Some(rid!("archive", "orders")),
+            ),
+            (&redis, &redis, rid!("0"), "db_map=0:1", Some(rid!("1"))),
+            (&mysql, &mysql, rid!("db", "orders"), "", None),
+            (&mysql, &redis, rid!("db", "orders"), "", None),
+            (
+                &mysql,
+                &mysql,
+                rid!("db", "orders"),
+                "\n[rules.table]\ndo=db.orders",
+                None,
+            ),
+            (
+                &mysql,
+                &kafka,
+                rid!("db", "orders"),
+                "db_map=db:archive\ntopic_map=db.*:test3",
+                Some(rid!("archive", "orders")),
+            ),
+            (
+                &mysql,
+                &kafka,
+                rid!("db", "orders"),
+                "topic_map=db.*:test3",
+                Some(rid!("db", "orders")),
+            ),
+            (
+                &mysql,
+                &kafka,
+                rid!("db", "orders"),
+                "\n[rules.table]\ndo=db.orders\nto_topic=db.*:test3",
+                Some(rid!("db", "orders")),
+            ),
+        ] {
+            let (src_engine, src_url) = src;
+            let (dst_engine, dst_url) = dst;
+            let extractor = if dst_engine == &DbType::Kafka {
+                "extract_type=cdc\nserver_id=1"
+            } else {
+                "extract_type=snapshot"
+            };
+            let label = format!("{src_engine} -> {dst_engine}");
+            let config = load_task_config(&format!(
+                "[extractor]\ndb_type={src_engine}\nurl={src_url}\n{extractor}\n\n[sinker]\ndb_type={dst_engine}\nurl={dst_url}\nsink_type=write\n\n[filter]\ndo_dbs=*\n\n[router]\n{rules}"
+            )).unwrap_or_else(|error| panic!("{label}: {error:#}"));
+            let filter = config.build_filter().unwrap();
+            assert_eq!(filter.db_type(), src_engine, "{label}");
+            assert!(!filter.filter(&source).unwrap(), "{label}");
+            let router = config.build_router().unwrap();
+            assert_eq!(router.is_some(), target.is_some(), "{label}");
+            if let Some(target) = target {
+                let router = router.unwrap();
+                assert_eq!(router.src_db_type(), src_engine, "{label}");
+                assert_eq!(router.dst_db_type(), dst_engine, "{label}");
+                let routed = router.forward::<RID>(&source).unwrap();
+                assert_eq!(routed, target, "{label}");
+                assert_eq!(router.reverse::<RID>(&routed).unwrap(), source, "{label}");
+                if dst_engine == &DbType::Kafka {
+                    assert_eq!(router.to::<RID>(&routed).unwrap(), rid!("test3"));
+                }
+            }
+        }
+    }
 
-        assert_eq!(config.filter.do_schemas, "source_namespace");
-        assert_eq!(config.filter.ignore_schemas, "ignored_namespace");
-        assert_eq!(config.filter.do_tbs, "source_namespace.*");
+    #[test]
+    fn kafka_source_uses_destination_engine_for_payload_resources() {
+        use crate::rid;
 
-        let RouterConfig::Rdb {
-            schema_map, tb_map, ..
-        } = config.router;
-        assert_eq!(schema_map, "source_namespace:target_namespace");
-        assert_eq!(
-            tb_map,
-            "source_namespace.source_tb:target_namespace.target_tb"
-        );
+        for (dst, url, source, target) in [
+            (
+                DbType::Mysql,
+                "mysql://127.0.0.1:3306",
+                rid!("inventory", "orders"),
+                rid!("archive", "orders"),
+            ),
+            (
+                DbType::Pg,
+                "postgresql://127.0.0.1:5432",
+                rid!("inventory", "orders"),
+                rid!("archive", "orders"),
+            ),
+            (
+                DbType::Mssql,
+                "mssql://127.0.0.1:1433?database=ape_dts",
+                rid!("inventory", "dbo", "orders"),
+                rid!("archive", "dbo", "orders"),
+            ),
+        ] {
+            let contents = format!(
+                "[extractor]\ndb_type=kafka\nextract_type=cdc\nurl=127.0.0.1:9092\ngroup=resource-test\ntopic=test3\n\n[sinker]\ndb_type={dst}\nurl={url}\nsink_type=write"
+            );
+            let config = load_task_config(&contents).unwrap();
+            assert_eq!(config.extractor_basic.db_type, DbType::Kafka);
+            assert_eq!(config.src_db_type(), dst);
+            assert_eq!(config.build_filter().unwrap().db_type(), &dst);
+            assert!(config.build_router().unwrap().is_none());
+
+            let config = load_task_config(&format!(
+                "{contents}\n[filter]\ndo_dbs=inventory\n[router]\ndb_map=inventory:archive"
+            ))
+            .unwrap();
+            let filter = config.build_filter().unwrap();
+            assert!(!filter.filter(&source).unwrap());
+            assert!(filter.filter(&target).unwrap());
+            let router = config.build_router().unwrap().unwrap();
+            assert_eq!(router.src_db_type(), &dst);
+            assert_eq!(router.dst_db_type(), &dst);
+            assert_eq!(router.forward::<RID>(&source).unwrap(), target);
+            assert_eq!(router.reverse::<RID>(&target).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn rules_configuration_reaches_runtime_filter_and_router() {
+        use crate::rid;
+        for section in ["db", "database"] {
+            let config = load_task_config(&basic_snapshot_config(&format!(
+                "[rules.{section}]\ndo=inventory\nroute=inventory:archive\n[rules.column]\nignore=inventory.*.secret"
+            ))).unwrap();
+            let filter = config.build_filter().unwrap();
+            let router = config.build_router().unwrap().unwrap();
+            let source = rid!("inventory", "orders");
+            assert!(!filter.filter(&source).unwrap());
+            assert!(filter.filter(rid!("other", "orders")).unwrap());
+            assert!(filter
+                .filter(rid!("inventory", "orders", "secret"))
+                .unwrap());
+            let target = router.forward::<RID>(&source).unwrap();
+            assert_eq!(target, rid!("archive", "orders"));
+            assert_eq!(router.reverse::<RID>(&target).unwrap(), source);
+        }
     }
 
     #[test]
     fn tracing_config_defaults_to_marker_summary_mode() {
-        let config = load_temp_task_config(&basic_snapshot_config(""))
+        let config = load_task_config(&basic_snapshot_config(""))
             .expect("default tracing config should be valid");
 
         assert_eq!(config.tracing.task_summary_mode, TaskSummaryMode::Marker);
@@ -1649,7 +1770,7 @@ tb_map=source_namespace.source_tb:target_namespace.target_tb
 
     #[test]
     fn tracing_config_loads_marker_summary_mode_and_json_output() {
-        let config = load_temp_task_config(&basic_snapshot_config(
+        let config = load_task_config(&basic_snapshot_config(
             r#"[tracing]
 task_summary_mode=marker
 output_format=json
@@ -1663,7 +1784,7 @@ output_format=json
 
     #[test]
     fn redis_empty_is_cluster_keeps_auto_detection() {
-        let config = load_temp_task_config(
+        let config = load_task_config(
             r#"[extractor]
 db_type=redis
 extract_type=cdc
@@ -1694,7 +1815,7 @@ parallel_type=redis
 
     #[test]
     fn checker_accepts_supported_configs() {
-        let config = load_temp_task_config(&cdc_inline_check_config(
+        let config = load_task_config(&cdc_inline_check_config(
             "rdb_merge",
             "",
             "queue_size=16",
@@ -1715,7 +1836,7 @@ parallel_type=redis
             16
         );
 
-        let config = load_temp_task_config(
+        let config = load_task_config(
             r#"[extractor]
 db_type=mongo
 extract_type=snapshot
@@ -1753,14 +1874,14 @@ parallel_type=mongo
                 10,
             ),
         ] {
-            let checker = load_temp_task_config(&config)
+            let checker = load_task_config(&config)
                 .expect("sampled checker config should be valid")
                 .checker
                 .expect("checker should exist");
             assert_eq!(checker.sample_percent, Some(sample_percent));
         }
 
-        let checker = load_temp_task_config(
+        let checker = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=struct
@@ -1780,7 +1901,7 @@ sample_percent=
         .expect("checker should exist");
         assert_eq!(checker.sample_percent, None);
 
-        let config = load_temp_task_config(&basic_snapshot_config(
+        let config = load_task_config(&basic_snapshot_config(
             r#"[checker]
 batch_size=10
 
@@ -1883,7 +2004,7 @@ sample_percent=10
                 "config [checker].sample_percent only supports snapshot check or inline cdc check",
             ),
         ] {
-            let error = load_temp_task_config(&config).err().unwrap();
+            let error = load_task_config(&config).err().unwrap();
             assert_eq!(ErrorReport::from_anyhow(&error).code, ErrorCode::InvalidConfig);
             assert_eq!(error.root_cause().to_string(), expected_err);
         }
@@ -1891,7 +2012,7 @@ sample_percent=10
 
     #[test]
     fn parallelizer_rebalance_config_uses_none_defaults() {
-        let config_path = write_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=snapshot
@@ -1908,8 +2029,7 @@ parallel_type=snapshot
 parallel_size=2
 "#,
         );
-        let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
-        fs::remove_file(config_path).unwrap();
+        let config = result.unwrap();
 
         let rebalance = config
             .parallelizer
@@ -1924,7 +2044,7 @@ parallel_size=2
 
     #[test]
     fn snapshot_extractor_default_batch_size_is_at_least_one() {
-        let config_path = write_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=snapshot
@@ -1940,8 +2060,7 @@ url=mysql://127.0.0.1:3307
 buffer_size=4
 "#,
         );
-        let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
-        fs::remove_file(config_path).unwrap();
+        let config = result.unwrap();
 
         match config.extractor {
             ExtractorConfig::MysqlSnapshot { batch_size, .. } => {
@@ -1953,7 +2072,7 @@ buffer_size=4
 
     #[test]
     fn basic_configs_store_connection_timeout() {
-        let config = load_temp_task_config(
+        let config = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=snapshot
@@ -1975,7 +2094,7 @@ connection_timeout_secs=9
 
     #[test]
     fn snapshot_extractor_batch_size_must_be_greater_than_zero() {
-        let result = load_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=snapshot
@@ -1998,7 +2117,7 @@ url=mysql://127.0.0.1:3307
 
     #[test]
     fn parallelizer_rebalance_config_loads_explicit_values() {
-        let config_path = write_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=snapshot
@@ -2019,8 +2138,7 @@ rebalance_min_partition_rows=64
 rebalance_split_skew_ratio=1.5
 "#,
         );
-        let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
-        fs::remove_file(config_path).unwrap();
+        let config = result.unwrap();
 
         let rebalance = config
             .parallelizer
@@ -2038,7 +2156,7 @@ rebalance_split_skew_ratio=1.5
 
     #[test]
     fn parallelizer_basic_config_has_no_rebalance_config() {
-        let config_path = write_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=struct
@@ -2053,8 +2171,7 @@ parallel_size=4
 rebalance_strategy=auto_split
 "#,
         );
-        let config = TaskConfig::new(config_path.to_str().unwrap()).unwrap();
-        fs::remove_file(config_path).unwrap();
+        let config = result.unwrap();
 
         assert!(matches!(
             config.parallelizer.parallel_type(),
@@ -2066,7 +2183,7 @@ rebalance_strategy=auto_split
 
     #[test]
     fn parallelizer_rebalance_max_partitions_per_sinker_must_be_greater_than_zero() {
-        let config_path = write_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=snapshot
@@ -2082,10 +2199,7 @@ parallel_type=snapshot
 rebalance_max_partitions_per_sinker=0
 "#,
         );
-        let err = TaskConfig::new(config_path.to_str().unwrap())
-            .err()
-            .unwrap();
-        fs::remove_file(config_path).unwrap();
+        let err = result.err().unwrap();
 
         assert_eq!(
             err.root_cause().to_string(),
@@ -2095,7 +2209,7 @@ rebalance_max_partitions_per_sinker=0
 
     #[test]
     fn sinker_batch_size_must_be_greater_than_zero() {
-        let config_path = write_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mysql
 extract_type=snapshot
@@ -2108,8 +2222,6 @@ url=mysql://127.0.0.1:3307
 batch_size=0
 "#,
         );
-        let result = TaskConfig::new(config_path.to_str().unwrap());
-        fs::remove_file(config_path).unwrap();
 
         match result {
             Err(err) => {
@@ -2124,7 +2236,7 @@ batch_size=0
 
     #[test]
     fn mssql_snapshot_config_accepts_chunk_and_partition_cols() {
-        let config = load_temp_task_config(
+        let config = load_task_config(
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
@@ -2187,7 +2299,7 @@ parallel_size=2
 
     #[test]
     fn mssql_snapshot_config_defaults_connection_timeout_to_15_seconds() {
-        let config = load_temp_task_config(
+        let config = load_task_config(
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
@@ -2225,7 +2337,7 @@ parallel_size=1
 
     #[test]
     fn mssql_snapshot_config_rejects_invalid_connection_string() {
-        let result = load_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot
@@ -2255,7 +2367,7 @@ ssl_mode=disable
 
     #[test]
     fn mssql_snapshot_config_rejects_zero_connection_timeout() {
-        let result = load_temp_task_config(
+        let result = load_task_config(
             r#"[extractor]
 db_type=mssql
 extract_type=snapshot

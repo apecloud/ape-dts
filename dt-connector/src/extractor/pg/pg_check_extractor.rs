@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::{
+    filter::DtFilter,
     log_info,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -11,7 +13,6 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
-    rdb_filter::RdbFilter,
 };
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres};
@@ -31,7 +32,7 @@ pub struct PgCheckExtractor {
     pub extract_state: ExtractState,
     pub conn_pool: Pool<Postgres>,
     pub meta_manager: PgMetaManager,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub check_log_dir: String,
     pub batch_size: usize,
     pub replay_diff_as_update: bool,
@@ -65,8 +66,11 @@ impl BatchCheckExtractor for PgCheckExtractor {
         let tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?.to_owned();
         let check_row_data_items = self.build_check_row_data_items(check_logs, &tb_meta)?;
 
-        let ignore_cols = self.filter.get_ignore_cols(schema, tb);
-        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
+        let ignore_cols = Some(
+            self.filter
+                .excluded_columns(rid!(schema, tb), &tb_meta.basic.cols)?,
+        );
+        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols.as_ref());
         let batch_refs: Vec<&RowData> = check_row_data_items.iter().collect();
         let query_info = if check_logs.len() == 1 {
             query_builder.get_select_query(&check_row_data_items[0])?
@@ -77,7 +81,7 @@ impl BatchCheckExtractor for PgCheckExtractor {
 
         let mut rows = query.fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols, None)?;
+            let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref(), None)?;
 
             if is_diff && self.replay_diff_as_update {
                 row_data.row_type = RowType::Update;

@@ -17,13 +17,12 @@ use dt_common::{
         },
     },
     monitor::{sinker_worker_metrics::SinkerWorkerMetrics, task_monitor_handle::TaskMonitorHandle},
-    rdb_filter::RdbFilter,
+    resource::ResourceKind,
     utils::redis_util::RedisUtil,
 };
 use dt_connector::{
     checker::CheckerHandle,
     data_marker::DataMarker,
-    rdb_router::RdbRouter,
     sinker::{
         base_sinker::BaseSinker,
         busy_tracking_sinker::BusyTrackingSinker,
@@ -56,13 +55,6 @@ use crate::{extractor_util::ExtractorUtil, task_util::ConnClient};
 type Sinkers = Vec<Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>>;
 
 pub struct SinkerUtil {}
-
-#[macro_export]
-macro_rules! create_filter {
-    ($config:expr,$db_type:ident) => {
-        RdbFilter::from_config(&$config.filter, &DbType::$db_type)?
-    };
-}
 
 impl SinkerUtil {
     fn parse_http_endpoint(value: &str) -> anyhow::Result<(Url, String, String)> {
@@ -147,7 +139,7 @@ impl SinkerUtil {
                 replace,
                 ..
             } => {
-                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
+                let router = config.build_router()?;
 
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
@@ -186,7 +178,7 @@ impl SinkerUtil {
                 replace,
                 ..
             } => {
-                let router = RdbRouter::from_config(&config.router, &DbType::Pg)?;
+                let router = config.build_router()?;
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
                     _ => {
@@ -222,7 +214,7 @@ impl SinkerUtil {
                 replace,
                 ..
             } => {
-                let router = RdbRouter::from_config(&config.router, &DbType::Mssql)?;
+                let router = config.build_router()?;
                 let conn_pool = match client {
                     ConnClient::Mssql(conn_pool) => conn_pool,
                     _ => {
@@ -249,7 +241,7 @@ impl SinkerUtil {
                 require_shard_key_filter,
                 ..
             } => {
-                let router = RdbRouter::from_config(&config.router, &DbType::Mongo)?;
+                let router = config.build_router()?;
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
@@ -280,7 +272,7 @@ impl SinkerUtil {
             SinkerConfig::MongoStruct {
                 conflict_policy, ..
             } => {
-                let filter = create_filter!(config, Mongo);
+                let filter = config.build_filter()?;
                 let mongo_client = match client {
                     ConnClient::MongoDB(mongo_client) => mongo_client,
                     _ => {
@@ -307,14 +299,13 @@ impl SinkerUtil {
                 required_acks,
                 with_field_defs,
             } => {
-                let router = RdbRouter::from_config_for_topic(
-                    &config.router,
-                    // use the db_type of extractor
-                    &config.extractor_basic.db_type,
-                )?;
+                let router = config.build_router()?.or_dt_error(DtError::invalid_config(
+                    "Kafka sinker requires [router].topic_map or [rules.<resource>].to_topic",
+                ))?;
                 // kafka sinker may need meta data from RDB extractor
                 let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;
-                let avro_converter = AvroConverter::new(meta_manager, with_field_defs)?;
+                let mut avro_converter = AvroConverter::new(meta_manager, with_field_defs)?;
+                avro_converter.router = Some(router.clone());
 
                 let brokers = vec![url.to_string()];
                 let acks = match required_acks.as_str() {
@@ -344,8 +335,8 @@ impl SinkerUtil {
             SinkerConfig::MysqlStruct {
                 conflict_policy, ..
             } => {
-                let filter = create_filter!(config, Mysql);
-                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
+                let filter = config.build_filter()?;
+                let router = config.build_router()?;
 
                 let conn_pool = match client {
                     ConnClient::MySQL(conn_pool) => conn_pool,
@@ -366,8 +357,8 @@ impl SinkerUtil {
             SinkerConfig::PgStruct {
                 conflict_policy, ..
             } => {
-                let filter = create_filter!(config, Pg);
-                let router = RdbRouter::from_config(&config.router, &DbType::Pg)?;
+                let filter = config.build_filter()?;
+                let router = config.build_router()?;
 
                 let conn_pool = match client {
                     ConnClient::PostgreSQL(conn_pool) => conn_pool,
@@ -400,9 +391,23 @@ impl SinkerUtil {
                 let is_cluster = RedisUtil::is_redis_cluster(&mut conn, is_cluster);
                 let version = RedisUtil::get_redis_version(&mut conn)?;
                 let method = RedisWriteMethod::from_str(&method)?;
-                let router = RdbRouter::from_config(&config.router, &DbType::Redis)?;
+                let router = config.build_router()?;
                 if let Some(router) = &router {
-                    router.validate_redis_db_map(is_cluster)?;
+                    if let Some(databases) = router.resource_routers().get(&ResourceKind::Database)
+                    {
+                        for (source, target) in databases.mappings() {
+                            source.segments()[0]
+                                .parse::<i64>()
+                                .context("invalid Redis source database")?;
+                            let target_db = target.segments()[0]
+                                .parse::<i64>()
+                                .context("invalid Redis target database")?;
+                            anyhow::ensure!(
+                                !is_cluster || target_db == 0,
+                                "Redis Cluster target only supports db 0: {source} -> {target}"
+                            );
+                        }
+                    }
                 }
 
                 if is_cluster {
@@ -546,8 +551,8 @@ impl SinkerUtil {
                     None,
                 )
                 .await?;
-                let filter = create_filter!(config, Mysql);
-                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
+                let filter = config.build_filter()?;
+                let router = config.build_router()?;
                 let extractor_meta_manager = Self::require_extractor_meta_manager(config).await?;
                 let sinker = StarrocksStructSinker {
                     db_type: config.sinker_basic.db_type.clone(),
@@ -595,8 +600,8 @@ impl SinkerUtil {
                     .with_url(format!("http://{}:{}", host, port))
                     .with_user(url_info.username())
                     .with_password(url_info.password().unwrap_or(""));
-                let filter = create_filter!(config, Mysql);
-                let router = RdbRouter::from_config(&config.router, &DbType::Mysql)?;
+                let filter = config.build_filter()?;
+                let router = config.build_router()?;
                 let extractor_meta_manager = Self::require_extractor_meta_manager(config).await?;
                 let sinker = ClickhouseStructSinker {
                     client,
@@ -610,8 +615,7 @@ impl SinkerUtil {
             }
 
             SinkerConfig::Sql { reverse } => {
-                let router =
-                    RdbRouter::from_config(&config.router, &config.extractor_basic.db_type)?;
+                let router = config.build_router()?;
 
                 for _ in 0..parallel_size {
                     let meta_manager = Self::require_extractor_meta_manager(config).await?;

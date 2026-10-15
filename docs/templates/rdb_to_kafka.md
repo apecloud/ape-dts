@@ -2,6 +2,10 @@
 
 Refer to [config details](/docs/en/config.md) for explanations of common fields.
 
+`to_<kind>` defines a dispatch mapping; `to_topic` dispatches data to Kafka topics. In `[rules.table]`, the source kind is `table` and the receiving kind is `topic`; use source table names on the left. `route` changes names inside messages, while dispatch selects where messages are sent.
+
+The configurations below cover the producer leg of a MySQL/PostgreSQL → Kafka topology. For a complete MySQL → Kafka → MySQL topology, including one producer, three consumers and final destination tables, see the [dispatch example](/docs/en/rules.md#topology-example-mysql--kafka--mysql).
+
 # MySQL Snapshot
 ```
 [extractor]
@@ -9,12 +13,12 @@ db_type=mysql
 extract_type=snapshot
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=insert
+[rules.table]
+do=test_db_1.*,test_db_2.*
+to_topic=*.*:default_topic,test_db_2.*:topic2,test_db_2.tb_1:topic3
+
+[rules.event]
+do=insert
 
 [sinker]
 db_type=kafka
@@ -22,9 +26,6 @@ sink_type=write
 batch_size=200
 url=127.0.0.1:9093
 with_field_defs=true
-
-[router]
-topic_map=*.*:default_topic,test_db_2.*:topic2,test_db_2.tb_1:topic3
 
 [parallelizer]
 parallel_type=snapshot
@@ -40,7 +41,7 @@ log_level=info
 log4rs_file=./log4rs.yaml
 ```
 
-- refer to [config details](/docs/en/config.md) for [router] topic_map
+- refer to [config details](/docs/en/config.md) for `[rules.table] to_topic`
 
 - [sinker]
 
@@ -59,13 +60,15 @@ binlog_filename=
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=*.*
-ignore_tbs=
-do_events=insert,update,delete
-do_ddls=*
+[rules.table]
+do=*.*
+to_topic=*.*:test
+
+[rules.event]
+do=insert,update,delete
+
+[rules.ddl]
+do=*
 
 [sinker]
 db_type=kafka
@@ -73,9 +76,6 @@ sink_type=write
 batch_size=200
 url=127.0.0.1:9093
 with_field_defs=true
-
-[router]
-topic_map=*.*:test
 
 [parallelizer]
 parallel_type=serial

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{ddl_statement::DdlStatement, ddl_type::DdlType};
-use crate::config::config_enums::DbType;
+use crate::{config::config_enums::DbType, resource::RID};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct DdlData {
@@ -24,32 +24,6 @@ impl std::fmt::Display for DdlData {
 impl DdlData {
     pub fn to_sql(&self) -> String {
         self.statement.to_sql(&self.db_type)
-    }
-
-    pub fn get_schema_tb(&self) -> (String, String) {
-        let (mut schema, tb) = self.statement.get_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone()
-        }
-        (schema, tb)
-    }
-
-    pub fn get_db_schema_tb(&self) -> (String, String, String) {
-        let (schema, tb) = self.get_schema_tb();
-        (self.default_db.clone(), schema, tb)
-    }
-
-    pub fn get_rename_to_schema_tb(&self) -> (String, String) {
-        let (mut schema, tb) = self.statement.get_rename_to_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone()
-        }
-        (schema, tb)
-    }
-
-    pub fn get_rename_to_db_schema_tb(&self) -> (String, String, String) {
-        let (schema, tb) = self.get_rename_to_schema_tb();
-        (self.default_db.clone(), schema, tb)
     }
 
     pub fn split_to_multi(self) -> Vec<DdlData> {
@@ -82,5 +56,157 @@ impl DdlData {
         size += self.statement.get_malloc_size();
 
         size
+    }
+
+    /// Namespace DDL omits the trailing table segment. Read fixed resource levels
+    /// with `RID::into_left`; tuple conversions align from the end.
+    pub fn get_id<T: From<RID>>(&self) -> T {
+        let (mut schema, tb) = self.statement.get_schema_tb();
+        if schema.is_empty() {
+            schema = self.default_schema.clone();
+        }
+        RID::new([self.default_db.clone(), schema, tb]).into()
+    }
+
+    pub fn get_rename_id<T: From<RID>>(&self) -> T {
+        let (mut schema, tb) = self.statement.get_rename_to_schema_tb();
+        if schema.is_empty() {
+            schema = self.default_schema.clone();
+        }
+        RID::new([self.default_db.clone(), schema, tb]).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        meta::ddl_meta::ddl_statement::{
+            CreateDatabaseStatement, CreateSchemaStatement, DropMultiTableStatement,
+            PgDropIndexStatement, RenameMultiTableStatement, RenameTableStatement,
+        },
+        rid,
+    };
+
+    #[test]
+    fn generic_ids_resolve_defaults_and_keep_explicit_namespaces() {
+        for (db, schema, new_schema, expected_schema, expected_new_schema) in [
+            ("", "", "", "inventory", "inventory"),
+            ("", "sales.eu", "archive", "sales.eu", "archive"),
+            ("market", "", "archive", "inventory", "archive"),
+            ("market", "sales", "", "sales", "inventory"),
+        ] {
+            let ddl = DdlData {
+                default_db: db.into(),
+                default_schema: "inventory".into(),
+                statement: DdlStatement::RenameTable(RenameTableStatement {
+                    schema: schema.into(),
+                    tb: "orders".into(),
+                    new_schema: new_schema.into(),
+                    new_tb: "events".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert_eq!(ddl.get_id::<RID>(), rid!(db, expected_schema, "orders"));
+            assert_eq!(
+                ddl.get_rename_id::<RID>(),
+                rid!(db, expected_new_schema, "events")
+            );
+            let (schema, table): (String, String) = ddl.get_id();
+            assert_eq!(
+                (schema.as_str(), table.as_str()),
+                (expected_schema, "orders")
+            );
+            let (schema, table): (String, String) = ddl.get_rename_id();
+            assert_eq!(
+                (schema.as_str(), table.as_str()),
+                (expected_new_schema, "events")
+            );
+            let (database, schema, table): (String, String, String) = ddl.get_id();
+            assert_eq!(
+                (database.as_str(), schema.as_str(), table.as_str()),
+                (db, expected_schema, "orders")
+            );
+            let (database, schema, table): (String, String, String) = ddl.get_rename_id();
+            assert_eq!(
+                (database.as_str(), schema.as_str(), table.as_str()),
+                (db, expected_new_schema, "events")
+            );
+            assert_eq!(ddl.get_id::<String>(), "orders");
+            assert_eq!(ddl.get_rename_id::<String>(), "events");
+        }
+    }
+
+    #[test]
+    fn namespace_ids_keep_their_resource_depth() {
+        for (db, statement, expected, name) in [
+            (
+                "",
+                DdlStatement::CreateDatabase(CreateDatabaseStatement {
+                    db: "inventory".into(),
+                    ..Default::default()
+                }),
+                rid!("inventory"),
+                "inventory",
+            ),
+            (
+                "",
+                DdlStatement::CreateSchema(CreateSchemaStatement {
+                    schema: "inventory".into(),
+                    ..Default::default()
+                }),
+                rid!("inventory"),
+                "inventory",
+            ),
+            (
+                "market",
+                DdlStatement::CreateSchema(CreateSchemaStatement {
+                    schema: "inventory".into(),
+                    ..Default::default()
+                }),
+                rid!("market", "inventory"),
+                "inventory",
+            ),
+            (
+                "",
+                DdlStatement::DropMultiTable(DropMultiTableStatement {
+                    schema_tbs: vec![(String::new(), "orders".into())],
+                    ..Default::default()
+                }),
+                rid!("fallback"),
+                "fallback",
+            ),
+            (
+                "",
+                DdlStatement::RenameMultiTable(RenameMultiTableStatement {
+                    schema_tbs: vec![(String::new(), "orders".into())],
+                    new_schema_tbs: vec![(String::new(), "events".into())],
+                    ..Default::default()
+                }),
+                rid!("fallback"),
+                "fallback",
+            ),
+            (
+                "",
+                DdlStatement::PgDropIndex(PgDropIndexStatement {
+                    index_name: "orders_idx".into(),
+                    ..Default::default()
+                }),
+                rid!("fallback"),
+                "fallback",
+            ),
+        ] {
+            let ddl = DdlData {
+                default_db: db.into(),
+                default_schema: "fallback".into(),
+                statement,
+                ..Default::default()
+            };
+            assert_eq!(ddl.get_id::<RID>(), expected);
+            assert_eq!(ddl.get_id::<String>(), name);
+        }
+        assert!(DdlData::default().get_id::<RID>().is_empty());
+        assert!(DdlData::default().get_rename_id::<RID>().is_empty());
     }
 }

@@ -228,4 +228,16 @@ mod test {
         )
         .await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_filter_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/rules_filter_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_router_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/rules_router_test").await;
+    }
 }

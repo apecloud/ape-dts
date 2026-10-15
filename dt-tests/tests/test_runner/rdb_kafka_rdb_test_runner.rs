@@ -83,6 +83,8 @@ impl RdbKafkaRdbTestRunner {
                 .await?
         );
 
+        self.assert_topic_counts()?;
+
         // stop
         #[allow(clippy::needless_range_loop)]
         for i in 0..self.kafka_to_dst_runners.len() {
@@ -112,6 +114,11 @@ impl RdbKafkaRdbTestRunner {
         self.src_to_dst_runner
             .execute_test_sqls_and_compare(parse_millis)
             .await?;
+        self.src_to_dst_runner
+            .execute_extra_sqls_and_assert(parse_millis)
+            .await?;
+
+        self.assert_topic_counts()?;
 
         // stop
         #[allow(clippy::needless_range_loop)]
@@ -124,6 +131,7 @@ impl RdbKafkaRdbTestRunner {
         self.src_to_kafka_runner
             .abort_task(&src_to_kafka_task)
             .await?;
+        self.src_to_dst_runner.execute_clean_sqls().await?;
         Ok(())
     }
 
@@ -200,5 +208,23 @@ impl RdbKafkaRdbTestRunner {
             .delete_topics(&[topic], &AdminOptions::new())
             .await
             .unwrap();
+    }
+
+    fn assert_topic_counts(&self) -> anyhow::Result<()> {
+        let file = format!(
+            "{}/expect_topic_counts.txt",
+            self.src_to_kafka_runner.test_dir
+        );
+        if !BaseTestRunner::check_path_exists(&file) {
+            return Ok(());
+        }
+        let config = TaskConfig::new(&self.src_to_kafka_runner.task_config_file)?;
+        let consumer: BaseConsumer = Self::create_kafka_base_consumer(&config.sinker_basic.url);
+        for line in BaseTestRunner::load_file(&file) {
+            let (topic, expected) = line.split_once('=').unwrap();
+            let (low, high) = consumer.fetch_watermarks(topic, 0, Duration::from_secs(10))?;
+            assert_eq!(high - low, expected.parse::<i64>()?, "topic: {topic}");
+        }
+        Ok(())
     }
 }

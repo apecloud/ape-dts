@@ -1,0 +1,3 @@
+rules.pg.snapshot.router.default=4
+rules.pg.snapshot.router.namespace=6
+rules.pg.snapshot.router.exact=4

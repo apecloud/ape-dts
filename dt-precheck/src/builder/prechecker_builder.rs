@@ -3,7 +3,7 @@ use std::vec;
 use dt_common::{
     config::{config_enums::DbType, task_config::TaskConfig},
     error::{DtError, DtErrorContextExt, DtResultExt, EndpointRole},
-    rdb_filter::RdbFilter,
+    filter::DtFilter,
 };
 
 use crate::{
@@ -57,10 +57,9 @@ impl PrecheckerBuilder {
             )
         };
 
-        let filter = RdbFilter::from_config(&self.task_config.filter, &db_type)?;
+        let filter = DtFilter::from_config(&self.task_config.filter, db_type.clone())?;
         let checker: Option<Box<dyn Prechecker + Send>> = match db_type {
             DbType::Mysql => Some(Box::new(MySqlPrechecker {
-                filter_config: self.task_config.filter.clone(),
                 precheck_config: self.precheck_config.clone(),
                 is_source,
                 fetcher: MysqlFetcher {
@@ -72,7 +71,6 @@ impl PrecheckerBuilder {
                 },
             })),
             DbType::Pg => Some(Box::new(PostgresqlPrechecker {
-                filter_config: self.task_config.filter.clone(),
                 precheck_config: self.precheck_config.clone(),
                 is_source,
                 fetcher: PgFetcher {

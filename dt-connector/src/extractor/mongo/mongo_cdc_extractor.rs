@@ -9,9 +9,11 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
+use dt_common::rid;
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtOptionExt},
+    filter::{CommonFilterKind, DtFilter},
     log_error, log_info, log_warn,
     meta::{
         col_value::ColValue,
@@ -29,7 +31,7 @@ use dt_common::{
         row_type::RowType,
         syncer::Syncer,
     },
-    rdb_filter::RdbFilter,
+    resource::RID,
     system_dbs::SystemDb,
     utils::time_util::TimeUtil,
 };
@@ -54,7 +56,7 @@ use crate::{
 pub struct MongoCdcExtractor {
     pub base_extractor: BaseExtractor,
     pub extract_state: ExtractState,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub resume_token: String,
     pub start_timestamp: u32,
     pub source: MongoCdcSource,
@@ -759,7 +761,7 @@ impl MongoCdcExtractor {
 
         if self
             .filter
-            .filter_event(&row_data.schema, &row_data.tb, &row_data.row_type)
+            .filter_event(rid!(row_data.schema, row_data.tb), &row_data.row_type)?
         {
             self.extract_state.record_extracted_metrics_row(&row_data);
             return self
@@ -791,7 +793,7 @@ impl MongoCdcExtractor {
             return Ok(());
         }
 
-        self.filter.add_ignore_tb(&db_tb[0], &db_tb[1]);
+        self.filter.add_ignore(rid!(db_tb[0], db_tb[1]))?;
 
         let (app_name, heartbeat_interval_secs, syncer, mongo_client) = (
             self.app_name.clone(),
@@ -1063,10 +1065,6 @@ impl MongoCdcExtractor {
     }
 
     fn filter_requests_change_stream_ddl(&self) -> bool {
-        if self.filter.do_ddls.contains("*") {
-            return true;
-        }
-
         [
             DdlType::MongoCreateCollection,
             DdlType::MongoCreateIndex,
@@ -1077,7 +1075,11 @@ impl MongoCdcExtractor {
             DdlType::MongoRefineCollectionShardKey,
         ]
         .iter()
-        .any(|ddl_type| self.filter.do_ddls.contains(&ddl_type.to_string()))
+        .any(|ddl_type| {
+            !self
+                .filter
+                .filter_common(CommonFilterKind::Ddl, &ddl_type.to_string())
+        })
     }
 
     async fn push_change_stream_ddl(
@@ -1085,8 +1087,8 @@ impl MongoCdcExtractor {
         ddl_data: DdlData,
         position: Position,
     ) -> anyhow::Result<()> {
-        let (ddl_db, ddl_tb) = ddl_data.get_schema_tb();
-        if !self.filter.filter_ddl(&ddl_db, &ddl_tb, &ddl_data.ddl_type) {
+        let id: RID = ddl_data.get_id();
+        if !self.filter.filter_ddl(&id, &ddl_data.ddl_type)? {
             self.base_extractor
                 .push_ddl(&mut self.extract_state, ddl_data, position)
                 .await?;

@@ -65,4 +65,21 @@ mod test {
         runner.run_struct_test_without_check().await.unwrap();
         // TestBase::run_check_test("mysql_to_mysql/struct/batch_test/bench_test_1/check").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_rules_filter_test() {
+        let mut runner = RdbStructTestRunner::new("mysql_to_mysql/struct/rules_filter_test")
+            .await
+            .unwrap();
+        runner.run_mysql_struct_test().await.unwrap();
+        runner.base.assert_dst_sql().await.unwrap();
+        runner.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_rules_router_test() {
+        TestBase::run_mysql_struct_test("mysql_to_mysql/struct/rules_router_test").await;
+    }
 }

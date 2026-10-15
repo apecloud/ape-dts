@@ -1,18 +1,16 @@
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
     log_sql,
     meta::{rdb_meta_manager::RdbMetaManager, row_data::RowData},
 };
 
-use crate::{
-    rdb_query_builder::RdbQueryBuilder, rdb_router::RdbRouter, sinker::base_sinker::BaseSinker,
-    Sinker,
-};
+use crate::{rdb_query_builder::RdbQueryBuilder, sinker::base_sinker::BaseSinker, Sinker};
 
 #[derive(Clone)]
 pub struct SqlSinker {
     pub meta_manager: RdbMetaManager,
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub reverse: bool,
     pub base_sinker: BaseSinker,
 }

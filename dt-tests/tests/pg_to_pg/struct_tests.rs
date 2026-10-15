@@ -92,4 +92,21 @@ mod test {
         // TODO: The checking logic for UDTs has not been implemented. This test can only ensure that execution does not produce errors.
         TestBase::run_pg_struct_test("pg_to_pg/struct/udt_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_rules_filter_test() {
+        let mut runner = RdbStructTestRunner::new("pg_to_pg/struct/rules_filter_test")
+            .await
+            .unwrap();
+        runner.run_pg_struct_test().await.unwrap();
+        runner.base.assert_dst_sql().await.unwrap();
+        runner.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_rules_router_test() {
+        TestBase::run_pg_struct_test("pg_to_pg/struct/rules_router_test").await;
+    }
 }

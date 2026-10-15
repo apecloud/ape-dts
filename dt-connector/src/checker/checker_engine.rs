@@ -4,6 +4,8 @@ use std::{
 };
 
 use anyhow::Context;
+use dt_common::config::config_enums::DbType;
+use dt_common::rid;
 use dt_common::{
     error::{ErrorCode, ErrorReport},
     log_diff, log_miss, log_sql, log_warn,
@@ -97,6 +99,7 @@ impl<C: Checker> DataChecker<C> {
             .router
             .as_ref()
             .map(|router| router.reverse_route_row(first_target_row.clone()))
+            .transpose()?
             .unwrap_or_else(|| first_target_row.clone());
         let source_meta = self.load_source_table_meta(&first_source_row).await?;
         let target_db = first_target_row.db.clone();
@@ -110,6 +113,7 @@ impl<C: Checker> DataChecker<C> {
                 .router
                 .as_ref()
                 .map(|router| router.reverse_route_row(target_row.clone()))
+                .transpose()?
                 .unwrap_or_else(|| target_row.clone());
             match Self::build_missing_target_entry(
                 &target_row,
@@ -118,7 +122,7 @@ impl<C: Checker> DataChecker<C> {
                 self.ctx.output_full_row,
             ) {
                 Ok((row_key, entry)) if Self::should_sample_key(self.ctx.sample_rate, row_key) => {
-                    self.store_entry(&target_row, row_key, entry).await;
+                    self.store_entry(&target_row, row_key, entry).await?;
                     checked_count += 1;
                 }
                 Ok(_) => {}
@@ -129,14 +133,14 @@ impl<C: Checker> DataChecker<C> {
                         target_row.tb,
                         error
                     );
-                    self.ctx.record_row_table_counts(&target_row, 0, 1);
+                    self.ctx.record_row_table_counts(&target_row, 0, 1)?;
                     self.ctx.summary.skip_count += 1;
                 }
             }
         }
 
         self.ctx
-            .record_table_counts(&target_db, &target_schema, &target_tb, checked_count, 0);
+            .record_table_counts(&target_db, &target_schema, &target_tb, checked_count, 0)?;
         Ok(checked_count)
     }
 
@@ -203,23 +207,16 @@ impl<C: Checker> DataChecker<C> {
                     Some(&diff_col_values),
                 )?;
                 let mut log = Self::build_miss_log(src_row_data, ctx, tb_meta).await?;
-                let routed_diffs = if let Some(col_map) = ctx.router.as_ref().and_then(|router| {
-                    router.reverse_get_col_map_with_db(
-                        &src_row_data.db,
-                        &src_row_data.schema,
-                        &src_row_data.tb,
-                    )
+                let routed_diffs = if let Some(columns) = ctx.router.as_ref().and_then(|router| {
+                    router.reverse_column_map(rid!(
+                        src_row_data.db,
+                        src_row_data.schema,
+                        src_row_data.tb
+                    ))
                 }) {
                     diff_col_values
                         .into_iter()
-                        .map(|(col, val)| {
-                            let key = col_map
-                                .get(&col)
-                                .filter(|c| *c != &col)
-                                .cloned()
-                                .unwrap_or(col);
-                            (key, val)
-                        })
+                        .map(|(col, val)| (columns.get(&col).cloned().unwrap_or(col), val))
                         .collect()
                 } else {
                     diff_col_values
@@ -230,12 +227,8 @@ impl<C: Checker> DataChecker<C> {
                     .filter(|(col, _)| diff_cols.contains(col))
                     .collect();
                 log.dst_row = if ctx.output_full_row {
-                    if let Some(router) = ctx.router.as_ref().filter(|router| {
-                        router
-                            .reverse_get_col_map_with_db(&dst_row.db, &dst_row.schema, &dst_row.tb)
-                            .is_some()
-                    }) {
-                        let routed = router.reverse_route_row(dst_row.clone());
+                    if let Some(router) = ctx.router.as_ref() {
+                        let routed = router.reverse_route_row(dst_row.clone())?;
                         Self::clone_row_values(&routed)
                     } else {
                         Self::clone_row_values(dst_row)
@@ -491,7 +484,7 @@ impl<C: Checker> DataChecker<C> {
                         row.schema,
                         row.tb
                     );
-                    self.ctx.record_row_table_counts(&row, 0, 1);
+                    self.ctx.record_row_table_counts(&row, 0, 1)?;
                     self.ctx.summary.skip_count += 1;
                 }
                 Err(e) => {
@@ -504,7 +497,7 @@ impl<C: Checker> DataChecker<C> {
                         row.tb,
                         e
                     );
-                    self.ctx.record_row_table_counts(&row, 0, 1);
+                    self.ctx.record_row_table_counts(&row, 0, 1)?;
                     self.ctx.summary.skip_count += 1;
                 }
             }
@@ -580,36 +573,49 @@ impl<C: Checker> DataChecker<C> {
         }
     }
 
-    fn task_id_for_snapshot_entry(&self, entry: &CheckEntry) -> String {
-        let (db, schema, tb) = match &self.ctx.router {
+    fn task_id_for_snapshot_entry(&self, entry: &CheckEntry) -> anyhow::Result<String> {
+        let (ref db, ref schema, ref tb) = match &self.ctx.router {
             Some(router) => {
-                router.reverse_get_tb_map_with_db(&entry.key.db, &entry.key.schema, &entry.key.tb)
-            }
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(&entry.key.db, &entry.key.schema, &entry.key.tb)
+                } else {
+                    rid!(&entry.key.schema, &entry.key.tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?,
             None => (
-                entry.key.db.as_str(),
-                entry.key.schema.as_str(),
-                entry.key.tb.as_str(),
+                entry.key.db.to_string(),
+                entry.key.schema.to_string(),
+                entry.key.tb.to_string(),
             ),
         };
-        self.ctx
+        Ok(self
+            .ctx
             .base_sinker
-            .task_id_for_db_schema_tb(db, schema, tb)
+            .task_id_for_db_schema_tb(db, schema, tb))
     }
 
-    async fn add_entry_metrics(&self, entry: &CheckEntry) {
+    async fn add_entry_metrics(&self, entry: &CheckEntry) -> anyhow::Result<()> {
         let (task_metric, counter_type) = Self::checker_metric_types(entry);
         // Update both cumulative task metrics and checker window counters.
         self.ctx.add_checker_metric(task_metric, 1);
-        let task_id = self.task_id_for_snapshot_entry(entry);
+        let task_id = self.task_id_for_snapshot_entry(entry)?;
         self.ctx.monitor.ensure_monitor(&task_id);
         self.ctx
             .monitor
             .add_counter(&task_id, counter_type, 1)
             .await;
+        Ok(())
     }
 
     /// Updates cumulative Prometheus summary counters, which differ from point-in-time unresolved snapshot counts.
-    async fn update_summary_for_entry(&mut self, entry: &CheckEntry) {
+    async fn update_summary_for_entry(&mut self, entry: &CheckEntry) -> anyhow::Result<()> {
         {
             let summary = &mut self.ctx.summary;
             if entry.is_miss() {
@@ -623,7 +629,8 @@ impl<C: Checker> DataChecker<C> {
         }
         self.ctx.record_entry_table_counts(entry);
 
-        self.add_entry_metrics(entry).await;
+        self.add_entry_metrics(entry).await?;
+        Ok(())
     }
 
     pub fn update_pending_counter(&self) {
@@ -697,39 +704,46 @@ impl<C: Checker> DataChecker<C> {
                 tb_meta,
             )
             .await?;
-            self.store_entry(src_row_data, row_key, entry).await;
+            self.store_entry(src_row_data, row_key, entry).await?;
         } else {
             self.remove_store_entry(src_row_data, row_key)?;
         }
         Ok(())
     }
 
-    pub async fn store_entry(&mut self, row_data: &RowData, row_key: u128, entry: CheckEntry) {
+    pub async fn store_entry(
+        &mut self,
+        row_data: &RowData,
+        row_key: u128,
+        entry: CheckEntry,
+    ) -> anyhow::Result<()> {
         if !self.ctx.is_cdc {
             Self::log_entry(&entry);
-            self.update_summary_for_entry(&entry).await;
-            return;
+            self.update_summary_for_entry(&entry).await?;
+            return Ok(());
         }
 
         self.store_dirty = true;
         self.optional_logs_dirty = true;
-        self.add_entry_metrics(&entry).await;
+        self.add_entry_metrics(&entry).await?;
         let store_key = CheckerStoreKey::new(&row_data.db, &row_data.schema, &row_data.tb, row_key);
         self.dirty_deletes.shift_remove(&store_key);
         self.dirty_upserts.insert(store_key.clone());
         self.store.insert(store_key, entry);
         self.update_pending_counter();
+        Ok(())
     }
 
-    pub async fn flush_store(&mut self) {
+    pub async fn flush_store(&mut self) -> anyhow::Result<()> {
         let mut entries = std::mem::take(&mut self.store)
             .into_iter()
             .collect::<Vec<_>>();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
         for (_key, entry) in entries {
             Self::log_entry(&entry);
-            self.update_summary_for_entry(&entry).await;
+            self.update_summary_for_entry(&entry).await?;
         }
+        Ok(())
     }
 
     async fn build_miss_log(
@@ -737,42 +751,15 @@ impl<C: Checker> DataChecker<C> {
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let (mapped_db, mapped_schema, mapped_tb) = match &ctx.router {
-            Some(router) => router.reverse_get_tb_map_with_db(
-                &src_row_data.db,
-                &src_row_data.schema,
-                &src_row_data.tb,
-            ),
-            None => (
-                src_row_data.db.as_str(),
-                src_row_data.schema.as_str(),
-                src_row_data.tb.as_str(),
-            ),
-        };
-        let has_col_map = ctx
-            .router
-            .as_ref()
-            .and_then(|router| {
-                router.reverse_get_col_map_with_db(
-                    &src_row_data.db,
-                    &src_row_data.schema,
-                    &src_row_data.tb,
-                )
-            })
-            .is_some();
-        let db_changed = src_row_data.db != mapped_db;
-        let schema_changed = src_row_data.schema != mapped_schema || src_row_data.tb != mapped_tb;
-
-        let routed_row = if let Some(router) = ctx.router.as_ref().filter(|_| has_col_map) {
-            Cow::Owned(router.reverse_route_row(src_row_data.clone()))
+        let routed_row = if let Some(router) = ctx.router.as_ref() {
+            Cow::Owned(router.reverse_route_row(src_row_data.clone())?)
         } else {
             Cow::Borrowed(src_row_data)
         };
-        let (schema, tb) = if has_col_map {
-            (routed_row.schema.clone(), routed_row.tb.clone())
-        } else {
-            (mapped_schema.to_string(), mapped_tb.to_string())
-        };
+        let db_changed = src_row_data.db != routed_row.db;
+        let schema_changed =
+            src_row_data.schema != routed_row.schema || src_row_data.tb != routed_row.tb;
+        let (schema, tb) = (routed_row.schema.clone(), routed_row.tb.clone());
 
         let id_col_values = if let Some(meta_manager) = ctx.extractor_meta_manager.as_mut() {
             let src_tb_meta = meta_manager
@@ -933,7 +920,7 @@ impl<C: Checker> DataChecker<C> {
                             item.row.tb
                         );
                         self.ctx.summary.skip_count += 1;
-                        self.ctx.record_row_table_counts(&item.row, 0, 1);
+                        self.ctx.record_row_table_counts(&item.row, 0, 1)?;
                     }
                 }
             }
@@ -955,7 +942,7 @@ impl<C: Checker> DataChecker<C> {
                 item.row.tb
             );
             self.ctx.summary.skip_count += 1;
-            self.ctx.record_row_table_counts(&item.row, 0, 1);
+            self.ctx.record_row_table_counts(&item.row, 0, 1)?;
             return Ok(false);
         };
         let dst_rows = self
@@ -1050,16 +1037,25 @@ impl<C: Checker> DataChecker<C> {
         for rows in grouped {
             let first_row = rows.first().context("checker group is empty")?;
             if monitor_task_id.is_none() {
-                let (db, schema, tb) = match &self.ctx.router {
-                    Some(router) => router.reverse_get_tb_map_with_db(
-                        &first_row.db,
-                        &first_row.schema,
-                        &first_row.tb,
-                    ),
+                let (ref db, ref schema, ref tb) = match &self.ctx.router {
+                    Some(router) => {
+                        let id = if router.route_db_type() == &DbType::Mssql {
+                            rid!(&first_row.db, &first_row.schema, &first_row.tb)
+                        } else {
+                            rid!(&first_row.schema, &first_row.tb)
+                        };
+                        if router.src_db_type() == &DbType::Mssql {
+                            router.reverse::<(String, String, String)>(id)
+                        } else {
+                            router
+                                .reverse::<(String, String)>(id)
+                                .map(|(schema, tb)| (String::new(), schema, tb))
+                        }
+                    }?,
                     None => (
-                        first_row.db.as_str(),
-                        first_row.schema.as_str(),
-                        first_row.tb.as_str(),
+                        first_row.db.to_string(),
+                        first_row.schema.to_string(),
+                        first_row.tb.to_string(),
                     ),
                 };
                 monitor_task_id =
@@ -1099,7 +1095,7 @@ impl<C: Checker> DataChecker<C> {
                 .check_rows(prepared_rows, dst_row_data_map, tb_meta.as_ref())
                 .await?;
             self.ctx
-                .record_table_counts(&table_db, &table_schema, &table_tb, checked_count, 0);
+                .record_table_counts(&table_db, &table_schema, &table_tb, checked_count, 0)?;
             total_checked += checked_count;
         }
         if total_checked == 0 {
@@ -1139,6 +1135,13 @@ mod tests {
     };
 
     use async_trait::async_trait;
+    use dt_common::{
+        config::config_enums::DbType,
+        error::DtError,
+        meta::mysql::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta},
+        resource::RID,
+        router::DtRouter,
+    };
 
     use super::super::{CheckContext, CheckerIo};
     use super::*;
@@ -1147,12 +1150,12 @@ mod tests {
 
     #[test]
     fn missing_target_error_codes_are_recognized() {
-        let database_error = anyhow::Error::new(dt_common::error::DtError::DatabaseNotFound(
-            dt_common::config::config_enums::DbType::Mysql,
+        let database_error = anyhow::Error::new(DtError::DatabaseNotFound(
+            DbType::Mysql,
             "test_db".to_string(),
         ));
-        let table_error = anyhow::Error::new(dt_common::error::DtError::DatabaseObjectNotFound(
-            dt_common::config::config_enums::DbType::Mysql,
+        let table_error = anyhow::Error::new(DtError::DatabaseObjectNotFound(
+            DbType::Mysql,
             "test_db.test_tb".to_string(),
         ));
 
@@ -1306,7 +1309,7 @@ mod tests {
     }
 
     fn build_mysql_tb_meta() -> CheckerTbMeta {
-        CheckerTbMeta::Mysql(dt_common::meta::mysql::mysql_tb_meta::MysqlTbMeta {
+        CheckerTbMeta::Mysql(MysqlTbMeta {
             basic: RdbTbMeta {
                 schema: "s1".to_string(),
                 tb: "t1".to_string(),
@@ -1315,15 +1318,10 @@ mod tests {
                 ..Default::default()
             },
             col_type_map: HashMap::from([
-                (
-                    "id".to_string(),
-                    dt_common::meta::mysql::mysql_col_type::MysqlColType::BigInt {
-                        unsigned: false,
-                    },
-                ),
+                ("id".to_string(), MysqlColType::BigInt { unsigned: false }),
                 (
                     "name".to_string(),
-                    dt_common::meta::mysql::mysql_col_type::MysqlColType::Varchar {
+                    MysqlColType::Varchar {
                         length: 32,
                         charset: "utf8mb4".to_string(),
                     },
@@ -1438,6 +1436,111 @@ mod tests {
         assert!(entry.log.src_row.is_some());
         assert!(entry.log.dst_row.is_some());
         assert!(entry.revise_sql.is_some());
+    }
+
+    #[tokio::test]
+    async fn routed_check_logs_restore_source_names_and_columns() {
+        for (src_engine, dst_engine, source, target) in [
+            (
+                DbType::Mysql,
+                DbType::Mysql,
+                ["", "s1", "t1"],
+                ["", "s2", "t2"],
+            ),
+            (
+                DbType::Mssql,
+                DbType::Mssql,
+                ["db1", "s1", "t1"],
+                ["db2", "s2", "t2"],
+            ),
+            (
+                DbType::Pg,
+                DbType::Mssql,
+                ["", "s1", "t1"],
+                ["db2", "s2", "t2"],
+            ),
+            (
+                DbType::Mssql,
+                DbType::Pg,
+                ["db1", "s1", "t1"],
+                ["", "s2", "t2"],
+            ),
+        ] {
+            for column_table in [None, Some("t1"), Some("other")] {
+                let mut rules = vec![(RID::new(source), RID::new(target))];
+                if let Some(table) = column_table {
+                    let mapped_table = if table == "t1" { target[2] } else { table };
+                    rules.push((
+                        rid!(source[0], source[1], table, "name"),
+                        rid!(target[0], target[1], mapped_table, "new_name"),
+                    ));
+                }
+                let router = DtRouter::new(src_engine.clone(), dst_engine.clone(), rules).unwrap();
+                let mut original = build_insert_row(1, "src");
+                original.db = source[0].into();
+                let routed = router.route_row(original.clone()).unwrap();
+                let col = if column_table == Some("t1") {
+                    "new_name"
+                } else {
+                    "name"
+                };
+                let mut actual = routed.clone();
+                actual
+                    .after
+                    .as_mut()
+                    .unwrap()
+                    .insert(col.into(), ColValue::String("dst".into()));
+                let mut ctx = CheckContext {
+                    router: Some(router),
+                    output_full_row: true,
+                    ..Default::default()
+                };
+                let entry = DataChecker::<NoopChecker>::build_check_entry(
+                    CheckInconsistency::Diff(HashMap::from([(
+                        col.into(),
+                        DiffColValue {
+                            src: Some("src".into()),
+                            dst: Some("dst".into()),
+                            src_type: None,
+                            dst_type: None,
+                        },
+                    )])),
+                    &routed,
+                    Some(&actual),
+                    &mut ctx,
+                    &build_mysql_tb_meta(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    [
+                        entry.log.db.as_str(),
+                        entry.log.schema.as_str(),
+                        entry.log.tb.as_str()
+                    ],
+                    source
+                );
+                assert_eq!(
+                    entry.log.target_db.as_deref(),
+                    (source[0] != target[0]).then_some(target[0])
+                );
+                assert_eq!(entry.log.target_schema.as_deref(), Some(target[1]));
+                assert_eq!(entry.log.target_tb.as_deref(), Some(target[2]));
+                assert_eq!(entry.log.src_row, original.after);
+                assert_eq!(
+                    entry.log.dst_row.unwrap()["name"],
+                    ColValue::String("dst".into())
+                );
+                assert_eq!(
+                    entry.log.diff_col_values["name"].src.as_deref(),
+                    Some("src")
+                );
+                assert_eq!(
+                    entry.log.diff_col_values["name"].dst.as_deref(),
+                    Some("dst")
+                );
+            }
+        }
     }
 
     #[tokio::test]

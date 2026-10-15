@@ -8,7 +8,7 @@ use crate::meta::struct_meta::structure::{
     structure_type::StructureType,
     table::Table,
 };
-use crate::{config::config_enums::DbType, rdb_filter::RdbFilter};
+use crate::{config::config_enums::DbType, filter::DtFilter};
 
 #[derive(Debug, Clone)]
 pub struct MysqlCreateTableStatement {
@@ -33,7 +33,7 @@ impl MysqlCreateTableStatement {
         }
     }
 
-    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&mut self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
 
         if !filter.filter_structure(&StructureType::Table) {
