@@ -304,7 +304,8 @@ impl SinkerUtil {
                 ))?;
                 // kafka sinker may need meta data from RDB extractor
                 let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;
-                let avro_converter = AvroConverter::new(meta_manager, with_field_defs)?;
+                let mut avro_converter = AvroConverter::new(meta_manager, with_field_defs)?;
+                avro_converter.router = Some(router.clone());
 
                 let brokers = vec![url.to_string()];
                 let acks = match required_acks.as_str() {

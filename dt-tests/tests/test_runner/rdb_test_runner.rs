@@ -3,6 +3,7 @@ use std::{
     str::FromStr,
 };
 
+use anyhow::{bail, ensure};
 use chrono::{Duration, Utc};
 use dt_common::meta::{
     col_value::ColValue, ddl_meta::ddl_parser::DdlParser,
@@ -27,7 +28,7 @@ use dt_common::{
 use dt_connector::meta_fetcher::mysql::mysql_struct_check_fetcher::MysqlStructCheckFetcher;
 use dt_task::task_util::TaskUtil;
 use serde::de::DeserializeOwned;
-use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
+use sqlx::{query, query_scalar, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::{sync::Semaphore, task::JoinHandle};
 
 use super::{
@@ -656,8 +657,10 @@ impl RdbTestRunner {
         let task = self.spawn_cdc_task(start_millis, parse_millis).await?;
 
         self.execute_test_sqls_and_compare(parse_millis).await?;
+        self.execute_extra_sqls_and_assert(parse_millis).await?;
 
-        self.base.wait_task_finish(&task).await
+        self.base.wait_task_finish(&task).await?;
+        self.execute_clean_sqls().await
     }
 
     pub async fn run_heartbeat_test(
@@ -733,7 +736,9 @@ impl RdbTestRunner {
         // parse_millis * 2 for: time to parse binlog + time to compare data
         (!src_insert_sqls.is_empty() as u64
             + !src_update_sqls.is_empty() as u64
-            + !src_delete_sqls.is_empty() as u64)
+            + !src_delete_sqls.is_empty() as u64
+            + BaseTestRunner::check_path_exists(&format!("{}/src_extra.sql", self.base.test_dir))
+                as u64)
             * parse_millis
             * 2
     }
@@ -1417,7 +1422,7 @@ impl RdbTestRunner {
 
         Ok(db_tbs)
     }
-    fn get_filtered_db_tbs(&self) -> HashSet<RID> {
+    pub fn get_filtered_db_tbs(&self) -> HashSet<RID> {
         let mut filtered_db_tbs = HashSet::new();
         let db_type = &self.get_db_type(SRC);
         let filtered_tbs_file = format!("{}/filtered_tbs.txt", &self.base.test_dir);
@@ -1501,6 +1506,35 @@ impl RdbTestRunner {
         } else {
             format!("{} AND {}", res, condition)
         }
+    }
+
+    /// Supplemental checks for results that intentionally differ from the source.
+    pub async fn assert_dst_sql(&self) -> anyhow::Result<()> {
+        let file = format!("{}/dst_assert.sql", self.base.test_dir);
+        let sqls = BaseTestRunner::load_sql_file(&file, SqlLoadStrategy::Semicolon);
+        ensure!(!sqls.is_empty(), "empty assertions: {file}");
+        for sql in sqls {
+            let result: String = if let Some(pool) = &self.dst_conn_pool_mysql {
+                query_scalar(&sql).fetch_one(pool).await?
+            } else if let Some(pool) = &self.dst_conn_pool_pg {
+                query_scalar(&sql).fetch_one(pool).await?
+            } else {
+                bail!("SQL assertions require a MySQL or PostgreSQL destination");
+            };
+            ensure!(result == "ok", "{file}: {sql}\nactual: {result}");
+        }
+        Ok(())
+    }
+
+    pub async fn execute_extra_sqls_and_assert(&self, parse_millis: u64) -> anyhow::Result<()> {
+        let file = format!("{}/src_extra.sql", self.base.test_dir);
+        if !BaseTestRunner::check_path_exists(&file) {
+            return Ok(());
+        }
+        let sqls = BaseTestRunner::load_sql_file(&file, SqlLoadStrategy::Semicolon);
+        self.execute_src_sqls(&sqls).await?;
+        TimeUtil::sleep_millis(parse_millis).await;
+        self.assert_dst_sql().await
     }
 }
 

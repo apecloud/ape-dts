@@ -1,0 +1,15 @@
+DROP SCHEMA IF EXISTS "rules_special" CASCADE;
+CREATE SCHEMA "rules_special";
+DROP SCHEMA IF EXISTS "rules_archive" CASCADE;
+CREATE SCHEMA "rules_archive";
+DROP SCHEMA IF EXISTS "rules_final" CASCADE;
+CREATE SCHEMA "rules_final";
+DROP SCHEMA IF EXISTS "rules_plain" CASCADE;
+CREATE SCHEMA "rules_plain";
+CREATE TABLE "rules_special"."renamed" ("order_id" INT PRIMARY KEY, "label" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_archive"."audit" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_final"."unchained" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_plain"."identity" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_special"."renamed,log:2" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_special"."star_renamed" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
+CREATE TABLE "rules_archive"."literal_other" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));

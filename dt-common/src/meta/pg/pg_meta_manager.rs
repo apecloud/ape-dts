@@ -332,8 +332,8 @@ impl PgMetaManager {
     }
 
     async fn get_oid(conn_pool: &Pool<Postgres>, schema: &str, tb: &str) -> anyhow::Result<i32> {
-        let sql = format!(r#"SELECT '"{}"."{}"'::regclass::oid;"#, schema, tb);
-        let mut rows = sqlx::query(&sql).fetch(conn_pool);
+        let sql = "SELECT format('%I.%I', $1::text, $2::text)::regclass::oid AS oid";
+        let mut rows = sqlx::query(sql).bind(schema).bind(tb).fetch(conn_pool);
         if let Some(row) = rows.try_next().await? {
             let oid: i32 = row.try_get_unchecked("oid")?;
             return Ok(oid);

@@ -187,4 +187,16 @@ mod test {
     async fn cdc_big_packet_test() {
         TestBase::run_cdc_test("mysql_to_mysql/cdc/big_packet_test", 5000, 5000).await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_rules_filter_test() {
+        TestBase::run_cdc_test("mysql_to_mysql/cdc/rules_filter_test", 3000, 5000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_rules_router_test() {
+        TestBase::run_cdc_test("mysql_to_mysql/cdc/rules_router_test", 3000, 5000).await;
+    }
 }

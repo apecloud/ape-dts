@@ -5,7 +5,7 @@ use dt_common::meta::{
     pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
     row_data::RowData,
 };
-use dt_common::{config::config_enums::DbType, resource::RID};
+use dt_common::{config::config_enums::DbType, resource::RID, utils::sql_util::SqlUtil};
 use dt_connector::rdb_query_builder::RdbQueryBuilder;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Postgres};
@@ -36,12 +36,12 @@ impl RdbUtil {
         let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, ignore_cols);
         let cols_str = query_builder.build_extract_cols_str().unwrap();
         let sql = format!(
-            "SELECT {} FROM `{}`.`{}` {} ORDER BY `{}` ASC",
+            "SELECT {} FROM {}.{} {} ORDER BY {} ASC",
             cols_str,
-            table.segment(0),
-            table.segment(1),
+            SqlUtil::escape_by_db_type(table.segment(0), db_type),
+            SqlUtil::escape_by_db_type(table.segment(1), db_type),
             where_sql,
-            &tb_meta.basic.cols[0],
+            SqlUtil::escape_by_db_type(&tb_meta.basic.cols[0], db_type),
         );
 
         let mut rows = if matches!(db_type, DbType::Mysql | DbType::Tidb) {
@@ -68,15 +68,14 @@ impl RdbUtil {
         let tb_meta = Self::get_tb_meta_pg(conn_pool, table).await?;
         let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
 
-        let tb_meta = Self::get_tb_meta_pg(conn_pool, table).await?;
         let cols_str = query_builder.build_extract_cols_str().unwrap();
         let sql = format!(
-            r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}" ASC"#,
+            "SELECT {} FROM {}.{} {} ORDER BY {} ASC",
             cols_str,
-            table.segment(0),
-            table.segment(1),
+            SqlUtil::escape_by_db_type(table.segment(0), &DbType::Pg),
+            SqlUtil::escape_by_db_type(table.segment(1), &DbType::Pg),
             where_sql,
-            &tb_meta.basic.cols[0],
+            SqlUtil::escape_by_db_type(&tb_meta.basic.cols[0], &DbType::Pg),
         );
         let query = sqlx::query(&sql);
         let mut rows = query.fetch(conn_pool);
