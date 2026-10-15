@@ -1,5 +1,7 @@
 # Benchmark
 
+The examples below use the current configuration syntax. For configuration fields used by historical releases, see [Legacy config](legacy_config.md).
+
 # MySQL -> MySQL
 
 Use [sysbench](https://github.com/akopytov/sysbench) to generate snapshot and incremental data. Use [ape_dts](/docs/en/tutorial/mysql_to_mysql.md) to run migration tasks.
@@ -110,10 +112,14 @@ rebalance_strategy=auto_split
 buffer_size=128000
 checkpoint_interval_secs=1
 
-[filter]
-do_dbs=sbtest
-do_tbs=sbtest.sbtest1,sbtest.sbtest2,sbtest.sbtest3,sbtest.sbtest4,sbtest.sbtest5,sbtest.sbtest6,sbtest.sbtest7,sbtest.sbtest8
-do_events=insert
+[rules.db]
+do=sbtest
+
+[rules.table]
+do=sbtest.sbtest1,sbtest.sbtest2,sbtest.sbtest3,sbtest.sbtest4,sbtest.sbtest5,sbtest.sbtest6,sbtest.sbtest7,sbtest.sbtest8
+
+[rules.event]
+do=insert
 
 [runtime]
 log_level=info
@@ -153,11 +159,17 @@ parallel_size=16
 buffer_size=128000
 checkpoint_interval_secs=1
 
-[filter]
-do_dbs=sbtest_cdc
-do_tbs=sbtest_cdc.sbtest1,sbtest_cdc.sbtest2,sbtest_cdc.sbtest3,sbtest_cdc.sbtest4,sbtest_cdc.sbtest5,sbtest_cdc.sbtest6,sbtest_cdc.sbtest7,sbtest_cdc.sbtest8,sbtest_cdc.ape_dts_bench_cdc_done
-do_events=insert,update
-do_ddls=alter_table
+[rules.db]
+do=sbtest_cdc
+
+[rules.table]
+do=sbtest_cdc.sbtest1,sbtest_cdc.sbtest2,sbtest_cdc.sbtest3,sbtest_cdc.sbtest4,sbtest_cdc.sbtest5,sbtest_cdc.sbtest6,sbtest_cdc.sbtest7,sbtest_cdc.sbtest8,sbtest_cdc.ape_dts_bench_cdc_done
+
+[rules.event]
+do=insert,update
+
+[rules.ddl]
+do=alter_table
 
 [runtime]
 log_level=info

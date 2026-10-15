@@ -31,7 +31,7 @@ parallel_type=rdb_merge
 
 # Other configurations
 
-- For [router], refer to [config details](../config.md).
+- For routing, refer to [config details](../config.md).
 - Refer to task_config.ini in tests:
     - dt-tests/tests/mysql_to_mysql/review
     - dt-tests/tests/pg_to_pg/review

@@ -2,6 +2,12 @@
 
 当前配置参考：[配置详情](/docs/zh/config.md)。
 
+## 未发布：资源规则配置
+
+新增 `[rules.<kind>]`，统一配置 `do`、`ignore`、`where_conditions`、`route` 和分发映射 `to_<kind>`。公共过滤项移入 `[rules.event]`、`[rules.ddl]`、`[rules.dcl]`、`[rules.structure]`、`[rules.cmd]`。
+
+没有 `[rules.*]` 时兼容旧配置；一旦出现任意 rules section，整个旧 `[filter]` / `[router]` 不再参与配置。资源匹配采用最长层级优先，同层 ignore 优先。详见[配置用例](rules.md)和 [Legacy config 迁移说明](legacy_config.md)。
+
 ## 2.0.26 对比 2.0.25
 
 ### 移除的配置
