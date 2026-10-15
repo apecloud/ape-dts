@@ -280,93 +280,39 @@ Inline CDC check 还要求：
 CDC checker queue 用于主动与迁移 pipeline 解耦；队列满时淘汰最旧的待处理 batch，不阻塞写入。
 Checker 处理/输出失败只记录日志，不让主 CDC 写入链路失败。Snapshot 和 struct check 不使用该队列。
 
-# [filter]
+# [rules.<kind>]
 
-| 配置             | 作用                                       | 示例                                                                                                                                 | 默认 |
-| :--------------- | :----------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------- | :--- |
-| do_dbs           | 需同步的库，和 do_tbs 取并集               | db_1,db_2*,\`db*&#\`                                                                                                                 | -    |
-| ignore_dbs       | 需过滤的库，和 ignore_tbs 取并集           | db_1,db_2*,\`db*&#\`                                                                                                                 | -    |
-| do_tbs           | 需同步的表，和 do_dbs 取并集               | db_1.tb_1,db_2*.tb_2*,\`db*&#\`.\`tb*&#\`                                                                                            | -    |
-| ignore_tbs       | 需过滤的表，和 ignore_dbs 取并集           | db_1.tb_1,db_2*.tb_2*,\`db*&#\`.\`tb*&#\`                                                                                            | -    |
-| ignore_cols      | 某些表需过滤的列                           | json:[{"db":"db_1","tb":"tb_1","ignore_cols":["f_2","f_3"]},{"db":"db_2","tb":"tb_2","ignore_cols":["f_3"]}]                         | -    |
-| do_events        | 需同步的事件                               | insert、update、delete                                                                                                               | \*   |
-| do_ddls          | 需同步的 ddl，适用于 mysql cdc 任务        | create_database,drop_database,alter_database,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index | -    |
-| do_dcls          | 需同步的 DCL，适用于支持的结构任务         | create_user,grant                                                                                                                    | -    |
-| do_structures    | 结构迁移任务中需同步的结构                 | mysql/pg: database,table,constraint,sequence,comment,index；mongo: collection,shardkey                                               | \*   |
-| ignore_cmds      | 需忽略的命令，适用于 redis 增量任务        | flushall,flushdb                                                                                                                     | -    |
-| where_conditions | 全量同步时，对源端 select sql 添加过滤条件 | json:[{"db":"db_1","tb":"tb_1","condition":"f_0 > 1"},{"db":"db_2","tb":"tb_2","condition":"f_0 > 1 AND f_1 < 9"}]                   | -    |
+通过这些配置选择需要同步的数据，排除指定对象，或修改目标库、表、列和 Kafka topic。
 
-## 取值范围
+| 配置段 | 用途 |
+| --- | --- |
+| `[rules.db]` | MySQL 等数据库、MongoDB 数据库或 Redis 库编号 |
+| `[rules.schema]` | PostgreSQL schema；SQL Server 的 `数据库.schema` |
+| `[rules.table]` / `[rules.collection]` | 表或 MongoDB 集合 |
+| `[rules.column]` | 数据列的选择、排除和名称映射 |
+| `[rules.event]` | insert、update、delete 事件 |
+| `[rules.ddl]` / `[rules.dcl]` | DDL / DCL 类型 |
+| `[rules.structure]` | 结构迁移的对象类型 |
+| `[rules.cmd]` | Redis 命令 |
 
-- 所有配置项均支持多条配置，如 do_dbs 可包含多个库，以 , 分隔。
-- 如某配置项需匹配所有条目，则设置成 \*，如 do_dbs=\*。
-- 如某配置项不匹配任何条目，则设置成空，如 ignore_dbs=。
-- ignore_cols 和 where_conditions 是 JSON 格式，应包含 "json:" 前缀。
-- do_events 取值：insert、update、delete 中的一个或多个。
-- do_dcls 取值：create_user、alter_user、create_role、drop_user、drop_role、grant、revoke、
-  set_role 中的一个或多个。
-- do_structures 用于选择结构对象类型。MySQL/PostgreSQL 常用取值包括 **database**、**table**、
-  **constraint**、**sequence**、**comment**、**index**。MongoDB 支持 **collection**、**shardkey**。MongoDB 不使用独立的 **database** 结构类型，database 会在创建
-  collection 时由 MongoDB 隐式创建。**shardkey** 用于同步源端 sharded collection 的分片定义，
-  只有目标端通过 `mongos` 连接时才会真正执行。
+```ini
+[rules.db]
+do=inventory
+route=inventory:archive
 
-## 优先级
+[rules.table]
+ignore=inventory.tmp*
+where_conditions=inventory.orders:"id > 100"
+route=inventory.orders:archive.order_history
+```
 
-- ignore_tbs + ignore_dbs > do_tbs + do_dbs。
-- 如果某张表既匹配了 ignore 项，又匹配了 do 项，则该表会被过滤。
-- 如果 do_tbs 和 do_dbs 都有配置，**则同步范围为二者并集**，如果 ignore_tbs 和 ignore_dbs 均有配置，**则过滤范围为二者并集**。
+上例选择 `inventory`，排除 `tmp` 开头的表，将数据写入 `archive`。其中 `orders` 写入 `order_history`；全量迁移或全量校验时仅查询 `id > 100` 的行。
 
-## 通配符
+`do` / `ignore` 支持 `*`、`?` 和正则；`route` 使用精确名称。
 
-| 通配符 | 意义               |
-| :----- | :----------------- |
-| \*     | 匹配多个字符       |
-| ?      | 匹配 0 或 1 个字符 |
+`to_<kind>` 表示分发映射，决定数据发送到目标端的哪个资源；`<kind>` 是接收资源的类型，`to_topic` 是分发到 Kafka topic 的特例。分发映射放在源资源对应的配置段下，例如 `[rules.table]`。`route` 修改数据中的资源名称，分发映射选择接收位置。完整的 MySQL → Kafka → MySQL 拓扑、生产/消费任务配置及落表结果见[分发示例](rules.md#拓扑示例mysql--kafka--mysql)。
 
-适用范围：do_dbs，ignore_dbs，do_tbs，ignore_tbs
-
-## 转义符
-
-| 数据库 | 转义前      | 转义后              |
-| :----- | :---------- | :------------------ |
-| mysql  | db\*&#      | \`db\*&#\`          |
-| mysql  | db*&#.tb*$# | \`db*&#\`.\`tb*$#\` |
-| pg     | db\*&#      | "db\*&#"            |
-| pg     | db*&#.tb*$# | "db*&#"."tb*$#"     |
-
-如果表名/库名包含特殊字符，需要用相应的转义符括起来。
-
-适用范围：do_dbs，ignore_dbs，do_tbs，ignore_tbs。
-
-# [router]
-
-| 配置      | 作用                                                    | 示例                                                                         | 默认 |
-| :-------- | :------------------------------------------------------ | :--------------------------------------------------------------------------- | :--- |
-| db_map    | 库级映射                                                | db_1:dst_db_1,db_2:dst_db_2                                                  | -    |
-| tb_map    | 表级映射                                                | db_1.tb_1:dst_db_1.dst_tb_1,db_1.tb_2:dst_db_1.dst_tb_2                      | -    |
-| col_map   | 列级映射                                                | json:[{"db":"db_1","tb":"tb_1","col_map":{"f_0":"dst_f_0","f_1":"dst_f_1"}}] | -    |
-| topic_map | 表名 -> kafka topic 映射，适用于 mysql/pg -> kafka 任务 | \*.\*:default_topic,test_db_2.\*:topic2,test_db_2.tb_1:topic3                | \*   |
-
-## 取值范围
-
-- 一个映射规则包括源和目标， 以 : 分隔。
-- 所有配置项均支持配置多条，如 db_map 可包含多个库映射，以 , 分隔。
-- col_map 是 JSON 格式，应包含 "json:" 前缀。
-- 如果不配置，则默认 **源库/表/列** 与 **目标库/表/列** 一致，这也是大多数情况。
-
-## 优先级
-
-- tb_map > db_map。
-- col_map 只专注于 **列** 映射，而不做 **库/表** 映射。也就是说，如果某张表需要 **库 + 表 + 列** 映射，需先配置好 tb_map 或 db_map。
-- topic_map，test_db_2.tb_1:topic3 > test_db_2.\*:topic2 > \*.\*:default_topic。
-
-## 通配符
-
-不支持。
-
-## 转义符
-
-和 [filter] 的规则一致。
+完整字段、匹配优先级和各数据库用例见[过滤与路由配置](rules.md)。已有 `[filter]` / `[router]` 文件的维护与迁移见 [Legacy config](legacy_config.md)。
 
 # [pipeline]
 

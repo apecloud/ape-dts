@@ -16,8 +16,9 @@
 heartbeat_interval_secs=10
 heartbeat_tb=test_db_1.ape_dts_heartbeat
 
-[filter]
-ignore_tbs=test_db_1.ape_dts_heartbeat
+[rules.table]
+ignore=test_db_1.ape_dts_heartbeat
+
 ```
 
 - 对于 Redis，请参考：dt-tests/tests/redis_to_redis/cdc/heartbeat_test

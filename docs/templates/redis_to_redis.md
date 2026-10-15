@@ -54,23 +54,15 @@ extract_type=snapshot
 repl_port=10008
 url=redis://:123456@127.0.0.1:6380
 
-[filter]
-do_dbs=*
-do_events=
-ignore_dbs=1,2
-ignore_tbs=
-do_tbs=
+[rules.db]
+do=*
+ignore=1,2
 
 [sinker]
 db_type=redis
 sink_type=write
 url=redis://:123456@127.0.0.1:6390
 batch_size=200
-
-[router]
-db_map=
-col_map=
-tb_map=
 
 [pipeline]
 buffer_size=16000
@@ -100,13 +92,12 @@ extract_type=snapshot_and_cdc
 repl_port=10008
 url=redis://:123456@127.0.0.1:6380
 
-[filter]
-do_dbs=*
-do_events=
-ignore_dbs=1,2
-ignore_tbs=
-do_tbs=
-ignore_cmds=flushall,flushdb
+[rules.db]
+do=*
+ignore=1,2
+
+[rules.cmd]
+ignore=flushall,flushdb
 
 [sinker]
 db_type=redis
@@ -114,11 +105,6 @@ sink_type=write
 method=restore
 url=redis://:123456@127.0.0.1:6390
 batch_size=200
-
-[router]
-db_map=
-col_map=
-tb_map=
 
 [pipeline]
 buffer_size=16000
@@ -142,13 +128,12 @@ extract_type=cdc
 repl_port=10008
 url=redis://:123456@127.0.0.1:6380
 
-[filter]
-do_dbs=*
-do_events=
-ignore_dbs=1,2
-ignore_tbs=
-do_tbs=
-ignore_cmds=flushall,flushdb
+[rules.db]
+do=*
+ignore=1,2
+
+[rules.cmd]
+ignore=flushall,flushdb
 
 [sinker]
 db_type=redis
@@ -156,11 +141,6 @@ sink_type=write
 method=restore
 url=redis://:123456@127.0.0.1:6390
 batch_size=200
-
-[router]
-db_map=
-col_map=
-tb_map=
 
 [pipeline]
 buffer_size=16000

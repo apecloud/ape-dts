@@ -67,8 +67,8 @@ sink_type=struct
 db_type=pg
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
-[filter]
-do_dbs=test_db
+[rules.schema]
+do=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -128,9 +128,11 @@ db_type=pg
 sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
-[filter]
-do_dbs=test_db
-do_events=insert
+[rules.schema]
+do=test_db
+
+[rules.event]
+do=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -198,9 +200,11 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 
 
-[filter]
-do_dbs=test_db
-do_events=insert
+[rules.schema]
+do=test_db
+
+[rules.event]
+do=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -252,8 +256,8 @@ db_type=pg
 sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
-[filter]
-do_events=*
+[rules.event]
+do=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -312,8 +316,8 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 
 
-[filter]
-do_events=*
+[rules.event]
+do=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -363,9 +367,11 @@ extract_type=cdc
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 slot_name=ape_test
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
+[rules.schema]
+do=test_db
+
+[rules.event]
+do=insert,update,delete
 
 [sinker]
 db_type=pg
@@ -526,10 +532,14 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 slot_name=ape_test
 ddl_meta_tb=public.ape_dts_ddl_command
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
-do_ddls=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+[rules.schema]
+do=test_db
+
+[rules.event]
+do=insert,update,delete
+
+[rules.ddl]
+do=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 [sinker]
 db_type=pg

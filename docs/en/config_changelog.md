@@ -2,6 +2,12 @@
 
 Current reference: [Config details](/docs/en/config.md).
 
+## Unreleased: resource rules
+
+Add `[rules.<kind>]` for `do`, `ignore`, `where_conditions`, `route`, and `to_<kind>` dispatch mappings. Common filters use `[rules.event]`, `[rules.ddl]`, `[rules.dcl]`, `[rules.structure]`, and `[rules.cmd]`.
+
+Legacy configuration remains supported when no `[rules.*]` section exists. Any rules section disables the entire legacy `[filter]` / `[router]` configuration. Resource matching prefers the deepest matching level, with ignore winning at the same level. See [configuration examples](rules.md) and [Legacy config migration](legacy_config.md).
+
 ## 2.0.26 compared with 2.0.25
 
 ### Removed configurations

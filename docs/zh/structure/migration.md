@@ -50,22 +50,25 @@ conflict_policy=interrupt
 ## 只迁移 库表结构 + 主键 + 唯一键
 
 ```
-[filter]
-do_structures=database,table
+[rules.structure]
+do=database,table
+
 ```
 
 ## 只迁移 索引 + 约束
 
 ```
-[filter]
-do_structures=constraint,index
+[rules.structure]
+do=constraint,index
+
 ```
 
 ## MongoDB 结构类型
 
 ```
-[filter]
-do_structures=collection,shardkey
+[rules.structure]
+do=collection,shardkey
+
 ```
 
 MongoDB 不使用独立的 `database` 结构类型。`collection` 会创建选中的 collection 并同步

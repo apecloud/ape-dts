@@ -51,22 +51,25 @@ Thus, we offer 2 types of filtering:
 ## Migrate table structures + primary/unique keys
 
 ```
-[filter]
-do_structures=database,table
+[rules.structure]
+do=database,table
+
 ```
 
 ## Migrate indexes and constraints
 
 ```
-[filter]
-do_structures=constraint,index
+[rules.structure]
+do=constraint,index
+
 ```
 
 ## MongoDB structure types
 
 ```
-[filter]
-do_structures=collection,shardkey
+[rules.structure]
+do=collection,shardkey
+
 ```
 
 MongoDB does not use a separate `database` structure type. `collection` creates selected
