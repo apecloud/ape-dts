@@ -37,15 +37,15 @@ See [pipeline monitoring](monitor.md#pipeline) for the format and no-sample beha
   samples in the current window. Seconds without samples are excluded.
 - Existing metrics use integers and truncate division. Utilization, batch duration,
   and partitioner duration retain fractional values.
-- Window metrics retain their existing aggregation. Each monitor calculates its
-  own statistics; task metrics take minima/maxima across monitors and combine
-  averages with `(previous + current) / 2`. Sinker RPS/BPS use
-  `RecordsPerQuery`/`DataBytes`, and RT uses `RtPerQuery`.
-- Global window logs add each monitor's statistics, including its averages and
-  maxima. Global per-second window minima retain the existing zero output. Unexpired samples
-  from completed tables still participate in global logs, while task metrics
-  filter completed monitors. These outputs therefore have different aggregation
-  semantics.
+- Sample-based task averages combine counter sums and counts before division;
+  sample minima and maxima are taken across the retained samples. Throughput
+  task metrics first sum counters into aligned per-second buckets across active
+  monitors, then calculate min/max/average over the seconds containing samples.
+  Sinker RPS/BPS use `RecordsPerQuery`/`DataBytes`, and RT uses `RtPerQuery`.
+- Snapshot global window logs use the same weighted sample and aligned per-second
+  aggregation. Completed (tombstoned) monitors are excluded from both windowed
+  aggregates and task metrics; their cumulative no-window counters are settled
+  when unregistered.
 - Samples are timestamped when submitted. Batched submissions can differ from
   the actual extraction or database request completion times.
 - A task-log field is present only after its source counter has been populated.
