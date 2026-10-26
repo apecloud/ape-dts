@@ -1,11 +1,11 @@
-use std::{cmp, collections::BTreeMap, sync::Arc};
+use std::{cmp, collections::BTreeMap, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 
 use super::{
     group_monitor::GroupMonitor, monitor::Monitor, sinker_worker_metrics::SinkerWorkerMetrics,
-    task_metrics::TaskMetricValue,
+    task_metrics::TaskMetricValue, time_window_counter::WindowCounterStatistics,
 };
 #[cfg(feature = "metrics")]
 use crate::monitor::prometheus_metrics::PrometheusMetrics;
@@ -47,7 +47,6 @@ enum CalcType {
     #[allow(dead_code)]
     Add,
     Max,
-    Avg,
     Min,
     Latest,
 }
@@ -337,7 +336,28 @@ impl TaskMonitor {
     async fn calc(&self) -> Option<BTreeMap<TaskMetricsType, TaskMetricValue>> {
         self.task_type.as_ref()?;
 
+        let now = Instant::now();
         let mut metrics: BTreeMap<TaskMetricsType, TaskMetricValue> = BTreeMap::new();
+        let mut rate_statistics: BTreeMap<
+            TaskMetricsType,
+            (TaskMetricsType, TaskMetricsType, WindowCounterStatistics),
+        > = BTreeMap::new();
+        let mut sample_average_statistics: BTreeMap<TaskMetricsType, WindowCounterStatistics> =
+            BTreeMap::new();
+        let mut calc_rate_handler =
+            |min_type, max_type, avg_type, statistics: &WindowCounterStatistics| {
+                let entry = rate_statistics
+                    .entry(avg_type)
+                    .or_insert_with(|| (min_type, max_type, WindowCounterStatistics::default()));
+                entry.2.merge(statistics);
+            };
+        let mut calc_sample_average_handler =
+            |metrics_type, statistics: &WindowCounterStatistics| {
+                sample_average_statistics
+                    .entry(metrics_type)
+                    .or_default()
+                    .merge(statistics);
+            };
         let mut calc_handler = |calc_type: CalcType,
                                 task_metrics_type: TaskMetricsType,
                                 val: TaskMetricValue| match calc_type
@@ -352,12 +372,6 @@ impl TaskMonitor {
                 metrics
                     .entry(task_metrics_type)
                     .and_modify(|v| *v = (*v).max(val))
-                    .or_insert(val);
-            }
-            CalcType::Avg => {
-                metrics
-                    .entry(task_metrics_type)
-                    .and_modify(|v| *v = ((*v) + val) / 2)
                     .or_insert(val);
             }
             CalcType::Latest => {
@@ -385,21 +399,12 @@ impl TaskMonitor {
                 .get(&CounterType::ExtractedRecords)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::ExtractorRpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::ExtractorRpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::ExtractorRpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
             // extractor bps
@@ -408,21 +413,12 @@ impl TaskMonitor {
                 .get(&CounterType::ExtractedBytes)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::ExtractorBpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::ExtractorBpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::ExtractorBpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
             // extractor pushed records
@@ -431,21 +427,12 @@ impl TaskMonitor {
                 .get(&CounterType::RecordCount)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::ExtractorPushedRpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::ExtractorPushedRpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::ExtractorPushedRpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
             // extractor pushed bytes
@@ -454,21 +441,12 @@ impl TaskMonitor {
                 .get(&CounterType::DataBytes)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::ExtractorPushedBpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::ExtractorPushedBpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::ExtractorPushedBpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
         }
@@ -495,11 +473,7 @@ impl TaskMonitor {
                     TaskMetricsType::SinkerWorkersPerDrainMax,
                     statics.max,
                 );
-                calc_handler(
-                    CalcType::Avg,
-                    TaskMetricsType::SinkerWorkersPerDrainAvg,
-                    statics.avg_by_count,
-                );
+                calc_sample_average_handler(TaskMetricsType::SinkerWorkersPerDrainAvg, &statics);
             }
 
             let counter = monitor
@@ -513,10 +487,9 @@ impl TaskMonitor {
                     TaskMetricsType::PipelineSinkParallelUtilizationLatest,
                     statistics.latest,
                 );
-                calc_handler(
-                    CalcType::Avg,
+                calc_sample_average_handler(
                     TaskMetricsType::PipelineSinkParallelUtilizationAvg,
-                    statistics.avg_by_count,
+                    &statistics,
                 );
                 calc_handler(
                     CalcType::Min,
@@ -541,10 +514,9 @@ impl TaskMonitor {
                     TaskMetricsType::PipelineSinkDurationSecondsLatest,
                     statistics.latest,
                 );
-                calc_handler(
-                    CalcType::Avg,
+                calc_sample_average_handler(
                     TaskMetricsType::PipelineSinkDurationSecondsAvg,
-                    statistics.avg_by_count,
+                    &statistics,
                 );
                 calc_handler(
                     CalcType::Min,
@@ -569,10 +541,9 @@ impl TaskMonitor {
                     TaskMetricsType::PartitionerDurationSecondsLatest,
                     statistics.latest,
                 );
-                calc_handler(
-                    CalcType::Avg,
+                calc_sample_average_handler(
                     TaskMetricsType::PartitionerDurationSecondsAvg,
-                    statistics.avg_by_count,
+                    &statistics,
                 );
                 calc_handler(
                     CalcType::Min,
@@ -604,21 +575,12 @@ impl TaskMonitor {
                 .get(&CounterType::RtPerQuery)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::SinkerRtMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::SinkerRtMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::SinkerRtAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
             // sinker rps
@@ -627,21 +589,12 @@ impl TaskMonitor {
                 .get(&CounterType::RecordsPerQuery)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::SinkerRpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::SinkerRpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::SinkerRpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
             // sinker bps
@@ -650,21 +603,12 @@ impl TaskMonitor {
                 .get(&CounterType::DataBytes)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::SinkerBpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::SinkerBpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::SinkerBpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
         }
@@ -686,21 +630,12 @@ impl TaskMonitor {
                 .get(&CounterType::RecordCount)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::CheckerRpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::CheckerRpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::CheckerRpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
             // checker miss
@@ -709,21 +644,12 @@ impl TaskMonitor {
                 .get(&CounterType::CheckerMissCount)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::CheckerMissRpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::CheckerMissRpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::CheckerMissRpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
             // checker diff
@@ -732,23 +658,28 @@ impl TaskMonitor {
                 .get(&CounterType::CheckerDiffCount)
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
-                let statics = counter.statistics().await;
-                calc_handler(
-                    CalcType::Min,
+                let statics = counter.statistics_at(now).await;
+                calc_rate_handler(
                     TaskMetricsType::CheckerDiffRpsMin,
-                    statics.min_by_sec,
-                );
-                calc_handler(
-                    CalcType::Max,
                     TaskMetricsType::CheckerDiffRpsMax,
-                    statics.max_by_sec,
-                );
-                calc_handler(
-                    CalcType::Avg,
                     TaskMetricsType::CheckerDiffRpsAvg,
-                    statics.avg_by_sec,
+                    &statics,
                 );
             }
+        }
+
+        drop(calc_rate_handler);
+        drop(calc_sample_average_handler);
+        drop(calc_handler);
+        for (avg_type, (min_type, max_type, mut statistics)) in rate_statistics {
+            statistics.recalculate();
+            metrics.insert(min_type, statistics.min_by_sec);
+            metrics.insert(max_type, statistics.max_by_sec);
+            metrics.insert(avg_type, statistics.avg_by_sec);
+        }
+        for (metrics_type, mut statistics) in sample_average_statistics {
+            statistics.recalculate();
+            metrics.insert(metrics_type, statistics.avg_by_count);
         }
 
         calc_nowindow_metrics(&self.no_window_metrics_map, calc_monitors);
@@ -1015,7 +946,11 @@ fn calc_nowindow_metrics(
 
 #[cfg(test)]
 mod sinker_worker_tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::{
+        collections::BTreeMap,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use super::{collect_sinker_worker_metrics, MonitorType, TaskMonitor};
     use crate::{
@@ -1103,6 +1038,61 @@ mod sinker_worker_tests {
             super::TaskMetricValue::Integer(3)
         );
     }
+    #[tokio::test]
+    async fn calc_merges_rate_buckets_and_weights_sample_averages() {
+        let task = build_task_monitor();
+        let now = Instant::now();
+        for (id, rate, duration_sum, duration_count) in
+            [("first", 10, 0.2, 1), ("second", 20, 0.8, 3)]
+        {
+            let extractor = Arc::new(Monitor::new("extractor", id, 60, 100, 10));
+            let pipeline = Arc::new(Monitor::new("pipeline", id, 60, 100, 10));
+            task.register(
+                id,
+                vec![
+                    (MonitorType::Extractor, extractor.clone()),
+                    (MonitorType::Pipeline, pipeline.clone()),
+                ],
+            );
+
+            extractor.init_counter(CounterType::ExtractedRecords);
+            let rps = extractor
+                .time_window_counters
+                .get(&CounterType::ExtractedRecords)
+                .unwrap()
+                .clone();
+            rps.add(rate, 1).await;
+            rps.counters.write().await.back_mut().unwrap().timestamp =
+                now - Duration::from_millis(100);
+
+            pipeline.init_counter(CounterType::PipelineSinkDurationSeconds);
+            let duration = pipeline
+                .time_window_counters
+                .get(&CounterType::PipelineSinkDurationSeconds)
+                .unwrap()
+                .clone();
+            duration.add(duration_sum, duration_count).await;
+        }
+
+        let metrics = task.calc().await.unwrap();
+        assert_eq!(
+            metrics[&TaskMetricsType::ExtractorRpsMin].as_u64(),
+            Some(30)
+        );
+        assert_eq!(
+            metrics[&TaskMetricsType::ExtractorRpsMax].as_u64(),
+            Some(30)
+        );
+        assert_eq!(
+            metrics[&TaskMetricsType::ExtractorRpsAvg].as_u64(),
+            Some(30)
+        );
+        assert_eq!(
+            metrics[&TaskMetricsType::PipelineSinkDurationSecondsAvg].as_f64(),
+            0.25
+        );
+    }
+
     #[tokio::test]
     async fn ensure_monitor_preserves_samples_across_repeated_and_concurrent_calls() {
         let task = build_task_monitor_for(TaskKind::Snapshot);

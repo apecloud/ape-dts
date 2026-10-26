@@ -1,4 +1,5 @@
-use std::collections::LinkedList;
+use std::collections::{BTreeMap, LinkedList};
+use std::time::Instant;
 
 use tokio::sync::RwLock;
 
@@ -16,6 +17,66 @@ pub struct WindowCounterStatistics {
     pub min_by_sec: TaskMetricValue,
     pub avg_by_sec: TaskMetricValue,
     pub count: u64,
+    pub sample_count: u64,
+    pub per_second: BTreeMap<u64, TaskMetricValue>,
+}
+
+impl WindowCounterStatistics {
+    pub fn merge(&mut self, other: &Self) {
+        self.latest += other.latest;
+        self.sum += other.sum;
+        self.count += other.count;
+        if other.sample_count > 0 {
+            if self.sample_count == 0 {
+                self.min = other.min;
+                self.max = other.max;
+            } else {
+                self.min = self.min.min(other.min);
+                self.max = self.max.max(other.max);
+            }
+            self.sample_count += other.sample_count;
+        }
+        for (second, value) in &other.per_second {
+            *self.per_second.entry(*second).or_default() += *value;
+        }
+        self.recalculate();
+    }
+
+    pub fn recalculate(&mut self) {
+        self.avg_by_count = if self.count > 0 {
+            self.sum / self.count
+        } else {
+            0.into()
+        };
+        if self.sample_count == 0 {
+            self.min = 0.into();
+            self.max = 0.into();
+        }
+        if self.per_second.is_empty() {
+            self.min_by_sec = 0.into();
+            self.max_by_sec = 0.into();
+            self.avg_by_sec = 0.into();
+        } else {
+            self.min_by_sec = self
+                .per_second
+                .values()
+                .copied()
+                .reduce(TaskMetricValue::min)
+                .unwrap();
+            self.max_by_sec = self
+                .per_second
+                .values()
+                .copied()
+                .reduce(TaskMetricValue::max)
+                .unwrap();
+            let total = self
+                .per_second
+                .values()
+                .copied()
+                .fold(TaskMetricValue::default(), |sum, value| sum + value);
+            self.avg_by_sec = total / self.per_second.len() as u64;
+        }
+    }
 }
 
 pub struct TimeWindowCounter {
@@ -83,11 +144,27 @@ impl TimeWindowCounter {
 
     #[inline(always)]
     pub async fn statistics(&self) -> WindowCounterStatistics {
-        self.statistics_in_window(self.time_window_secs).await
+        self.statistics_at(Instant::now()).await
+    }
+
+    #[inline(always)]
+    pub async fn statistics_at(&self, now: Instant) -> WindowCounterStatistics {
+        self.statistics_in_window_at(self.time_window_secs, now)
+            .await
     }
 
     #[inline(always)]
     pub async fn statistics_in_window(&self, time_window_secs: u64) -> WindowCounterStatistics {
+        self.statistics_in_window_at(time_window_secs, Instant::now())
+            .await
+    }
+
+    #[inline(always)]
+    pub async fn statistics_in_window_at(
+        &self,
+        time_window_secs: u64,
+        now: Instant,
+    ) -> WindowCounterStatistics {
         let counters = self.counters.read().await;
         if counters.is_empty() {
             return WindowCounterStatistics::default();
@@ -99,12 +176,9 @@ impl TimeWindowCounter {
             ..Default::default()
         };
 
-        let mut sum_in_current_sec = TaskMetricValue::default();
-        let mut current_elapsed_secs = None;
-        let mut sec_sums = LimitedQueue::new(1000);
-
         for counter in counters.iter() {
-            if counter.timestamp.elapsed().as_secs() >= time_window_secs {
+            let elapsed_secs = now.saturating_duration_since(counter.timestamp).as_secs();
+            if elapsed_secs >= time_window_secs {
                 continue;
             }
 
@@ -112,56 +186,13 @@ impl TimeWindowCounter {
             statistics.latest = value;
             statistics.sum += value;
             statistics.count += counter.count;
+            statistics.sample_count += 1;
             statistics.max = statistics.max.max(value);
             statistics.min = statistics.min.min(value);
-
-            let counter_elapsed_secs = counter.timestamp.elapsed().as_secs();
-
-            match current_elapsed_secs {
-                None => {
-                    // first counter
-                    current_elapsed_secs = Some(counter_elapsed_secs);
-                    sum_in_current_sec = value;
-                }
-                Some(elapsed_secs) if elapsed_secs == counter_elapsed_secs => {
-                    // sum when in same second
-                    sum_in_current_sec += value;
-                }
-                Some(_) => {
-                    // new second
-                    sec_sums.push(sum_in_current_sec);
-                    current_elapsed_secs = Some(counter_elapsed_secs);
-                    sum_in_current_sec = value;
-                }
-            }
+            *statistics.per_second.entry(elapsed_secs).or_default() += value;
         }
 
-        // the last second
-        if current_elapsed_secs.is_some() {
-            sec_sums.push(sum_in_current_sec);
-        }
-        for &sec_sum in sec_sums.iter() {
-            statistics.max_by_sec = statistics.max_by_sec.max(sec_sum);
-            statistics.min_by_sec = statistics.min_by_sec.min(sec_sum);
-        }
-
-        if statistics.count > 0 {
-            statistics.avg_by_count = statistics.sum / statistics.count;
-            if !sec_sums.is_empty() {
-                let sec_sum_total = sec_sums
-                    .iter()
-                    .fold(TaskMetricValue::default(), |sum, value| sum + *value);
-                statistics.avg_by_sec = sec_sum_total / sec_sums.len() as u64;
-            }
-        }
-
-        if statistics.min == u64::MAX.into() {
-            statistics.min = 0.into();
-        }
-        if statistics.min_by_sec == u64::MAX.into() {
-            statistics.min_by_sec = 0.into();
-        }
-
+        statistics.recalculate();
         statistics
     }
 
@@ -194,7 +225,7 @@ mod tests {
             window.counters.write().await.back_mut().unwrap().timestamp =
                 now - Duration::from_millis(age_ms);
         }
-        let result = window.statistics().await;
+        let result = window.statistics_at(now).await;
         assert_eq!(result.sum.as_u64(), Some(220));
         assert_eq!(result.count, 4);
         assert_eq!(result.avg_by_count.as_u64(), Some(55));
@@ -206,6 +237,36 @@ mod tests {
         assert_eq!(
             (result.min_by_sec.as_u64(), result.max_by_sec.as_u64()),
             (Some(0), Some(120))
+        );
+    }
+
+    #[tokio::test]
+    async fn merged_statistics_align_seconds_and_weight_sample_averages() {
+        let now = Instant::now();
+        let first = TimeWindowCounter::new(60, 100);
+        let second = TimeWindowCounter::new(60, 100);
+        for (counter, age_ms, value) in [
+            (&first, 500, 10),
+            (&first, 1500, 90),
+            (&second, 300, 20),
+            (&second, 2500, 40),
+        ] {
+            counter.add(value, 1).await;
+            counter.counters.write().await.back_mut().unwrap().timestamp =
+                now - Duration::from_millis(age_ms);
+        }
+
+        let mut merged = first.statistics_at(now).await;
+        merged.merge(&second.statistics_at(now).await);
+        assert_eq!(merged.avg_by_count.as_u64(), Some(40));
+        assert_eq!(
+            (merged.min.as_u64(), merged.max.as_u64()),
+            (Some(10), Some(90))
+        );
+        assert_eq!(merged.avg_by_sec.as_u64(), Some(53));
+        assert_eq!(
+            (merged.min_by_sec.as_u64(), merged.max_by_sec.as_u64()),
+            (Some(30), Some(90))
         );
     }
 

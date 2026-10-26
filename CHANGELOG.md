@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### General and Platform
 
+- combine time-window sample metrics by sample count and align per-second rates across monitors
 - preserve monitor samples across repeated initialization and skip invalid integer metric samples instead of panicking
 - exit with a non-zero status code when the task panics, instead of leaving the process hanging
 
