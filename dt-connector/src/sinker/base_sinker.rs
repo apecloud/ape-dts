@@ -57,13 +57,7 @@ impl BaseSinker {
                 } else {
                     rid!(&first.schema, &first.tb)
                 };
-                if router.src_db_type() == &DbType::Mssql {
-                    router.reverse::<(String, String, String)>(id)
-                } else {
-                    router
-                        .reverse::<(String, String)>(id)
-                        .map(|(schema, tb)| (String::new(), schema, tb))
-                }
+                router.reverse_for_monitor::<(String, String, String)>(id)
             }?,
             None => (
                 first.db.to_string(),

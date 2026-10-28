@@ -429,7 +429,7 @@ impl PgSnapshotExtractor {
 
         let mut extracted_cnt = 0u64;
         let mut partition_col_value = ColValue::None;
-        let ignore_cols = Some(shared.filter.excluded_columns(
+        let excluded_columns = Some(shared.filter.excluded_columns(
             rid!(tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
@@ -439,7 +439,7 @@ impl PgSnapshotExtractor {
             partition_col_value =
                 PgColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
             let row_data =
-                RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id))?;
+                RowData::from_pg_row(&row, &tb_meta, &excluded_columns.as_ref(), Some(chunk_id))?;
             shared
                 .base_extractor
                 .push_row(&mut extract_state, row_data, Position::None)
@@ -765,7 +765,7 @@ impl PgTableCtx {
         let order_cols = vec![partition_col.clone()];
         let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = tb_meta.get_col_type(&partition_col)?.clone();
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -776,7 +776,7 @@ impl PgTableCtx {
             .map(str::to_owned)
             .unwrap_or_default();
         let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&order_cols)
             .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
@@ -784,7 +784,7 @@ impl PgTableCtx {
             .build()
             .map(Arc::new)?;
         let sql_range = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&order_cols)
             .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
@@ -938,7 +938,7 @@ impl PgTableCtx {
         );
 
         let base_count = extract_state.monitor.counters.pushed_record_count;
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -948,10 +948,11 @@ impl PgTableCtx {
             .where_condition(rid!(self.table_id.schema, self.table_id.tb))?
             .map(str::to_owned)
             .unwrap_or_default();
-        let empty_ignore_cols = HashSet::new();
-        let stmt_ignore_cols = ignore_cols.as_ref().unwrap_or(&empty_ignore_cols);
+        let empty_excluded_columns = HashSet::new();
+        let statement_excluded_columns =
+            excluded_columns.as_ref().unwrap_or(&empty_excluded_columns);
         let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(stmt_ignore_cols)
+            .with_excluded_columns(statement_excluded_columns)
             .with_where_condition(&where_condition);
         if let Some(limit) = self.sample_limit {
             stmt = stmt.with_limit(limit);
@@ -964,8 +965,12 @@ impl PgTableCtx {
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         while let Some(row) = rows.try_next().await? {
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            let row_data =
-                RowData::from_pg_row(&row, tb_meta, &ignore_cols.as_ref(), Some(row_chunk_id))?;
+            let row_data = RowData::from_pg_row(
+                &row,
+                tb_meta,
+                &excluded_columns.as_ref(),
+                Some(row_chunk_id),
+            )?;
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)
@@ -1003,7 +1008,7 @@ impl PgTableCtx {
         let mut start_values = resume_values;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         let page_limit = self.sample_limit.unwrap_or(self.shared.batch_size);
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1014,7 +1019,7 @@ impl PgTableCtx {
             .map(str::to_owned)
             .unwrap_or_default();
         let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
@@ -1022,7 +1027,7 @@ impl PgTableCtx {
             .with_limit(page_limit)
             .build()?;
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
@@ -1074,7 +1079,7 @@ impl PgTableCtx {
                     let row_data = RowData::from_pg_row(
                         &row,
                         tb_meta,
-                        &ignore_cols.as_ref(),
+                        &excluded_columns.as_ref(),
                         Some(row_chunk_id),
                     )?;
                     let position = tb_meta.basic.build_position_for_single_col(
@@ -1132,7 +1137,7 @@ impl PgTableCtx {
                     let row_data = RowData::from_pg_row(
                         &row,
                         tb_meta,
-                        &ignore_cols.as_ref(),
+                        &excluded_columns.as_ref(),
                         Some(row_chunk_id),
                     )?;
                     let position = tb_meta.basic.build_position(&DbType::Pg, &start_values);
@@ -1186,7 +1191,7 @@ impl PgTableCtx {
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1196,14 +1201,15 @@ impl PgTableCtx {
             .where_condition(rid!(self.table_id.schema, self.table_id.tb))?
             .map(str::to_owned)
             .unwrap_or_default();
-        let empty_ignore_cols = HashSet::new();
-        let stmt_ignore_cols = ignore_cols.as_ref().unwrap_or(&empty_ignore_cols);
+        let empty_excluded_columns = HashSet::new();
+        let statement_excluded_columns =
+            excluded_columns.as_ref().unwrap_or(&empty_excluded_columns);
         let order_col_attrs = order_cols
             .iter()
             .map(|col| (col.clone(), SortDirection::Asc))
             .collect();
         let mut stmt = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(stmt_ignore_cols)
+            .with_excluded_columns(statement_excluded_columns)
             .with_order_cols(order_cols)
             .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
@@ -1219,8 +1225,12 @@ impl PgTableCtx {
         while let Some(row) = rows.try_next().await? {
             extracted_count += 1;
             let row_chunk_id = chunk_id_generator.next_row_chunk_id();
-            let row_data =
-                RowData::from_pg_row(&row, tb_meta, &ignore_cols.as_ref(), Some(row_chunk_id))?;
+            let row_data = RowData::from_pg_row(
+                &row,
+                tb_meta,
+                &excluded_columns.as_ref(),
+                Some(row_chunk_id),
+            )?;
             self.shared
                 .base_extractor
                 .push_row(extract_state, row_data, Position::None)

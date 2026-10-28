@@ -17,7 +17,7 @@ impl DbTable {
         let mut ids = BTreeSet::new();
         for (kind, rules) in filter.resource_filters() {
             if *kind != ResourceKind::Column {
-                for id in &rules.do_set {
+                for id in &rules.include_set {
                     ids.insert(ResourceConfigParser::exact_path(
                         id.segments().to_vec(),
                         filter.db_type(),
@@ -102,7 +102,7 @@ mod tests {
     fn legacy_and_basic_selectors_keep_quoted_names_and_exclusions() {
         for text in [
             "[filter]\ndo_tbs=`db.name`.`order.name`,`db.name`.ignored\nignore_tbs=`db.name`.ignored",
-            "[rules.table]\ndo=`db.name`.`order.name`,`db.name`.ignored\nignore=`db.name`.ignored\n[rules.column]\nignore=*.*.secret",
+            "[source.table]\ninclude=`db.name`.`order.name`,`db.name`.ignored\nexclude=`db.name`.ignored\n[source.column]\nexclude=*.*.secret",
         ] {
             let mut ini = configparser::ini::Ini::new();
             ini.read(text.into()).unwrap();

@@ -89,7 +89,7 @@ impl DtRouter {
         Self::build_router(src.clone(), destination, rules, to_maps)
     }
 
-    /// Legacy default/namespace selectors cover namespace events and objects, excluding columns.
+    /// Legacy default/namespace selectors include namespace events, but exclude columns.
     fn parse_legacy_topic_maps(
         value: &str,
         src: &DbType,
@@ -123,7 +123,7 @@ impl DtRouter {
             };
             rules.insert((source, descendants), topic);
         }
-        // Apply defaults, namespace scopes, then exact rules; exact rules don't affect descendants.
+        // Priority: exact > namespace > default; exact rules exclude descendants.
         let mut rules: Vec<_> = rules.into_iter().collect();
         rules.sort_by_key(|((source, descendants), _)| {
             (source.as_ref().map_or(0, RID::len), !descendants)

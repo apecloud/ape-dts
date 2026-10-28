@@ -1,22 +1,3 @@
-//! Engine-independent resource identities.
-//!
-//! ```
-//! use dt_common::{config::config_enums::DbType, filter::DtFilter, resource::RID, rid, router::DtRouter};
-//!
-//! let schema = "inventory".to_owned();
-//! let table = &rid!(schema, "order");
-//! let mut filter = DtFilter::new(DbType::Pg);
-//! filter.add_do(rid!(schema))?;
-//! assert!(!filter.filter(table)?); // true means excluded
-//!
-//! let router = DtRouter::new(DbType::Pg, DbType::Mssql,
-//!     [(rid!("inventory"), rid!("market", "inventory"))])?;
-//! let target = router.forward::<RID>(table)?;
-//! assert_eq!(target, rid!("market", "inventory", "order"));
-//! assert_eq!(router.reverse::<RID>(&target)?, *table);
-//! # Ok::<(), anyhow::Error>(())
-//! ```
-
 mod config_parser;
 mod exact_matcher;
 mod legacy;

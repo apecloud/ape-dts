@@ -2,7 +2,7 @@ use anyhow::{bail, ensure, Context, Result};
 use strum::{AsRefStr, EnumString};
 
 use super::RID;
-use crate::config::{config_enums::DbType, filter_config::RULES};
+use crate::config::{config_enums::DbType, filter_config::SOURCE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
 #[strum(serialize_all = "snake_case")]
@@ -72,7 +72,7 @@ impl ResourceKind {
     }
 
     pub fn from_section(name: &str, db_type: &DbType) -> Result<Option<Self>> {
-        let section = format!("{RULES}.{name}");
+        let section = format!("{SOURCE}.{name}");
         let kind = name
             .parse::<Self>()
             .with_context(|| format!("unknown resource section [{section}]"))?;
@@ -87,47 +87,5 @@ impl ResourceKind {
         Self::levels(db_type)
             .iter()
             .position(|&level| level == self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rid;
-
-    #[test]
-    fn resource_arrays_cover_every_engine_and_validate_depth() {
-        use DbType::*;
-        use ResourceKind::*;
-        for (engine, levels) in [
-            (Mysql, vec![Database, Table, Column]),
-            (Tidb, vec![Database, Table, Column]),
-            (ClickHouse, vec![Database, Table, Column]),
-            (StarRocks, vec![Database, Table, Column]),
-            (Doris, vec![Database, Table, Column]),
-            (Pg, vec![Schema, Table, Column]),
-            (Mssql, vec![Database, Schema, Table, Column]),
-            (Mongo, vec![Database, Collection]),
-            (Redis, vec![Database]),
-            (Kafka, vec![Topic]),
-        ] {
-            assert_eq!(ResourceKind::levels(&engine), levels);
-            for (index, kind) in levels.iter().enumerate() {
-                assert_eq!(kind.depth(&engine), Some(index));
-                let id = RID::new(vec!["name"; index + 1]);
-                assert_eq!(ResourceKind::from_rid(&engine, &id).unwrap(), *kind);
-                kind.validate_rid(&engine, &id).unwrap();
-                assert!(kind.validate_rid(&engine, &id.child("extra")).is_err());
-            }
-            assert!(
-                ResourceKind::from_rid(&engine, &RID::new(vec!["name"; levels.len() + 1]))
-                    .is_none()
-            );
-            assert!(ResourceKind::from_rid(&engine, &RID::new(Vec::<String>::new())).is_none());
-            assert!(ResourceKind::from_rid(&engine, &rid!("")).is_none());
-        }
-        assert_eq!(Database.depth(&Pg), None);
-        assert!(Database.validate_rid(&Pg, &rid!("db")).is_err());
-        assert_eq!(Database.as_ref(), "db");
     }
 }

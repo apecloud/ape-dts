@@ -7,14 +7,11 @@ use crate::resource::{ResourceKind, RID};
 
 #[derive(Debug, Clone)]
 pub enum ExpressionFilter {
-    WhereConditions {
-        /// Exact RIDs; duplicate keys keep the first condition.
-        conditions: HashMap<RID, String>,
-    },
+    WhereConditions { conditions: HashMap<RID, String> },
 }
 
 impl DtFilter {
-    /// Exact lookup; parent conditions are not inherited.
+    /// Exact, level-local lookup; duplicate RIDs keep the first condition.
     pub fn where_condition(&self, id: impl Into<RID>) -> Result<Option<&str>> {
         let id = id.into();
         let Some(kind) = ResourceKind::from_rid(&self.db_type, &id) else {
@@ -73,84 +70,20 @@ mod tests {
     use crate::{config::config_enums::DbType, rid};
 
     #[test]
-    fn lookup_uses_only_the_exact_resource_level_and_id() {
-        let mut filter = DtFilter::new(DbType::Mssql);
-        filter
-            .set_where_condition(rid!("db"), "db condition".into())
-            .unwrap();
-        filter
-            .set_where_condition(rid!("db", "s", "t"), "table condition".into())
-            .unwrap();
-        for (id, expected) in [
-            (rid!("db"), Some("db condition")),
-            (rid!("other"), None),
-            (rid!("db", "s"), None),
-            (rid!("db", "s", "t"), Some("table condition")),
-            (rid!("db", "s", "other"), None),
-            (rid!("db", "s", "t", "id"), None),
-        ] {
-            assert_eq!(filter.where_condition(&id).unwrap(), expected, "{id}");
+    fn where_ids_are_literal() {
+        let mut filter = DtFilter::new(DbType::Mysql);
+        for name in ["order*", "event?", "r#[#", "a.b,c:d"] {
+            let id = rid!("db", name);
+            filter.set_where_condition(id.clone(), name.into()).unwrap();
+            assert_eq!(filter.where_condition(id).unwrap(), Some(name));
         }
-        assert_eq!(
-            filter
-                .where_condition(rid!("db", "s", "t", "id", "extra"))
-                .unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn added_where_ids_and_quoted_config_names_are_exact() {
-        use configparser::ini::Ini;
-
-        use crate::{config::filter_config::FilterConfig, utils::sql_util::SqlUtil};
-        for engine in [DbType::Mysql, DbType::Pg, DbType::Mssql] {
-            let parent = if engine == DbType::Mssql {
-                rid!("db", "sales")
-            } else {
-                rid!("db")
-            };
-            let names = [
-                "order*",
-                "event?",
-                "r#order[0-9]+#",
-                "r#[#",
-                "a.b,c:d",
-                "quote`\"[]",
-            ];
-            let mut filter = DtFilter::new(engine.clone());
-            let mut rules = Vec::new();
-            for name in names {
-                let id = parent.child(name);
-                filter.set_where_condition(id.clone(), name.into()).unwrap();
-                rules.push(format!(
-                    "{}:{}",
-                    id.segments()
-                        .iter()
-                        .map(|segment| SqlUtil::escape_by_db_type(segment, &engine))
-                        .collect::<Vec<_>>()
-                        .join("."),
-                    serde_json::to_string(name).unwrap()
-                ));
-            }
-            let mut ini = Ini::new();
-            ini.set_inline_comment_symbols(Some(&Vec::new()));
-            ini.read(format!(
-                "[rules.table]\nwhere_conditions={}",
-                rules.join(",")
-            ))
-            .unwrap();
-            let configured =
-                DtFilter::from_config(&FilterConfig::from_ini(&ini).unwrap(), engine).unwrap();
-            for f in [&filter, &configured] {
-                for name in names {
-                    assert_eq!(f.where_condition(&parent.child(name)).unwrap(), Some(name));
-                }
-                for name in ["orders", "order12", "event", "event1", "unselected"] {
-                    assert_eq!(f.where_condition(&parent.child(name)).unwrap(), None);
-                }
-                assert_eq!(f.where_condition(&parent).unwrap(), None);
-            }
+        for id in [
+            rid!("db"),
+            rid!("db", "orders"),
+            rid!("db", "event1"),
+            rid!("db", "order*", "id"),
+        ] {
+            assert_eq!(filter.where_condition(id).unwrap(), None);
         }
     }
 

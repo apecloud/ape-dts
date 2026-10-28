@@ -22,3 +22,9 @@ CREATE TABLE "rules_plain"."identity" ("id" INT PRIMARY KEY, "note" VARCHAR(80),
 CREATE TABLE "rules_inventory"."order,log:1" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
 CREATE TABLE "rules_inventory"."literal*" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
 CREATE TABLE "rules_inventory"."literal_other" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
+DROP SCHEMA IF EXISTS "rules_shard_a" CASCADE;
+CREATE SCHEMA "rules_shard_a";
+CREATE TABLE "rules_shard_a"."merge_left" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
+DROP SCHEMA IF EXISTS "rules_shard_b" CASCADE;
+CREATE SCHEMA "rules_shard_b";
+CREATE TABLE "rules_shard_b"."merge_right" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));

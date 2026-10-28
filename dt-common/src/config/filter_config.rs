@@ -7,12 +7,12 @@ use super::router_config::{ROUTE, TO_PREFIX};
 use crate::resource::{RESOURCE_SEPARATOR, WILDCARD};
 
 pub const FILTER: &str = "filter";
-pub const RULES: &str = "rules";
-pub const DO: &str = "do";
-pub const IGNORE: &str = "ignore";
+pub const SOURCE: &str = "source";
+pub const INCLUDE: &str = "include";
+pub const EXCLUDE: &str = "exclude";
 pub const WHERE_CONDITIONS: &str = "where_conditions";
 
-/// Any `[rules.*]` section, even empty, selects Basic and disables legacy `[filter]`.
+/// Any `[source.*]` section disables legacy `[filter]`, even when empty.
 #[derive(Debug, Clone, Hash)]
 pub enum FilterConfig {
     Legacy(LegacyFilterConfig),
@@ -43,34 +43,34 @@ pub struct LegacyFilterConfig {
     pub where_conditions: String,
 }
 
-/// Raw `[rules.*]` values: `None` is absent; `Some("")` is explicitly empty.
+/// Raw values: `None` means absent; `Some("")` means explicitly empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct FilterSectionConfig {
-    /// `do=inventory.*,archive.orders` in `[rules.table]`; `do=insert,update` in `[rules.event]`.
-    pub do_rules: Option<String>,
-    /// `ignore=inventory.secret` in `[rules.table]`; `ignore=SET,DEL` in `[rules.cmd]`.
-    pub ignore_rules: Option<String>,
+    /// `include=inventory.*,archive.orders` in `[source.table]`; `include=insert,update` in `[source.event]`.
+    pub include_rules: Option<String>,
+    /// `exclude=inventory.secret` in `[source.table]`; `exclude=SET,DEL` in `[source.cmd]`.
+    pub exclude_rules: Option<String>,
     pub expression_filters: Vec<ExpressionFilterConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExpressionFilterConfig {
-    /// In `[rules.table]`: `where_conditions=inventory.orders:"id > 100",inventory.events:"kind = \"sale\""`.
+    /// `[source.table]`: `where_conditions=inventory.orders:"id > 100"`.
     /// RID keys use SQL quoting, never patterns; duplicates keep the first value.
-    /// Expression quotes are our engine-independent escape, using JSON rules: `\"` for `"`, `\\` for `\`.
+    /// Expression quotes use JSON escaping: `\"` for `"`, `\\` for `\`.
     WhereConditions(String),
 }
 
 impl FilterSectionConfig {
     pub fn from_ini(ini: &Ini) -> Result<BTreeMap<String, Self>> {
-        let prefix = format!("{RULES}{RESOURCE_SEPARATOR}");
+        let prefix = format!("{SOURCE}{RESOURCE_SEPARATOR}");
         let mut result = BTreeMap::new();
         for (section, fields) in ini.get_map_ref() {
             let Some(name) = section.strip_prefix(prefix.as_str()) else {
                 continue;
             };
             for key in fields.keys() {
-                ensure!([DO, IGNORE, ROUTE, WHERE_CONDITIONS].contains(&key.as_str()) || key.starts_with(TO_PREFIX), "unsupported [{section}].{key}; rules sections only accept do/ignore/route/where_conditions/to_<kind>");
+                ensure!([INCLUDE, EXCLUDE, ROUTE, WHERE_CONDITIONS].contains(&key.as_str()) || key.starts_with(TO_PREFIX), "unsupported [{section}].{key}; source sections only accept include/exclude/route/where_conditions/to_<kind>");
             }
             let value = |key: &str| {
                 fields
@@ -80,8 +80,8 @@ impl FilterSectionConfig {
             result.insert(
                 name.to_owned(),
                 Self {
-                    do_rules: value(DO),
-                    ignore_rules: value(IGNORE),
+                    include_rules: value(INCLUDE),
+                    exclude_rules: value(EXCLUDE),
                     expression_filters: value(WHERE_CONDITIONS)
                         .map(ExpressionFilterConfig::WhereConditions)
                         .into_iter()
@@ -94,7 +94,6 @@ impl FilterSectionConfig {
 }
 
 impl LegacyFilterConfig {
-    /// Missing or empty event/structure options select all.
     pub fn from_ini(ini: &Ini) -> Self {
         Self {
             do_schemas: ini.get(FILTER, "do_dbs").unwrap_or_default(),
@@ -146,15 +145,15 @@ mod tests {
         for (text, basic) in [
             ("", false),
             ("[filter]\ndo_tbs=db.t\n[router]\ntb_map=db.t:archive.t", false),
-            ("[rules_extra.table]\ndo=db.t", false),
-            ("[rules]\ndo=db.t", false),
-            ("[filter.table]\ndo=db.t", false),
-            ("[rules.table]", true),
-            ("[rules.event]\ndo=insert", true),
-            ("[rules.table]\nroute=db.t:archive.t", true),
-            ("[rules.table]\nto_topic=db.t:events", true),
-            ("[rules.future]", true),
-            ("[filter]\nwhere_conditions=json:invalid\n[router]\ncol_map=json:invalid\n[rules.table]\ndo=", true),
+            ("[rules_extra.table]\ninclude=db.t", false),
+            ("[rules]\ninclude=db.t", false),
+            ("[filter.table]\ninclude=db.t", false),
+            ("[source.table]", true),
+            ("[source.event]\ninclude=insert", true),
+            ("[source.table]\nroute=db.t:archive.t", true),
+            ("[source.table]\nto_topic=db.t:events", true),
+            ("[source.future]", true),
+            ("[filter]\nwhere_conditions=json:invalid\n[router]\ncol_map=json:invalid\n[source.table]\ninclude=", true),
         ] {
             let input = ini(text);
             assert_eq!(matches!(FilterConfig::from_ini(&input).unwrap(), FilterConfig::Basic(_)), basic, "{text}");
@@ -191,26 +190,26 @@ mod tests {
     fn resource_loading_preserves_raw_values_and_field_presence() {
         let config = FilterConfig::from_ini(&ini(r#"[filter]
 where_conditions=json:invalid
-[rules.db]
-do=db.r#[#
+[source.db]
+include=db.r#[#
 where_conditions=inventory:"name = \"orders\""
-[rules.schema]
-do=db.r#[#
-[rules.table]
-ignore=
+[source.schema]
+include=db.r#[#
+[source.table]
+exclude=
 route=invalid:route:rule
 where_conditions=
-[rules.column]
-[rules.future]
-do=new
-[rules.event]
-do=invalid_event
+[source.column]
+[source.future]
+include=new
+[source.event]
+include=invalid_event
 "#))
         .unwrap();
         let FilterConfig::Basic(sections) = config else {
             panic!("expected Basic")
         };
-        for (kind, do_rules, ignore, condition) in [
+        for (kind, include_rules, exclude_rules, condition) in [
             (
                 "db",
                 Some("db.r#[#"),
@@ -224,8 +223,8 @@ do=invalid_event
             ("event", Some("invalid_event"), None, None),
         ] {
             let section = &sections[kind];
-            assert_eq!(section.do_rules.as_deref(), do_rules, "{kind}");
-            assert_eq!(section.ignore_rules.as_deref(), ignore, "{kind}");
+            assert_eq!(section.include_rules.as_deref(), include_rules, "{kind}");
+            assert_eq!(section.exclude_rules.as_deref(), exclude_rules, "{kind}");
             assert_eq!(
                 section.expression_filters,
                 condition
@@ -240,7 +239,7 @@ do=invalid_event
     #[test]
     fn both_readers_reject_unknown_fields_and_the_old_router_key() {
         for key in ["unknown", "router", "topic_map"] {
-            let input = ini(&format!("[rules.table]\n{key}="));
+            let input = ini(&format!("[source.table]\n{key}="));
             assert!(FilterConfig::from_ini(&input).is_err(), "{key}");
             assert!(RouterConfig::from_ini(&input).is_err(), "{key}");
         }

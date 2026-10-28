@@ -20,9 +20,6 @@ CREATE TABLE `audit` (
 rules_struct_more
 CREATE DATABASE `rules_struct_more` /*!40100 DEFAULT CHARACTER SET utf8 */
 
-rules_struct_hidden
-CREATE DATABASE `rules_struct_hidden` /*!40100 DEFAULT CHARACTER SET utf8 */
-
 rules_struct.star
 CREATE TABLE `star` (
   `id` int(11) NOT NULL,
@@ -41,14 +38,6 @@ CREATE TABLE `star_many` (
 
 rules_struct_more.audit
 CREATE TABLE `audit` (
-  `id` int(11) NOT NULL,
-  `note` varchar(80) DEFAULT NULL,
-  `secret` varchar(80) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8
-
-rules_struct_hidden.rescued
-CREATE TABLE `rescued` (
   `id` int(11) NOT NULL,
   `note` varchar(80) DEFAULT NULL,
   `secret` varchar(80) DEFAULT NULL,

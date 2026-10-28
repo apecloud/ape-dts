@@ -8,11 +8,15 @@ impl BasicPrechecker {
             if *kind == ResourceKind::Column {
                 return false;
             }
-            rules.do_set.iter().chain(&rules.ignore_set).any(|id| {
-                id.segments()
-                    .iter()
-                    .any(|segment| filter.matcher.is_pattern(segment))
-            })
+            rules
+                .include_set
+                .iter()
+                .chain(&rules.exclude_set)
+                .any(|id| {
+                    id.segments()
+                        .iter()
+                        .any(|segment| filter.matcher.is_pattern(segment))
+                })
         })
     }
 }

@@ -17,23 +17,29 @@ pub struct RdbUtil {}
 impl RdbUtil {
     pub async fn fetch_data_mysql(
         conn_pool: &Pool<MySql>,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         table: &RID,
         condition: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        Self::fetch_data_mysql_compatible(conn_pool, ignore_cols, table, &DbType::Mysql, condition)
-            .await
+        Self::fetch_data_mysql_compatible(
+            conn_pool,
+            excluded_columns,
+            table,
+            &DbType::Mysql,
+            condition,
+        )
+        .await
     }
 
     pub async fn fetch_data_mysql_compatible(
         conn_pool: &Pool<MySql>,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         table: &RID,
         db_type: &DbType,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
         let tb_meta = Self::get_tb_meta_mysql_compatible(conn_pool, table, db_type).await?;
-        let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, ignore_cols);
+        let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, excluded_columns);
         let cols_str = query_builder.build_extract_cols_str().unwrap();
         let sql = format!(
             "SELECT {} FROM {}.{} {} ORDER BY {} ASC",
@@ -61,12 +67,12 @@ impl RdbUtil {
 
     pub async fn fetch_data_pg(
         conn_pool: &Pool<Postgres>,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         table: &RID,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
         let tb_meta = Self::get_tb_meta_pg(conn_pool, table).await?;
-        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
+        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, excluded_columns);
 
         let cols_str = query_builder.build_extract_cols_str().unwrap();
         let sql = format!(
@@ -91,7 +97,7 @@ impl RdbUtil {
 
     pub async fn fetch_data_mssql(
         endpoint: &MssqlTestEndpoint,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         table: &RID,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
@@ -100,7 +106,7 @@ impl RdbUtil {
                 table.segment(0),
                 table.segment(1),
                 table.segment(2),
-                ignore_cols,
+                excluded_columns,
                 where_sql,
             )
             .await

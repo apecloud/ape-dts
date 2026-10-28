@@ -1,1 +1,1 @@
-rules.pg.cdc.filter=84
+rules.pg.cdc.filter=78

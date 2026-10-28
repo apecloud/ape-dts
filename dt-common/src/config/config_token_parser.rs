@@ -94,7 +94,6 @@ impl ConfigTokenParser {
             .collect()
     }
 
-    /// Split resource rules, retaining delimiters and rejecting incomplete tokens.
     pub fn tokens(
         config: &str,
         delimiters: &[char],
@@ -121,7 +120,6 @@ impl ConfigTokenParser {
         Ok(tokens)
     }
 
-    /// Read one token without consuming the following delimiter.
     pub fn token<'a>(
         input: &'a str,
         delimiters: &[char],
@@ -149,7 +147,7 @@ impl ConfigTokenParser {
         loop {
             let input = remaining
                 .trim_start_matches(|c: char| c.is_whitespace() && !delimiters.contains(&c));
-            // Legacy parsing leaves incomplete tokens for callers to interpret.
+            // Legacy callers handle incomplete tokens.
             let end = Self::token_end(input, delimiters, escape_pairs).unwrap_or(input.len());
             tokens.push(input[..end].trim().to_owned());
             let rest = input[end..]

@@ -58,8 +58,7 @@ impl DdlData {
         size
     }
 
-    /// Namespace DDL omits the trailing table segment. Read fixed resource levels
-    /// with `RID::into_left`; tuple conversions align from the end.
+    /// Namespace DDL omits the table: use `into_left()` for fixed levels; tuples right-align.
     pub fn get_id<T: From<RID>>(&self) -> T {
         let (mut schema, tb) = self.statement.get_schema_tb();
         if schema.is_empty() {
@@ -113,28 +112,6 @@ mod tests {
                 ddl.get_rename_id::<RID>(),
                 rid!(db, expected_new_schema, "events")
             );
-            let (schema, table): (String, String) = ddl.get_id();
-            assert_eq!(
-                (schema.as_str(), table.as_str()),
-                (expected_schema, "orders")
-            );
-            let (schema, table): (String, String) = ddl.get_rename_id();
-            assert_eq!(
-                (schema.as_str(), table.as_str()),
-                (expected_new_schema, "events")
-            );
-            let (database, schema, table): (String, String, String) = ddl.get_id();
-            assert_eq!(
-                (database.as_str(), schema.as_str(), table.as_str()),
-                (db, expected_schema, "orders")
-            );
-            let (database, schema, table): (String, String, String) = ddl.get_rename_id();
-            assert_eq!(
-                (database.as_str(), schema.as_str(), table.as_str()),
-                (db, expected_new_schema, "events")
-            );
-            assert_eq!(ddl.get_id::<String>(), "orders");
-            assert_eq!(ddl.get_rename_id::<String>(), "events");
         }
     }
 

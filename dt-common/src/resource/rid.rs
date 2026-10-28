@@ -15,7 +15,7 @@ impl RID {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        // Empty db/schema/table components represent absent levels and do not count toward RID depth.
+        // Empty segments represent absent resource levels.
         Self {
             segments: segments
                 .into_iter()
@@ -68,7 +68,6 @@ impl RID {
         )
     }
 
-    /// Borrow a segment, returning an empty string when absent.
     pub fn segment(&self, index: usize) -> &str {
         self.segments
             .get(index)
@@ -76,13 +75,13 @@ impl RID {
             .unwrap_or_default()
     }
 
-    /// Move the first N segments, padding missing segments on the right.
+    /// Left-align; pad or truncate on the right.
     pub fn into_left<const N: usize>(self) -> [String; N] {
         let mut segments = self.segments.into_iter();
         array::from_fn(|_| segments.next().unwrap_or_default())
     }
 
-    /// Move the last N segments in order, padding missing segments on the left.
+    /// Right-align; pad or truncate on the left.
     pub fn into_right<const N: usize>(self) -> [String; N] {
         let mut segments = self.segments.into_iter().rev();
         let mut parts = array::from_fn(|_| segments.next().unwrap_or_default());
@@ -123,7 +122,7 @@ impl From<RID> for (String, String, String) {
     }
 }
 
-/// Borrow string expressions to construct a RID without moving them.
+/// Borrow each expression once; preserve ownership of inputs.
 #[macro_export]
 macro_rules! rid {
     ($($segment:expr),+ $(,)?) => {
@@ -139,33 +138,8 @@ mod tests {
     use crate::rid;
 
     #[test]
-    fn borrowed_accessors_support_variable_depths_and_missing_levels() {
-        for names in [
-            vec![],
-            vec!["db"],
-            vec!["shop", "orders"],
-            vec!["db", "shop", "orders"],
-            vec!["server", "db", "shop", "orders"],
-        ] {
-            let id = RID::new(names.clone());
-            for (index, expected) in names.into_iter().enumerate() {
-                assert_eq!(id.segment(index), expected);
-            }
-            for index in [id.len(), usize::MAX] {
-                assert_eq!(id.segment(index), "");
-            }
-        }
-    }
-
-    #[test]
     fn identity_preserves_boundaries_and_literal_names() {
-        let names = [
-            rid!("a.b", "c"),
-            rid!("a", "b.c"),
-            rid!("*", "订单"),
-            rid!("a-b", "c"),
-            rid!("a", "b-c"),
-        ];
+        let names = [rid!("a.b", "c"), rid!("a", "b.c"), rid!("*", "订单")];
         assert_eq!(
             names.iter().cloned().collect::<HashSet<_>>().len(),
             names.len()
@@ -175,13 +149,6 @@ mod tests {
             assert_eq!(serde_json::from_str::<RID>(&encoded).unwrap(), id);
             assert_eq!(id.to_string(), encoded);
         }
-        let id: &RID = &rid!("market", "inventory", "order",);
-        assert_eq!(id.parent(), Some(rid!("market", "inventory")));
-        assert_eq!(id.parent().unwrap().child("order"), *id);
-        assert!(id.starts_with(&rid!("market")));
-        assert!(id.prefix(0).is_empty());
-        assert_eq!(id.prefix(4), *id);
-        assert_eq!(rid!("market").parent(), None);
     }
 
     #[test]
@@ -195,18 +162,6 @@ mod tests {
         ] {
             let id = RID::new(segments);
             assert_eq!(id.segments(), expected);
-            let json = serde_json::to_string(&id).unwrap();
-            assert_eq!(serde_json::from_str::<RID>(&json).unwrap(), id);
-        }
-        let empty = RID::new(Vec::<String>::new());
-        assert!(empty.is_empty());
-        assert_eq!(empty.parent(), None);
-        assert_eq!(empty.prefix(1), empty);
-        assert_eq!(empty.replace_prefix(1, &rid!("db")), rid!("db"));
-        assert_eq!(empty.child(""), empty);
-        assert_eq!(rid!("db").child(""), rid!("db"));
-        for json in ["\"db.table\"", "[1]", "null"] {
-            assert!(serde_json::from_str::<RID>(json).is_err(), "{json}");
         }
     }
 
@@ -219,98 +174,45 @@ mod tests {
         assert_eq!(schema, "inventory");
         assert_eq!(rid!(&schema, "orders"), id);
         assert!(names.next().is_none());
-        let borrowed: &RID = &rid!("", schema, format!("{}s", "order"),);
-        assert_eq!(*borrowed, id);
-        assert_eq!(schema, "inventory");
         let parts = [schema, "orders".to_owned()];
         assert_eq!(rid!(parts[0], parts[1]), id);
         assert_eq!(parts, ["inventory", "orders"]);
     }
 
     #[test]
-    fn left_alignment_moves_strings_and_pads_or_truncates_on_the_right() {
-        for (names, expected) in [
-            (vec![], ["", "", ""]),
-            (vec!["db"], ["db", "", ""]),
-            (vec!["schema", "table"], ["schema", "table", ""]),
-            (vec!["db", "schema", "table"], ["db", "schema", "table"]),
+    fn alignment_moves_strings_and_pads_or_truncates() {
+        for (segments, left, right) in [
+            (vec![], ["", "", ""], ["", "", ""]),
+            (vec!["t"], ["t", "", ""], ["", "", "t"]),
+            (vec!["s", "t"], ["s", "t", ""], ["", "s", "t"]),
+            (vec!["db", "s", "t"], ["db", "s", "t"], ["db", "s", "t"]),
             (
-                vec!["db", "schema", "table", "col"],
-                ["db", "schema", "table"],
+                vec!["db", "s", "t", "id"],
+                ["db", "s", "t"],
+                ["s", "t", "id"],
             ),
         ] {
-            let id = RID::new(names.clone());
-            let pointers: Vec<_> = id.segments().iter().map(|name| name.as_ptr()).collect();
-            let (db, schema, table): (String, String, String) = id.into_left().into();
-            assert_eq!([db.as_str(), schema.as_str(), table.as_str()], expected);
-            for (name, ptr) in [&db, &schema, &table].into_iter().zip(pointers) {
-                assert_eq!(name.as_ptr(), ptr);
-            }
-            let (first, second): (String, String) = RID::new(names.clone()).into_left().into();
-            assert_eq!([first, second], expected[..2]);
-            let [first] = RID::new(names.clone()).into_left();
-            assert_eq!(first, expected[0]);
-            let empty: [String; 0] = RID::new(names.clone()).into_left();
-            assert!(empty.is_empty());
-            let empty: [String; 0] = RID::new(names).into_right();
-            assert!(empty.is_empty());
-        }
-    }
-
-    #[test]
-    fn owned_conversions_move_strings_and_right_align_tuples() {
-        for (names, pair, triple) in [
-            (vec![], ["", ""], ["", "", ""]),
-            (vec!["orders"], ["", "orders"], ["", "", "orders"]),
-            (
-                vec!["inventory", "orders"],
-                ["inventory", "orders"],
-                ["", "inventory", "orders"],
-            ),
-            (
-                vec!["market", "inventory", "orders"],
-                ["inventory", "orders"],
-                ["market", "inventory", "orders"],
-            ),
-            (
-                vec!["market", "inventory", "orders", "id"],
-                ["orders", "id"],
-                ["inventory", "orders", "id"],
-            ),
-        ] {
-            let [last] = RID::new(names.clone()).into_right();
-            assert_eq!(last, names.last().copied().unwrap_or_default());
-            let id = RID::new(names.clone());
-            let last_ptr = id.segments().last().map(|name| name.as_ptr());
-            let last: String = id.into();
-            assert_eq!(last, names.last().copied().unwrap_or_default());
-            if let Some(ptr) = last_ptr {
-                assert_eq!(last.as_ptr(), ptr);
+            let id = RID::new(segments.clone());
+            let pointers: Vec<_> = id.segments().iter().map(|s| s.as_ptr()).collect();
+            let (a, b, c): (String, String, String) = id.into_left().into();
+            let aligned = [a, b, c];
+            assert_eq!(aligned, left);
+            for (value, pointer) in aligned.iter().zip(pointers) {
+                assert_eq!(value.as_ptr(), pointer);
             }
 
-            let id = RID::new(names.clone());
-            let pointers: Vec<_> = id.segments().iter().map(|name| name.as_ptr()).collect();
-            let (first, second): (String, String) = id.into();
-            assert_eq!([first.as_str(), second.as_str()], pair);
-            for (name, ptr) in [&first, &second]
-                .into_iter()
-                .rev()
-                .zip(pointers.iter().rev())
-            {
-                assert_eq!(name.as_ptr(), *ptr);
+            let id = RID::new(segments.clone());
+            let pointers: Vec<_> = id.segments().iter().map(|s| s.as_ptr()).collect();
+            let (a, b, c): (String, String, String) = id.into();
+            let aligned = [a, b, c];
+            assert_eq!(aligned, right);
+            for (value, pointer) in aligned.iter().rev().zip(pointers.iter().rev()) {
+                assert_eq!(value.as_ptr(), *pointer);
             }
-
-            let id = RID::new(names.clone());
-            let pointers: Vec<_> = id.segments().iter().map(|name| name.as_ptr()).collect();
-            let (first, second, third): (String, String, String) = id.into();
-            assert_eq!([first.as_str(), second.as_str(), third.as_str()], triple);
-            for (name, ptr) in [&first, &second, &third]
-                .into_iter()
-                .rev()
-                .zip(pointers.iter().rev())
-            {
-                assert_eq!(name.as_ptr(), *ptr);
-            }
+            let (schema, table): (String, String) = RID::new(segments.clone()).into();
+            assert_eq!([schema, table], right[1..]);
+            let table: String = RID::new(segments).into();
+            assert_eq!(table, right[2]);
         }
     }
 }

@@ -3,14 +3,14 @@ use std::collections::BTreeMap;
 use anyhow::{ensure, Result};
 use configparser::ini::Ini;
 
-use super::filter_config::{DO, IGNORE, RULES, WHERE_CONDITIONS};
+use super::filter_config::{EXCLUDE, INCLUDE, SOURCE, WHERE_CONDITIONS};
 use crate::resource::RESOURCE_SEPARATOR;
 
 pub const ROUTER: &str = "router";
 pub const ROUTE: &str = "route";
 pub const TO_PREFIX: &str = "to_";
 
-/// Any `[rules.*]` section, even empty, selects Basic and disables legacy `[router]`.
+/// Any `[source.*]` section disables legacy `[router]`, even when empty.
 #[derive(Debug, Clone, Hash)]
 pub enum RouterConfig {
     Legacy(LegacyRouterConfig),
@@ -37,22 +37,22 @@ pub struct LegacyRouterConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct RouterSectionConfig {
-    /// `route=inventory.orders:archive.orders` in `[rules.table]`.
+    /// `route=inventory.orders:archive.orders` in `[source.table]`.
     pub route: Option<String>,
-    /// Raw `to_<kind>` fields, e.g. `to_topic=inventory.orders:orders,inventory.*:shared` in `[rules.table]`.
+    /// `[source.table]`: `to_topic=inventory.orders:orders,inventory.*:shared`.
     pub to: BTreeMap<String, String>,
 }
 
 impl RouterSectionConfig {
     pub fn from_ini(ini: &Ini) -> Result<BTreeMap<String, Self>> {
-        let prefix = format!("{RULES}{RESOURCE_SEPARATOR}");
+        let prefix = format!("{SOURCE}{RESOURCE_SEPARATOR}");
         let mut result = BTreeMap::new();
         for (section, fields) in ini.get_map_ref() {
             let Some(name) = section.strip_prefix(prefix.as_str()) else {
                 continue;
             };
             for key in fields.keys() {
-                ensure!([DO, IGNORE, ROUTE, WHERE_CONDITIONS].contains(&key.as_str()) || key.starts_with(TO_PREFIX), "unsupported [{section}].{key}; rules sections only accept do/ignore/route/where_conditions/to_<kind>");
+                ensure!([INCLUDE, EXCLUDE, ROUTE, WHERE_CONDITIONS].contains(&key.as_str()) || key.starts_with(TO_PREFIX), "unsupported [{section}].{key}; source sections only accept include/exclude/route/where_conditions/to_<kind>");
             }
             result.insert(
                 name.to_owned(),
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn routing_fields_remain_raw_and_preserve_absent_or_empty_values() {
-        let input = ini("[router]\ncol_map=json:invalid\n[rules.db]\nroute=a:b:c\n[rules.schema]\nroute=a:c\n[rules.table]\nroute=\nwhere_conditions=json:invalid\nto_topic=db.orders:test1\nto_future=not:a:map\nto_db=\n[rules.column]\ndo=not.a.valid.column\n[rules.future]\nroute=new:old");
+        let input = ini("[router]\ncol_map=json:invalid\n[source.db]\nroute=a:b:c\n[source.schema]\nroute=a:c\n[source.table]\nroute=\nwhere_conditions=json:invalid\nto_topic=db.orders:test1\nto_future=not:a:map\nto_db=\n[source.column]\ninclude=not.a.valid.column\n[source.future]\nroute=new:old");
         let config = RouterConfig::from_ini(&input).unwrap();
         let RouterConfig::Basic(sections) = config else {
             panic!("expected Basic")

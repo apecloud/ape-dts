@@ -1,1 +1,1 @@
-rules.mysql.snapshot.filter=80
+rules.mysql.snapshot.filter=74

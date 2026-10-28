@@ -6,24 +6,27 @@ use crate::resource::{PatternMatcher, RMatcher, RID, WILDCARD};
 
 #[derive(Debug, Clone, Default)]
 pub struct ResourceFilter {
-    pub do_set: HashSet<RID>,
-    pub ignore_set: HashSet<RID>,
+    pub include_set: HashSet<RID>,
+    pub exclude_set: HashSet<RID>,
 }
 
 impl ResourceFilter {
-    pub fn new(do_set: HashSet<RID>, ignore_set: HashSet<RID>) -> Self {
-        Self { do_set, ignore_set }
+    pub fn new(include_set: HashSet<RID>, exclude_set: HashSet<RID>) -> Self {
+        Self {
+            include_set,
+            exclude_set,
+        }
     }
 
     pub fn validate(&self, depth: usize, matcher: &PatternMatcher) -> Result<()> {
         ensure!(
-            self.do_set
+            self.include_set
                 .iter()
-                .chain(&self.ignore_set)
+                .chain(&self.exclude_set)
                 .all(|id| id.len() == depth),
             "resource patterns require {depth} segments"
         );
-        for pattern in self.do_set.iter().chain(&self.ignore_set) {
+        for pattern in self.include_set.iter().chain(&self.exclude_set) {
             matcher.validate(pattern)?;
         }
         Ok(())

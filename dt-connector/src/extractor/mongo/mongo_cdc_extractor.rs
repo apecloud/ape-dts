@@ -793,7 +793,7 @@ impl MongoCdcExtractor {
             return Ok(());
         }
 
-        self.filter.add_ignore(rid!(db_tb[0], db_tb[1]))?;
+        self.filter.add_exclude(rid!(db_tb[0], db_tb[1]))?;
 
         let (app_name, heartbeat_interval_secs, syncer, mongo_client) = (
             self.app_name.clone(),

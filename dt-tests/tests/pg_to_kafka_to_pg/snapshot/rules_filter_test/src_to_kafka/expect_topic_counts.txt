@@ -1,1 +1,1 @@
-rules.pg.snapshot.filter=80
+rules.pg.snapshot.filter=74

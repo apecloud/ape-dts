@@ -451,7 +451,7 @@ impl MssqlSnapshotExtractor {
             )));
         }
         let query = snapshot_query.create_mssql_query(&tb_meta, values)?;
-        let ignore_cols = Some(shared.filter.excluded_columns(
+        let excluded_columns = Some(shared.filter.excluded_columns(
             rid!(tb_meta.basic.db, tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
@@ -467,8 +467,12 @@ impl MssqlSnapshotExtractor {
             extracted_count += 1;
             partition_col_value =
                 MssqlColValueConvertor::from_query(&row, &partition_col, &partition_col_type)?;
-            let row_data =
-                RowData::from_mssql_row(&row, &tb_meta, &ignore_cols.as_ref(), Some(chunk_id))?;
+            let row_data = RowData::from_mssql_row(
+                &row,
+                &tb_meta,
+                &excluded_columns.as_ref(),
+                Some(chunk_id),
+            )?;
             shared
                 .base_extractor
                 .push_row(&mut extract_state, row_data, Position::None)
@@ -796,7 +800,7 @@ impl MssqlTableCtx {
         let order_cols = vec![partition_col.clone()];
         let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = *tb_meta.get_col_type(&partition_col)?;
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -811,7 +815,7 @@ impl MssqlTableCtx {
             .map(str::to_owned)
             .unwrap_or_default();
         let sql_le = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&order_cols)
             .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
@@ -819,7 +823,7 @@ impl MssqlTableCtx {
             .build()
             .map(Arc::new)?;
         let sql_range = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&order_cols)
             .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
@@ -866,7 +870,7 @@ impl MssqlTableCtx {
         tb_meta: &MssqlTbMeta,
         order_cols: &[String],
     ) -> anyhow::Result<u64> {
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -880,13 +884,13 @@ impl MssqlTableCtx {
             ))?
             .map(str::to_owned)
             .unwrap_or_default();
-        let empty_ignore_cols = HashSet::new();
+        let empty_excluded_columns = HashSet::new();
         let order_col_attrs = order_cols
             .iter()
             .map(|col| (col.clone(), SortDirection::Asc))
             .collect();
         let sql = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&empty_ignore_cols))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&empty_excluded_columns))
             .with_order_cols(order_cols)
             .with_order_col_attrs(&order_col_attrs)
             .with_where_condition(&where_condition)
@@ -905,7 +909,7 @@ impl MssqlTableCtx {
             let row_data = RowData::from_mssql_row(
                 &row,
                 tb_meta,
-                &ignore_cols.as_ref(),
+                &excluded_columns.as_ref(),
                 Some(chunk_ids.next_row_chunk_id()),
             )?;
             self.shared
@@ -1008,7 +1012,7 @@ impl MssqlTableCtx {
             MssqlSnapshotExtractor::quote(&self.table_id.schema),
             MssqlSnapshotExtractor::quote(&self.table_id.tb)
         );
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1022,9 +1026,9 @@ impl MssqlTableCtx {
             ))?
             .map(str::to_owned)
             .unwrap_or_default();
-        let empty_ignore_cols = HashSet::new();
+        let empty_excluded_columns = HashSet::new();
         let sql = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&empty_ignore_cols))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&empty_excluded_columns))
             .with_where_condition(&where_condition)
             .build()?;
         let mut connection = self.shared.connection_pool.get().await?;
@@ -1040,7 +1044,7 @@ impl MssqlTableCtx {
             let row_data = RowData::from_mssql_row(
                 &row,
                 tb_meta,
-                &ignore_cols.as_ref(),
+                &excluded_columns.as_ref(),
                 Some(chunk_ids.next_row_chunk_id()),
             )?;
             self.shared
@@ -1063,7 +1067,7 @@ impl MssqlTableCtx {
         if start_from_beginning {
             start_values = tb_meta.basic.get_default_order_col_values();
         }
-        let ignore_cols = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_columns(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1078,7 +1082,7 @@ impl MssqlTableCtx {
             .map(str::to_owned)
             .unwrap_or_default();
         let sql_from_beginning = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
@@ -1086,7 +1090,7 @@ impl MssqlTableCtx {
             .with_limit(self.shared.batch_size)
             .build()?;
         let sql_from_value = RdbSnapshotExtractStatement::from(tb_meta)
-            .with_ignore_cols(ignore_cols.as_ref().unwrap_or(&HashSet::new()))
+            .with_excluded_columns(excluded_columns.as_ref().unwrap_or(&HashSet::new()))
             .with_order_cols(&tb_meta.basic.order_cols)
             .with_order_col_attrs(&tb_meta.basic.order_col_attrs)
             .with_where_condition(&where_condition)
@@ -1127,7 +1131,7 @@ impl MssqlTableCtx {
                 let row_data = RowData::from_mssql_row(
                     &row,
                     tb_meta,
-                    &ignore_cols.as_ref(),
+                    &excluded_columns.as_ref(),
                     Some(chunk_ids.next_row_chunk_id()),
                 )?;
                 let position = tb_meta.basic.build_position(&DbType::Mssql, &start_values);

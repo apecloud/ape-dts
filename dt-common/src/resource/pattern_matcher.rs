@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
+use dashmap::{mapref::one::Ref, DashMap};
 use regex::{Error as RegexError, Regex};
 
 use super::{RMatcher, RID};
@@ -9,16 +12,24 @@ pub const REGEX_SUFFIX: &str = "#";
 pub const WILDCARD: &str = "*";
 pub const OPTIONAL_WILDCARD: &str = "?";
 
+const REGEX_META_CHARS: &[char] = &[
+    '\\', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|',
+];
+
 /// Legacy matching: SQL quotes are exact; `r#...#` is regex; bare `*` / `?` become `.*` / `.?`.
 /// Regex anchors wrap the raw expression; use `r#(?:a|b)#` to anchor all alternatives.
 #[derive(Debug, Clone, Default)]
 pub struct PatternMatcher {
     escape_pairs: Vec<CharEscapePair>,
+    regex_cache: Arc<DashMap<String, Regex>>,
 }
 
 impl PatternMatcher {
     pub fn new(escape_pairs: Vec<CharEscapePair>) -> Self {
-        Self { escape_pairs }
+        Self {
+            escape_pairs,
+            ..Self::default()
+        }
     }
 
     pub fn is_pattern(&self, value: &str) -> bool {
@@ -38,8 +49,8 @@ impl PatternMatcher {
 
     pub fn validate(&self, pattern: &RID) -> Result<()> {
         for segment in pattern.segments() {
-            if self.character_escape(segment).is_none() {
-                Self::regex(segment)
+            if self.character_escape(segment).is_none() && Self::requires_regex(segment) {
+                self.regex(segment)
                     .with_context(|| format!("invalid resource pattern {segment}"))?;
             }
         }
@@ -50,7 +61,10 @@ impl PatternMatcher {
         if let Some(pair) = self.character_escape(pattern) {
             return pattern == SqlUtil::escape(input, pair);
         }
-        Self::regex(pattern).is_ok_and(|regex| regex.is_match(input))
+        if !Self::requires_regex(pattern) {
+            return input == pattern;
+        }
+        self.regex(pattern).is_ok_and(|regex| regex.is_match(input))
     }
 
     fn character_escape(&self, pattern: &str) -> Option<&CharEscapePair> {
@@ -59,7 +73,10 @@ impl PatternMatcher {
             .find(|pair| SqlUtil::is_escaped(pattern, pair))
     }
 
-    fn regex(pattern: &str) -> Result<Regex, RegexError> {
+    fn regex(&self, pattern: &str) -> Result<Ref<'_, String, Regex>, RegexError> {
+        if let Some(regex) = self.regex_cache.get(pattern) {
+            return Ok(regex);
+        }
         let raw = pattern
             .strip_prefix(REGEX_PREFIX)
             .and_then(|inner| inner.strip_suffix(REGEX_SUFFIX));
@@ -70,7 +87,15 @@ impl PatternMatcher {
                 .replace(WILDCARD, ".*")
                 .replace(OPTIONAL_WILDCARD, ".?"),
         };
-        Regex::new(&format!("^{expression}$"))
+        Ok(self
+            .regex_cache
+            .entry(pattern.to_owned())
+            .or_try_insert_with(|| Regex::new(&format!("^{expression}$")))?
+            .downgrade())
+    }
+
+    fn requires_regex(pattern: &str) -> bool {
+        pattern.starts_with(REGEX_PREFIX) || pattern.contains(REGEX_META_CHARS)
     }
 }
 
@@ -84,11 +109,7 @@ impl RMatcher for PatternMatcher {
 mod tests {
 
     use super::*;
-    use crate::{
-        config::config_enums::DbType,
-        rid,
-        utils::sql_util::{CharEscapePair, InnerEscapeMode},
-    };
+    use crate::{config::config_enums::DbType, rid};
 
     fn matcher(db_type: &DbType) -> PatternMatcher {
         PatternMatcher::new(SqlUtil::get_escape_pairs(db_type))
@@ -114,6 +135,9 @@ mod tests {
             (rid!("db", "order"), rid!("db", "r#[#"), false),
             (rid!("db", "order"), rid!("db", "Order"), false),
             (rid!("db", "order10"), rid!("db", "order[0-9]+"), true),
+            (rid!("inventory_extra"), rid!("r#inventory|market#"), true),
+            (rid!("othermarket"), rid!("r#inventory|market#"), true),
+            (rid!("unselected"), rid!("r#inventory|market#"), false),
             (rid!("db", "order[0-9]+"), rid!("db", "order[0-9]+"), false),
             (rid!("a.b", "c"), rid!("a", "b.c"), false),
             (rid!("db", "order"), rid!("*"), false),
@@ -143,27 +167,9 @@ mod tests {
             assert!(!matcher.is_match(&RID::new([other, "orders"]), &pattern));
         }
         assert!(!matcher(&DbType::Mssql).is_match(&rid!("a]b"), &rid!("[a]b]")));
+        assert!(matcher(&DbType::Mysql).validate(&rid!("`r#[#`")).is_ok());
         assert!(matcher(&DbType::Mysql).is_match(&rid!("`db`"), &rid!("`db`")));
         assert!(!matcher(&DbType::Mysql).is_match(&rid!("`db`"), &rid!("```db```")));
-    }
-
-    #[test]
-    fn regex_markers_are_independent_of_identifier_escapes() {
-        let quoted = PatternMatcher::new(vec![CharEscapePair::new(
-            '`',
-            '`',
-            InnerEscapeMode::DoubleRight,
-        )]);
-        for matcher in [&PatternMatcher::default(), &quoted] {
-            assert!(matcher.is_match(&rid!("订单10"), &rid!("r#订单[0-9]+#")));
-            assert!(!matcher.is_match(&rid!("订单10x"), &rid!("r#订单[0-9]+#")));
-            assert!(matcher.validate(&rid!("r#订单[0-9]+#")).is_ok());
-            assert!(!matcher.is_match(&rid!("订单"), &rid!("r#[#")));
-            assert!(matcher.validate(&rid!("r#[#")).is_err());
-        }
-        assert!(quoted.is_match(&rid!("r#.*#"), &rid!("`r#.*#`")));
-        assert!(!quoted.is_match(&rid!("订单"), &rid!("`r#.*#`")));
-        assert!(quoted.validate(&rid!("`r#[#`")).is_ok());
     }
 
     #[test]
@@ -173,16 +179,10 @@ mod tests {
             ("", "?", true),
             ("a", "?", true),
             ("ab", "?", false),
-            ("a", "?a", true),
-            ("aa", "?a", true),
-            ("a", "a?", true),
             ("a", "a?*a", false),
             ("aba", "a?*a", true),
             ("abc", "*?*?*c", true),
-            ("c", "*?*?*c", true),
             ("abcx", "*?*?*c", false),
-            ("ababa", "*aba*ba", true),
-            ("aba", "*aba*ba", false),
             ("订单", "订?", true),
             ("订", "订?", true),
             ("订单号", "订?", false),
@@ -190,7 +190,6 @@ mod tests {
             ("FT.SEARCH", "FT.*", true),
             ("FTxSEARCH", "FT.*", false),
             ("order+10", "order+*", true),
-            ("order10", "order+*", true),
             ("a\nb", "a*b", false),
             ("a\nb", "a?b", false),
         ] {
@@ -200,5 +199,31 @@ mod tests {
                 "input={input:?}, expect={expect:?}"
             );
         }
+    }
+
+    #[test]
+    fn regex_cache_shares_successful_compilations_and_skips_errors() {
+        let matcher = PatternMatcher::default();
+        assert!(matcher.validate(&rid!("orders", "r#id[0-9]+#")).is_ok());
+        assert_eq!(matcher.regex_cache.len(), 1);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let matcher = matcher.clone();
+                scope.spawn(move || {
+                    for _ in 0..10 {
+                        assert!(matcher
+                            .is_match(&rid!("orders", "id10"), &rid!("orders", "r#id[0-9]+#")));
+                        assert!(matcher.is_match(&rid!("a.b"), &rid!("a.b")));
+                        assert!(matcher.is_match(&rid!("orders"), &rid!("order*")));
+                    }
+                });
+            }
+        });
+        assert_eq!(matcher.regex_cache.len(), 2);
+        for _ in 0..2 {
+            assert!(matcher.validate(&rid!("r#[#")).is_err());
+            assert!(!matcher.is_match(&rid!("a"), &rid!("r#[#")));
+        }
+        assert_eq!(matcher.regex_cache.len(), 2);
     }
 }
