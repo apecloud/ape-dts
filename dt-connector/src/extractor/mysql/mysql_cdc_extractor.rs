@@ -375,7 +375,7 @@ impl MysqlCdcExtractor {
         let db = &table_map_event.database_name;
         let tb = &table_map_event.table_name;
         let tb_meta = self.meta_manager.get_tb_meta(db, tb).await?;
-        let ignore_cols = Some(
+        let excluded_columns = Some(
             self.filter
                 .excluded_columns(rid!(db, tb), &tb_meta.basic.cols)?,
         );
@@ -397,7 +397,10 @@ impl MysqlCdcExtractor {
                     DbType::Mysql,
                     format!("column index {i} is missing from MySQL table metadata"),
                 ))?;
-            if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
+            if excluded_columns
+                .as_ref()
+                .is_some_and(|cols| cols.contains(col))
+            {
                 continue;
             }
 
@@ -500,7 +503,7 @@ impl MysqlCdcExtractor {
             return Ok(());
         }
 
-        self.filter.add_ignore(rid!(db_tb[0], db_tb[1]))?;
+        self.filter.add_exclude(rid!(db_tb[0], db_tb[1]))?;
 
         let (server_id, heartbeat_interval_secs, syncer, conn_pool) = (
             self.server_id,

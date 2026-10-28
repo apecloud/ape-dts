@@ -45,7 +45,7 @@ impl RdbQueryInfo<'_> {
 pub struct RdbQueryBuilder<'a> {
     rdb_tb_meta: &'a RdbTbMeta,
     db_type: DbType,
-    ignore_cols: Option<&'a HashSet<String>>,
+    excluded_columns: Option<&'a HashSet<String>>,
     pg_tb_meta: Option<&'a PgTbMeta>,
     mysql_tb_meta: Option<&'a MysqlTbMeta>,
 }
@@ -54,28 +54,28 @@ impl RdbQueryBuilder<'_> {
     #[inline(always)]
     pub fn new_for_mysql<'a>(
         tb_meta: &'a MysqlTbMeta,
-        ignore_cols: Option<&'a HashSet<String>>,
+        excluded_columns: Option<&'a HashSet<String>>,
     ) -> RdbQueryBuilder<'a> {
         RdbQueryBuilder {
             rdb_tb_meta: &tb_meta.basic,
             pg_tb_meta: None,
             mysql_tb_meta: Some(tb_meta),
             db_type: DbType::Mysql,
-            ignore_cols,
+            excluded_columns,
         }
     }
 
     #[inline(always)]
     pub fn new_for_pg<'a>(
         tb_meta: &'a PgTbMeta,
-        ignore_cols: Option<&'a HashSet<String>>,
+        excluded_columns: Option<&'a HashSet<String>>,
     ) -> RdbQueryBuilder<'a> {
         RdbQueryBuilder {
             rdb_tb_meta: &tb_meta.basic,
             pg_tb_meta: Some(tb_meta),
             mysql_tb_meta: None,
             db_type: DbType::Pg,
-            ignore_cols,
+            excluded_columns,
         }
     }
 
@@ -706,7 +706,7 @@ impl RdbQueryBuilder<'_> {
     pub fn build_extract_cols_str(&self) -> anyhow::Result<String> {
         let mut extract_cols = Vec::new();
         for col in self.rdb_tb_meta.cols.iter() {
-            if self.ignore_cols.is_some_and(|cols| cols.contains(col)) {
+            if self.excluded_columns.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
 

@@ -300,7 +300,7 @@ impl SinkerUtil {
                 with_field_defs,
             } => {
                 let router = config.build_router()?.or_dt_error(DtError::invalid_config(
-                    "Kafka sinker requires [router].topic_map or [rules.<resource>].to_topic",
+                    "Kafka sinker requires [router].topic_map or [source.<resource>].to_topic",
                 ))?;
                 // kafka sinker may need meta data from RDB extractor
                 let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;

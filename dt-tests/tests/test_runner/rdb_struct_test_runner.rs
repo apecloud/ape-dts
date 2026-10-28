@@ -92,10 +92,12 @@ impl RdbStructTestRunner {
         }
 
         // show create database
+        let filtered_dbs =
+            BaseTestRunner::load_file(&format!("{}/filtered_dbs.txt", self.base.base.test_dir));
         let mut tested_dbs = HashSet::new();
         for (source, target) in src_db_tbs.into_iter().zip(dst_db_tbs) {
             let (src_db, _): (String, String) = source.into();
-            if tested_dbs.contains(&src_db) {
+            if tested_dbs.contains(&src_db) || filtered_dbs.contains(&src_db) {
                 continue;
             }
 

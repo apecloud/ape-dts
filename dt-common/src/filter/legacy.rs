@@ -61,7 +61,7 @@ impl DtFilter {
         db_type: &DbType,
     ) -> Result<()> {
         for (index, &kind) in ResourceKind::levels(db_type).iter().enumerate() {
-            let (do_key, do_value, ignore_key, ignore_value, table) =
+            let (include_key, include_value, exclude_key, exclude_value, table) =
                 if index == 0 && matches!(kind, ResourceKind::Database | ResourceKind::Schema) {
                     (
                         "do_dbs",
@@ -82,10 +82,10 @@ impl DtFilter {
                     continue;
                 };
             let resource_filter = ResourceFilter::new(
-                ResourceFilter::parse_legacy_patterns(do_value, db_type, table)
-                    .with_context(|| format!("[filter].{do_key}"))?,
-                ResourceFilter::parse_legacy_patterns(ignore_value, db_type, table)
-                    .with_context(|| format!("[filter].{ignore_key}"))?,
+                ResourceFilter::parse_legacy_patterns(include_value, db_type, table)
+                    .with_context(|| format!("[filter].{include_key}"))?,
+                ResourceFilter::parse_legacy_patterns(exclude_value, db_type, table)
+                    .with_context(|| format!("[filter].{exclude_key}"))?,
             );
             resource_filter.validate(index + 1, &self.matcher)?;
             self.set_resource_filter(kind, resource_filter)?;
@@ -131,22 +131,22 @@ impl CommonFilter {
             CommonFilterKind::Cmd => ("ignore_cmds", WILDCARD),
         };
         let value = if value.trim().is_empty() {
-            kind.default_do()
+            kind.default_include()
         } else {
             value
         };
-        let ignore_set = if kind == CommonFilterKind::Cmd {
+        let exclude_set = if kind == CommonFilterKind::Cmd {
             Self::parse_legacy_values(&options.ignore_cmds, db_type)
                 .context("[filter].ignore_cmds")?
         } else {
             HashSet::new()
         };
-        if value == kind.default_do() && ignore_set.is_empty() {
+        if value == kind.default_include() && exclude_set.is_empty() {
             return Ok(None);
         }
-        let do_set =
+        let include_set =
             Self::parse_legacy_values(value, db_type).with_context(|| format!("[filter].{key}"))?;
-        Ok(Some(Self::new(do_set, ignore_set)))
+        Ok(Some(Self::new(include_set, exclude_set)))
     }
 
     fn parse_legacy_values(value: &str, db_type: &DbType) -> Result<HashSet<String>> {
@@ -505,8 +505,9 @@ ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
     #[test]
     fn legacy_scope_matches_existing_filter_for_flattened_names_and_regexes() {
         for db_type in [DbType::Mysql, DbType::Mssql] {
-            let do_dbs = "db.name,store[0-9]+,r#inventory|market#";
-            let new = load_filter(&ini(&format!("[filter]\ndo_dbs={do_dbs}")), db_type).unwrap();
+            let include_rules = "db.name,store[0-9]+,r#inventory|market#";
+            let new =
+                load_filter(&ini(&format!("[filter]\ndo_dbs={include_rules}")), db_type).unwrap();
             for name in ["db", "name", "db.name", "store12", "inventory", "other"] {
                 assert_eq!(
                     new.filter(RID::new([name])).unwrap(),

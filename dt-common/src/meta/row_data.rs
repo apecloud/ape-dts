@@ -130,22 +130,25 @@ impl RowData {
     pub fn from_mysql_row(
         row: &MySqlRow,
         tb_meta: &MysqlTbMeta,
-        ignore_cols: &Option<&HashSet<String>>,
+        excluded_columns: &Option<&HashSet<String>>,
         chunk_id: Option<u64>,
     ) -> anyhow::Result<Self> {
-        Self::from_mysql_compatible_row(row, tb_meta, ignore_cols, &DbType::Mysql, chunk_id)
+        Self::from_mysql_compatible_row(row, tb_meta, excluded_columns, &DbType::Mysql, chunk_id)
     }
 
     pub fn from_mysql_compatible_row(
         row: &MySqlRow,
         tb_meta: &MysqlTbMeta,
-        ignore_cols: &Option<&HashSet<String>>,
+        excluded_columns: &Option<&HashSet<String>>,
         db_type: &DbType,
         chunk_id: Option<u64>,
     ) -> anyhow::Result<Self> {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
-            if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
+            if excluded_columns
+                .as_ref()
+                .is_some_and(|cols| cols.contains(col))
+            {
                 continue;
             }
             let col_val =
@@ -170,12 +173,15 @@ impl RowData {
     pub fn from_pg_row(
         row: &PgRow,
         tb_meta: &PgTbMeta,
-        ignore_cols: &Option<&HashSet<String>>,
+        excluded_columns: &Option<&HashSet<String>>,
         chunk_id: Option<u64>,
     ) -> anyhow::Result<Self> {
         let mut after = HashMap::new();
         for (col, col_type) in &tb_meta.col_type_map {
-            if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
+            if excluded_columns
+                .as_ref()
+                .is_some_and(|cols| cols.contains(col))
+            {
                 continue;
             }
 
@@ -200,12 +206,15 @@ impl RowData {
     pub fn from_mssql_row(
         row: &MssqlRow,
         tb_meta: &MssqlTbMeta,
-        ignore_cols: &Option<&HashSet<String>>,
+        excluded_columns: &Option<&HashSet<String>>,
         chunk_id: Option<u64>,
     ) -> anyhow::Result<Self> {
         let mut after = HashMap::new();
         for col in &tb_meta.basic.cols {
-            if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
+            if excluded_columns
+                .as_ref()
+                .is_some_and(|cols| cols.contains(col))
+            {
                 continue;
             }
 

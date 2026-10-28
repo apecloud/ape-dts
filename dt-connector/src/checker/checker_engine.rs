@@ -227,7 +227,11 @@ impl<C: Checker> DataChecker<C> {
                     .filter(|(col, _)| diff_cols.contains(col))
                     .collect();
                 log.dst_row = if ctx.output_full_row {
-                    if let Some(router) = ctx.router.as_ref() {
+                    if let Some(router) = ctx.router.as_ref().filter(|router| {
+                        router
+                            .reverse_column_map(rid!(dst_row.db, dst_row.schema, dst_row.tb))
+                            .is_some()
+                    }) {
                         let routed = router.reverse_route_row(dst_row.clone())?;
                         Self::clone_row_values(&routed)
                     } else {
@@ -751,20 +755,26 @@ impl<C: Checker> DataChecker<C> {
         ctx: &mut CheckContext,
         tb_meta: &CheckerTbMeta,
     ) -> anyhow::Result<CheckLog> {
-        let routed_row = if let Some(router) = ctx.router.as_ref() {
+        let id = rid!(src_row_data.db, src_row_data.schema, src_row_data.tb);
+        let (db, schema, tb) = match &ctx.router {
+            Some(router) => router.reverse(id)?,
+            None => id.into(),
+        };
+        let has_column_map = ctx.router.as_ref().is_some_and(|router| {
+            router
+                .reverse_column_map(rid!(src_row_data.db, src_row_data.schema, src_row_data.tb))
+                .is_some()
+        });
+        let routed_row = if let Some(router) = ctx.router.as_ref().filter(|_| has_column_map) {
             Cow::Owned(router.reverse_route_row(src_row_data.clone())?)
         } else {
             Cow::Borrowed(src_row_data)
         };
-        let db_changed = src_row_data.db != routed_row.db;
-        let schema_changed =
-            src_row_data.schema != routed_row.schema || src_row_data.tb != routed_row.tb;
-        let (schema, tb) = (routed_row.schema.clone(), routed_row.tb.clone());
+        let db_changed = src_row_data.db != db;
+        let schema_changed = src_row_data.schema != schema || src_row_data.tb != tb;
 
         let id_col_values = if let Some(meta_manager) = ctx.extractor_meta_manager.as_mut() {
-            let src_tb_meta = meta_manager
-                .get_tb_meta(&routed_row.db, &schema, &tb)
-                .await?;
+            let src_tb_meta = meta_manager.get_tb_meta(&db, &schema, &tb).await?;
             Self::build_id_col_values(&routed_row, src_tb_meta)
                 .context("Failed to build ID col values")?
         } else {
@@ -778,7 +788,7 @@ impl<C: Checker> DataChecker<C> {
         };
 
         Ok(CheckLog {
-            db: routed_row.db.clone(),
+            db,
             schema,
             tb,
             target_db: db_changed.then(|| src_row_data.db.clone()),

@@ -441,7 +441,7 @@ impl RdbTestRunner {
 
         let (src_db_tbs, dst_db_tbs) = self.get_compare_db_tbs()?;
         assert!(
-            self.compare_data_for_tbs_ignore_filtered(&src_db_tbs, &dst_db_tbs)
+            self.compare_data_for_unfiltered_tbs(&src_db_tbs, &dst_db_tbs)
                 .await?
         );
         Ok(())
@@ -466,7 +466,7 @@ impl RdbTestRunner {
         // compare table data
         let (src_db_tbs, dst_db_tbs) = self.get_compare_db_tbs()?;
         assert!(
-            self.compare_data_for_tbs_ignore_filtered(&src_db_tbs, &dst_db_tbs)
+            self.compare_data_for_unfiltered_tbs(&src_db_tbs, &dst_db_tbs)
                 .await?
         );
 
@@ -847,7 +847,7 @@ impl RdbTestRunner {
         Ok(())
     }
 
-    pub async fn compare_data_for_tbs_ignore_filtered(
+    pub async fn compare_data_for_unfiltered_tbs(
         &self,
         src_db_tbs: &[RID],
         dst_db_tbs: &[RID],
@@ -985,9 +985,9 @@ impl RdbTestRunner {
             .router
             .as_ref()
             .and_then(|router| router.column_map(src_db_tb));
-        let ignore_cols = self.filter.excluded_columns(src_db_tb, &columns).unwrap();
+        let excluded_columns = self.filter.excluded_columns(src_db_tb, &columns).unwrap();
         let col_map = col_map.as_ref();
-        let ignore_cols = Some(&ignore_cols);
+        let excluded_columns = Some(&excluded_columns);
 
         if self.unordered_compare {
             // Unordered comparison: use multiset matching for tables without primary key
@@ -995,7 +995,7 @@ impl RdbTestRunner {
                 src_data,
                 dst_data,
                 col_map,
-                ignore_cols,
+                excluded_columns,
                 &src_db_type,
                 &dst_db_type,
             )
@@ -1005,7 +1005,7 @@ impl RdbTestRunner {
                 src_data,
                 dst_data,
                 col_map,
-                ignore_cols,
+                excluded_columns,
                 &src_db_type,
                 &dst_db_type,
             )
@@ -1017,7 +1017,7 @@ impl RdbTestRunner {
         src_data: &[RowData],
         dst_data: &[RowData],
         col_map: Option<&HashMap<String, String>>,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         src_db_type: &DbType,
         dst_db_type: &DbType,
     ) -> bool {
@@ -1037,8 +1037,8 @@ impl RdbTestRunner {
 
                 let dst_col_value = dst_col_values.get(dst_col).unwrap();
 
-                // ignored cols were NOT synced to target
-                if ignore_cols.is_some_and(|cols| cols.contains(src_col)) {
+                // Excluded columns remain empty at the target.
+                if excluded_columns.is_some_and(|cols| cols.contains(src_col)) {
                     assert_eq!(*dst_col_value, ColValue::None);
                     continue;
                 }
@@ -1064,7 +1064,7 @@ impl RdbTestRunner {
         src_data: &[RowData],
         dst_data: &[RowData],
         col_map: Option<&HashMap<String, String>>,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         src_db_type: &DbType,
         dst_db_type: &DbType,
     ) -> bool {
@@ -1081,8 +1081,13 @@ impl RdbTestRunner {
                 }
             };
 
-            let row_key =
-                self.normalize_row(dst_col_values, col_map, ignore_cols, dst_db_type, false);
+            let row_key = self.normalize_row(
+                dst_col_values,
+                col_map,
+                excluded_columns,
+                dst_db_type,
+                false,
+            );
             *dst_row_counts.entry(row_key).or_insert(0) += 1;
         }
 
@@ -1105,8 +1110,13 @@ impl RdbTestRunner {
                 };
 
                 // Check how many times this dst row has been matched
-                let dst_key =
-                    self.normalize_row(dst_col_values, col_map, ignore_cols, dst_db_type, false);
+                let dst_key = self.normalize_row(
+                    dst_col_values,
+                    col_map,
+                    excluded_columns,
+                    dst_db_type,
+                    false,
+                );
                 let already_matched = *matched_dst_rows.get(&dst_key).unwrap_or(&0);
                 let dst_available = *dst_row_counts.get(&dst_key).unwrap_or(&0);
 
@@ -1118,7 +1128,7 @@ impl RdbTestRunner {
                     src_col_values,
                     dst_col_values,
                     col_map,
-                    ignore_cols,
+                    excluded_columns,
                     src_db_type,
                     dst_db_type,
                 ) {
@@ -1146,7 +1156,7 @@ impl RdbTestRunner {
         &self,
         col_values: &HashMap<String, ColValue>,
         col_map: Option<&HashMap<String, String>>,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         _db_type: &DbType,
         is_src: bool,
     ) -> String {
@@ -1168,11 +1178,11 @@ impl RdbTestRunner {
                 col
             };
 
-            // Skip ignored columns
-            if is_src && ignore_cols.is_some_and(|cols| cols.contains(col)) {
+            // Skip excluded columns.
+            if is_src && excluded_columns.is_some_and(|cols| cols.contains(col)) {
                 continue;
             }
-            if !is_src && ignore_cols.is_some_and(|cols| cols.contains(effective_col)) {
+            if !is_src && excluded_columns.is_some_and(|cols| cols.contains(effective_col)) {
                 continue;
             }
 
@@ -1189,7 +1199,7 @@ impl RdbTestRunner {
         src_col_values: &HashMap<String, ColValue>,
         dst_col_values: &HashMap<String, ColValue>,
         col_map: Option<&HashMap<String, String>>,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         src_db_type: &DbType,
         dst_db_type: &DbType,
     ) -> bool {
@@ -1205,8 +1215,8 @@ impl RdbTestRunner {
                 None => return false,
             };
 
-            // ignored cols were NOT synced to target
-            if ignore_cols.is_some_and(|cols| cols.contains(src_col)) {
+            // Excluded columns remain empty at the target.
+            if excluded_columns.is_some_and(|cols| cols.contains(src_col)) {
                 if *dst_col_value != ColValue::None {
                     return false;
                 }
@@ -1508,7 +1518,6 @@ impl RdbTestRunner {
         }
     }
 
-    /// Supplemental checks for results that intentionally differ from the source.
     pub async fn assert_dst_sql(&self) -> anyhow::Result<()> {
         let file = format!("{}/dst_assert.sql", self.base.test_dir);
         let sqls = BaseTestRunner::load_sql_file(&file, SqlLoadStrategy::Semicolon);
@@ -1644,7 +1653,7 @@ mod tests {
                 RdbTestRunner::get_compare_db_tbs_from_sqls(&engine, &[sql.into()]).unwrap();
             assert_eq!(tables, vec![expected.clone()]);
             let mut filter = DtFilter::new(engine);
-            filter.add_do(expected).unwrap();
+            filter.add_include(expected).unwrap();
             assert!(!filter.filter(&tables[0]).unwrap());
         }
     }

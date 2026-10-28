@@ -36,7 +36,7 @@ pub struct RdbSnapshotExtractStatement<'a> {
     mssql_tb_meta: Option<&'a MssqlTbMeta>,
     order_cols: Option<&'a [String]>,
     order_col_attrs: Option<&'a HashMap<String, SortDirection>>,
-    ignore_cols: Option<&'a HashSet<String>>,
+    excluded_columns: Option<&'a HashSet<String>>,
     where_condition: Option<&'a String>,
     limit: usize,
     predicate_type: OrderKeyPredicateType,
@@ -52,7 +52,7 @@ impl<'r> From<&'r MysqlTbMeta> for RdbSnapshotExtractStatement<'r> {
             mssql_tb_meta: None,
             order_cols: None,
             order_col_attrs: None,
-            ignore_cols: None,
+            excluded_columns: None,
             where_condition: None,
             limit: 0,
             predicate_type: OrderKeyPredicateType::None,
@@ -70,7 +70,7 @@ impl<'r> From<&'r PgTbMeta> for RdbSnapshotExtractStatement<'r> {
             mssql_tb_meta: None,
             order_cols: None,
             order_col_attrs: None,
-            ignore_cols: None,
+            excluded_columns: None,
             where_condition: None,
             limit: 0,
             predicate_type: OrderKeyPredicateType::None,
@@ -88,7 +88,7 @@ impl<'r> From<&'r MssqlTbMeta> for RdbSnapshotExtractStatement<'r> {
             mssql_tb_meta: Some(mssql_tb_meta),
             order_cols: None,
             order_col_attrs: None,
-            ignore_cols: None,
+            excluded_columns: None,
             where_condition: None,
             limit: 0,
             predicate_type: OrderKeyPredicateType::None,
@@ -98,8 +98,8 @@ impl<'r> From<&'r MssqlTbMeta> for RdbSnapshotExtractStatement<'r> {
 
 impl<'r> RdbSnapshotExtractStatement<'r> {
     #[inline(always)]
-    pub fn with_ignore_cols(mut self, ignore_cols: &'r HashSet<String>) -> Self {
-        self.ignore_cols = Some(ignore_cols);
+    pub fn with_excluded_columns(mut self, excluded_columns: &'r HashSet<String>) -> Self {
+        self.excluded_columns = Some(excluded_columns);
         self
     }
 
@@ -214,15 +214,16 @@ impl<'r> RdbSnapshotExtractStatement<'r> {
 
     fn build_extract_cols_str(&self) -> anyhow::Result<String> {
         if let Some(tb_meta) = self.mssql_tb_meta {
-            let mut ignore_cols = self.ignore_cols.cloned().unwrap_or_default();
+            let mut excluded_columns = self.excluded_columns.cloned().unwrap_or_default();
             for col in self.order_cols.unwrap_or_default() {
-                ignore_cols.remove(col);
+                excluded_columns.remove(col);
             }
-            return MssqlTableSqlBuilder::new(tb_meta, Some(&ignore_cols)).build_extract_cols_str();
+            return MssqlTableSqlBuilder::new(tb_meta, Some(&excluded_columns))
+                .build_extract_cols_str();
         }
         let mut extract_cols = Vec::new();
         for col in self.rdb_tb_meta.cols.iter() {
-            if self.ignore_cols.is_some_and(|cols| cols.contains(col))
+            if self.excluded_columns.is_some_and(|cols| cols.contains(col))
                 && !self.order_cols.is_some_and(|cols| cols.contains(col))
             {
                 continue;
@@ -713,7 +714,7 @@ mod tests {
         order_cols: &'static [(&'static str, SortDirection)],
         predicate: OrderKeyPredicateType,
         where_condition: &'static str,
-        ignore_cols: &'static [&'static str],
+        excluded_columns: &'static [&'static str],
         limit: usize,
         expected_sql: &'static str,
         expected_cols: &'static [&'static str],
@@ -862,19 +863,19 @@ mod tests {
                 ..Default::default()
             },
             Case {
-                name: "mysql_with_ignore_cols",
+                name: "mysql_with_excluded_columns",
                 fixture: "mysql_tb_meta",
-                ignore_cols: &[r#"bio"#, r#"large_blob"#],
+                excluded_columns: &[r#"bio"#, r#"large_blob"#],
                 expected_sql: r#"SELECT `id`,`price`,`username` FROM `test_schema`.`test_table`"#,
                 expected_cols: &[],
                 ..Default::default()
             },
             Case {
-                name: "pg_with_ignore_cols_and_order",
+                name: "pg_with_excluded_columns_and_order",
                 fixture: "pg_tb_meta",
                 order_cols: &[("id", Asc)],
                 predicate: After,
-                ignore_cols: &[r#"large_blob"#],
+                excluded_columns: &[r#"large_blob"#],
                 limit: 50,
                 expected_sql: r#"SELECT "id"::int8,"price"::float8,"username"::text,"bio"::text FROM "test_schema"."test_table" WHERE "id" > $1::int8 ORDER BY "test_schema"."test_table"."id" ASC LIMIT 50"#,
                 expected_cols: &[r#"id"#],
@@ -944,12 +945,16 @@ mod tests {
                 .rev()
                 .map(|(col, direction)| (col.to_string(), *direction))
                 .collect();
-            let ignore_cols = case.ignore_cols.iter().map(|col| col.to_string()).collect();
+            let excluded_columns = case
+                .excluded_columns
+                .iter()
+                .map(|col| col.to_string())
+                .collect();
             let where_condition = case.where_condition.to_string();
             let stmt = stmt
                 .with_order_cols(&order_cols)
                 .with_order_col_attrs(&attrs)
-                .with_ignore_cols(&ignore_cols)
+                .with_excluded_columns(&excluded_columns)
                 .with_where_condition(&where_condition)
                 .with_limit(case.limit)
                 .with_predicate_type(case.predicate);
@@ -1025,12 +1030,12 @@ mod tests {
                 .map(|(col, direction)| (col.clone(), *direction))
                 .collect();
             let where_condition = "a = 1 OR a = 2".to_string();
-            let ignore_cols = HashSet::from(["a".to_string()]);
+            let excluded_columns = HashSet::from(["a".to_string()]);
             let stmt = stmt
                 .with_order_cols(order_cols)
                 .with_order_col_attrs(&attrs)
                 .with_where_condition(&where_condition)
-                .with_ignore_cols(&ignore_cols)
+                .with_excluded_columns(&excluded_columns)
                 .with_predicate_type(case.predicate)
                 .with_limit(2);
             let query = stmt.build().unwrap();

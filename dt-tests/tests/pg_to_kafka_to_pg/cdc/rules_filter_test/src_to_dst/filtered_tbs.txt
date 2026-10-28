@@ -18,3 +18,5 @@ public.ape_dts_ddl_command
 "rules_scope_hidden_eu"."blocked"
 "rules_tenant_eu"."audit"
 "rules_neutral"."unselected"
+rules_denied.rescued
+rules_scope_hidden.rescued

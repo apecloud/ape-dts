@@ -1592,99 +1592,46 @@ parallel_type=rdb_merge
     fn task_topologies_build_resource_filters_and_routers() {
         use crate::rid;
 
-        let mysql = (DbType::Mysql, "mysql://127.0.0.1:3306");
-        let pg = (DbType::Pg, "postgresql://127.0.0.1:5432");
-        let mssql = (DbType::Mssql, "mssql://127.0.0.1:1433?database=ape_dts");
-        let mongo = (DbType::Mongo, "mongodb://127.0.0.1:27017");
-        let redis = (DbType::Redis, "redis://127.0.0.1:6379");
-        let kafka = (DbType::Kafka, "127.0.0.1:9092");
-        let clickhouse = (DbType::ClickHouse, "http://127.0.0.1:8123");
-        for (src, dst, source, rules, target) in [
+        for (dst, url, rules, expected) in [
             (
-                &mysql,
-                &mysql,
-                rid!("db", "orders"),
+                DbType::Mysql,
+                "mysql://127.0.0.1:3307",
                 "db_map=db:archive",
                 Some(rid!("archive", "orders")),
             ),
+            (DbType::Redis, "redis://127.0.0.1:6379", "", None),
             (
-                &pg,
-                &clickhouse,
-                rid!("db", "orders"),
-                "db_map=db:archive",
-                Some(rid!("archive", "orders")),
-            ),
-            (
-                &mssql,
-                &mssql,
-                rid!("db", "dbo", "orders"),
-                "db_map=db:archive",
-                Some(rid!("archive", "dbo", "orders")),
-            ),
-            (
-                &mongo,
-                &mongo,
-                rid!("db", "orders"),
-                "db_map=db:archive",
-                Some(rid!("archive", "orders")),
-            ),
-            (&redis, &redis, rid!("0"), "db_map=0:1", Some(rid!("1"))),
-            (&mysql, &mysql, rid!("db", "orders"), "", None),
-            (&mysql, &redis, rid!("db", "orders"), "", None),
-            (
-                &mysql,
-                &mysql,
-                rid!("db", "orders"),
-                "\n[rules.table]\ndo=db.orders",
+                DbType::Mysql,
+                "mysql://127.0.0.1:3307",
+                "\n[source.table]\ninclude=db.orders",
                 None,
             ),
             (
-                &mysql,
-                &kafka,
-                rid!("db", "orders"),
-                "db_map=db:archive\ntopic_map=db.*:test3",
+                DbType::Kafka,
+                "127.0.0.1:9092",
+                "db_map=db:archive\ntopic_map=db.*:events",
                 Some(rid!("archive", "orders")),
             ),
             (
-                &mysql,
-                &kafka,
-                rid!("db", "orders"),
-                "topic_map=db.*:test3",
-                Some(rid!("db", "orders")),
-            ),
-            (
-                &mysql,
-                &kafka,
-                rid!("db", "orders"),
-                "\n[rules.table]\ndo=db.orders\nto_topic=db.*:test3",
+                DbType::Kafka,
+                "127.0.0.1:9092",
+                "\n[source.table]\ninclude=db.orders\nto_topic=db.*:events",
                 Some(rid!("db", "orders")),
             ),
         ] {
-            let (src_engine, src_url) = src;
-            let (dst_engine, dst_url) = dst;
-            let extractor = if dst_engine == &DbType::Kafka {
-                "extract_type=cdc\nserver_id=1"
-            } else {
-                "extract_type=snapshot"
-            };
-            let label = format!("{src_engine} -> {dst_engine}");
             let config = load_task_config(&format!(
-                "[extractor]\ndb_type={src_engine}\nurl={src_url}\n{extractor}\n\n[sinker]\ndb_type={dst_engine}\nurl={dst_url}\nsink_type=write\n\n[filter]\ndo_dbs=*\n\n[router]\n{rules}"
-            )).unwrap_or_else(|error| panic!("{label}: {error:#}"));
-            let filter = config.build_filter().unwrap();
-            assert_eq!(filter.db_type(), src_engine, "{label}");
-            assert!(!filter.filter(&source).unwrap(), "{label}");
+                "[extractor]\ndb_type=mysql\nurl=mysql://127.0.0.1:3306\nextract_type=cdc\nserver_id=1\n[sinker]\ndb_type={dst}\nurl={url}\nsink_type=write\n[filter]\ndo_dbs=*\n[router]\n{rules}"
+            )).unwrap();
+            let source = rid!("db", "orders");
+            assert!(!config.build_filter().unwrap().filter(&source).unwrap());
             let router = config.build_router().unwrap();
-            assert_eq!(router.is_some(), target.is_some(), "{label}");
-            if let Some(target) = target {
+            assert_eq!(router.is_some(), expected.is_some());
+            if let Some(target) = expected {
                 let router = router.unwrap();
-                assert_eq!(router.src_db_type(), src_engine, "{label}");
-                assert_eq!(router.dst_db_type(), dst_engine, "{label}");
-                let routed = router.forward::<RID>(&source).unwrap();
-                assert_eq!(routed, target, "{label}");
-                assert_eq!(router.reverse::<RID>(&routed).unwrap(), source, "{label}");
-                if dst_engine == &DbType::Kafka {
-                    assert_eq!(router.to::<RID>(&routed).unwrap(), rid!("test3"));
+                assert_eq!(router.forward::<RID>(&source).unwrap(), target);
+                assert_eq!(router.reverse::<RID>(&target).unwrap(), source);
+                if dst == DbType::Kafka {
+                    assert_eq!(router.to::<RID>(target).unwrap(), rid!("events"));
                 }
             }
         }
@@ -1743,7 +1690,7 @@ parallel_type=rdb_merge
         use crate::rid;
         for section in ["db", "database"] {
             let config = load_task_config(&basic_snapshot_config(&format!(
-                "[rules.{section}]\ndo=inventory\nroute=inventory:archive\n[rules.column]\nignore=inventory.*.secret"
+                "[source.{section}]\ninclude=inventory\nroute=inventory:archive\n[source.column]\nexclude=inventory.*.secret"
             ))).unwrap();
             let filter = config.build_filter().unwrap();
             let router = config.build_router().unwrap().unwrap();

@@ -142,7 +142,7 @@ impl PgCdcExtractor {
         let ddl_meta =
             ConfigTokenParser::parse_config(&self.ddl_meta_tb, &DbType::Pg, &['.'], None)?;
         if ddl_meta.len() == 2 {
-            self.filter.add_do(rid!(ddl_meta[0], ddl_meta[1]))?;
+            self.filter.add_include(rid!(ddl_meta[0], ddl_meta[1]))?;
         }
 
         // start heartbeat
@@ -594,7 +594,7 @@ impl PgCdcExtractor {
         tb_meta: &PgTbMeta,
         tuple_data: &[TupleData],
     ) -> anyhow::Result<HashMap<String, ColValue>> {
-        let ignore_cols = Some(self.filter.excluded_columns(
+        let excluded_columns = Some(self.filter.excluded_columns(
             rid!(tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
@@ -602,7 +602,10 @@ impl PgCdcExtractor {
         for i in 0..tuple_data.len() {
             let tuple_data = &tuple_data[i];
             let col = &tb_meta.basic.cols[i];
-            if ignore_cols.as_ref().is_some_and(|cols| cols.contains(col)) {
+            if excluded_columns
+                .as_ref()
+                .is_some_and(|cols| cols.contains(col))
+            {
                 continue;
             }
 
@@ -674,7 +677,7 @@ impl PgCdcExtractor {
             return Ok(());
         }
 
-        self.filter.add_ignore(rid!(schema_tb[0], schema_tb[1]))?;
+        self.filter.add_exclude(rid!(schema_tb[0], schema_tb[1]))?;
 
         let (slot_name, heartbeat_interval_secs, syncer, conn_pool) = (
             self.slot_name.clone(),

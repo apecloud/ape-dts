@@ -66,11 +66,11 @@ impl BatchCheckExtractor for PgCheckExtractor {
         let tb_meta = self.meta_manager.get_tb_meta(schema, tb).await?.to_owned();
         let check_row_data_items = self.build_check_row_data_items(check_logs, &tb_meta)?;
 
-        let ignore_cols = Some(
+        let excluded_columns = Some(
             self.filter
                 .excluded_columns(rid!(schema, tb), &tb_meta.basic.cols)?,
         );
-        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols.as_ref());
+        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, excluded_columns.as_ref());
         let batch_refs: Vec<&RowData> = check_row_data_items.iter().collect();
         let query_info = if check_logs.len() == 1 {
             query_builder.get_select_query(&check_row_data_items[0])?
@@ -81,7 +81,8 @@ impl BatchCheckExtractor for PgCheckExtractor {
 
         let mut rows = query.fetch(&self.conn_pool);
         while let Some(row) = rows.try_next().await? {
-            let mut row_data = RowData::from_pg_row(&row, &tb_meta, &ignore_cols.as_ref(), None)?;
+            let mut row_data =
+                RowData::from_pg_row(&row, &tb_meta, &excluded_columns.as_ref(), None)?;
 
             if is_diff && self.replay_diff_as_update {
                 row_data.row_type = RowType::Update;

@@ -6,19 +6,22 @@ use crate::resource::WILDCARD;
 
 #[derive(Debug, Clone, Default)]
 pub struct CommonFilter {
-    pub do_set: HashSet<String>,
-    pub ignore_set: HashSet<String>,
+    pub include_set: HashSet<String>,
+    pub exclude_set: HashSet<String>,
 }
 
 impl CommonFilter {
-    pub fn new(do_set: HashSet<String>, ignore_set: HashSet<String>) -> Self {
-        Self { do_set, ignore_set }
+    pub fn new(include_set: HashSet<String>, exclude_set: HashSet<String>) -> Self {
+        Self {
+            include_set,
+            exclude_set,
+        }
     }
 
-    /// Only `do={"*"}` selects all; ignore values are literal and take precedence.
+    /// Only `include={"*"}` selects all; exclude values are literal and take precedence.
     pub fn excludes_value(&self, value: &str) -> bool {
-        let all = self.do_set.len() == 1 && self.do_set.contains(WILDCARD);
-        self.ignore_set.contains(value) || (!all && !self.do_set.contains(value))
+        let all = self.include_set.len() == 1 && self.include_set.contains(WILDCARD);
+        self.exclude_set.contains(value) || (!all && !self.include_set.contains(value))
     }
 }
 
@@ -33,7 +36,7 @@ pub enum CommonFilterKind {
 }
 
 impl CommonFilterKind {
-    pub fn default_do(self) -> &'static str {
+    pub fn default_include(self) -> &'static str {
         match self {
             Self::Event | Self::Structure | Self::Cmd => WILDCARD,
             Self::Ddl | Self::Dcl => "",

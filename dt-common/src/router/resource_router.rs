@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{bail, ensure, Context, Result};
 
@@ -11,18 +11,42 @@ use crate::{
 pub struct ResourceRouter {
     forward_map: HashMap<RID, RID>,
     reverse_map: HashMap<RID, RID>,
-    /// Original source RID -> destination; multiple sources may share a target.
-    /// Only trailing whole-segment wildcards: `db.orders` > `db.*` > `*.*`.
-    /// `None` uses cross-engine payload routing; `Some`, even empty, keeps payloads in the source layout.
+    /// Original source RID -> dispatch destination.
+    /// Priority: `db.orders` > `db.*` > `*.*`; only trailing whole-segment wildcards.
+    /// `Some`, even empty, keeps payloads in the source layout; `None` uses the target layout.
     to_map: Option<HashMap<RID, RID>>,
 }
 
 impl ResourceRouter {
-    pub fn new(to_map: Option<HashMap<RID, RID>>) -> Self {
-        Self {
-            to_map,
-            ..Self::default()
+    pub fn new(
+        rules: impl IntoIterator<Item = (RID, RID)>,
+        to_map: Option<HashMap<RID, RID>>,
+    ) -> Result<Self> {
+        let mut forward_map = HashMap::new();
+        for (source, target) in rules {
+            if let Some(previous) = forward_map.insert(source.clone(), target.clone()) {
+                ensure!(
+                    previous == target,
+                    "conflicting routes for {source}: {previous} and {target}"
+                );
+            }
         }
+        let mut reverse_map = HashMap::new();
+        for (source, target) in &forward_map {
+            reverse_map
+                .entry(target)
+                .and_modify(|source| *source = None)
+                .or_insert(Some(source));
+        }
+        let reverse_map = reverse_map
+            .into_iter()
+            .filter_map(|(target, source)| source.map(|source| (target.clone(), source.clone())))
+            .collect();
+        Ok(Self {
+            forward_map,
+            reverse_map,
+            to_map,
+        })
     }
 
     pub fn has_to_map(&self) -> bool {
@@ -33,7 +57,6 @@ impl ResourceRouter {
         &self.forward_map
     }
 
-    /// Recover the source RID, preferring explicit inverse routes over unchanged names.
     pub fn to(routers: &HashMap<ResourceKind, Self>, src: &DbType, routed: &RID) -> Result<RID> {
         if !routers.values().any(Self::has_to_map) {
             return Ok(routed.clone());
@@ -46,7 +69,6 @@ impl ResourceRouter {
         router.dispatch(&source)
     }
 
-    /// Any dispatch map makes all payload mappings source -> source.
     pub fn route_db_type<'a>(
         routers: &HashMap<ResourceKind, Self>,
         src: &'a DbType,
@@ -57,25 +79,6 @@ impl ResourceRouter {
         } else {
             dst
         }
-    }
-
-    pub fn insert(&mut self, source: RID, target: RID) -> Result<bool> {
-        if let Some(previous) = self.forward_map.get(&source) {
-            ensure!(
-                previous == &target,
-                "conflicting routes for {source}: {previous} and {target}"
-            );
-            return Ok(false);
-        }
-        if let Some(previous) = self.reverse_map.get(&target) {
-            ensure!(
-                previous == &source,
-                "conflicting reverse routes for {target}: {previous} and {source}"
-            );
-        }
-        self.forward_map.insert(source.clone(), target.clone());
-        self.reverse_map.insert(target, source);
-        Ok(true)
     }
 
     pub fn route(&self, source: &RID) -> Option<&RID> {
@@ -110,54 +113,22 @@ impl ResourceRouter {
         Ok(source.clone())
     }
 
-    /// Match the longest target prefix; only fall back to identity if no rule matches.
+    /// Reverse the longest target prefix; unmatched names stay unchanged.
     pub fn reverse(
         routers: &HashMap<ResourceKind, Self>,
         src_db_type: &DbType,
         target: &RID,
     ) -> Result<RID> {
-        let restore = |source: RID| -> Result<RID> {
-            ensure!(
-                Self::forward(routers, src_db_type, &source)? == *target,
-                "unmapped reverse route for {target}"
-            );
-            Ok(source)
-        };
-        for depth in (1..=target.len()).rev() {
-            let prefix = target.prefix(depth);
-            let mut source = None;
-            for router in routers.values() {
-                if let Some(candidate) = router.reverse_route(&prefix) {
-                    ensure!(
-                        source.is_none_or(|previous| previous == candidate),
-                        "conflicting reverse routes for {prefix}"
-                    );
-                    source = Some(candidate);
-                }
-            }
-            if let Some(source) = source {
-                return restore(target.replace_prefix(depth, source));
-            }
-        }
-        restore(target.clone())
+        Self::find_reverse(routers, src_db_type, target)?
+            .with_context(|| format!("conflicting reverse routes for {target}"))
     }
 
-    pub fn validate_unique_targets(
+    pub fn reverse_for_monitor(
         routers: &HashMap<ResourceKind, Self>,
         src_db_type: &DbType,
-        selected_sources: &HashSet<RID>,
-    ) -> Result<()> {
-        let mut targets = HashMap::new();
-        for source in selected_sources {
-            let target = Self::forward(routers, src_db_type, source)?;
-            if let Some(previous) = targets.insert(target.clone(), source) {
-                ensure!(
-                    previous == source,
-                    "route collision: {previous} and {source} -> {target}"
-                );
-            }
-        }
-        Ok(())
+        target: &RID,
+    ) -> Result<RID> {
+        Ok(Self::find_reverse(routers, src_db_type, target)?.unwrap_or_else(|| target.clone()))
     }
 
     fn dispatch(&self, source: &RID) -> Result<RID> {
@@ -176,6 +147,50 @@ impl ResourceRouter {
         }
         bail!("no destination dispatch rule for {source}")
     }
+
+    fn find_reverse(
+        routers: &HashMap<ResourceKind, Self>,
+        src_db_type: &DbType,
+        target: &RID,
+    ) -> Result<Option<RID>> {
+        for depth in (1..=target.len()).rev() {
+            let prefix = target.prefix(depth);
+            let mut matched = false;
+            let mut source = None;
+            for router in routers.values() {
+                let Some(candidate) = router.reverse_route(&prefix) else {
+                    if router.forward_map.len() != router.reverse_map.len()
+                        && router.forward_map.values().any(|target| target == &prefix)
+                    {
+                        return Ok(None);
+                    }
+                    continue;
+                };
+                matched = true;
+                let candidate = target.replace_prefix(depth, candidate);
+                if Self::forward(routers, src_db_type, &candidate)? != *target {
+                    continue;
+                }
+                if source
+                    .as_ref()
+                    .is_some_and(|previous| previous != &candidate)
+                {
+                    return Ok(None);
+                }
+                source = Some(candidate);
+            }
+            if matched {
+                return source
+                    .map(Some)
+                    .with_context(|| format!("unmapped reverse route for {target}"));
+            }
+        }
+        ensure!(
+            Self::forward(routers, src_db_type, target)? == *target,
+            "unmapped reverse route for {target}"
+        );
+        Ok(Some(target.clone()))
+    }
 }
 
 #[cfg(test)]
@@ -191,15 +206,15 @@ mod tests {
             (rid!("db", "*"), rid!("database.topic")),
             (rid!("*", "*"), rid!("default.topic")),
         ]);
-        let mut table = ResourceRouter::new(Some(source_map.clone()));
-        table
-            .insert(rid!("db", "orders"), rid!("cold", "history"))
-            .unwrap();
-        table
-            .insert(rid!("db", "events"), rid!("cold", "events"))
-            .unwrap();
-        let mut db = ResourceRouter::default();
-        db.insert(rid!("db"), rid!("archive")).unwrap();
+        let table = ResourceRouter::new(
+            [
+                (rid!("db", "orders"), rid!("cold", "history")),
+                (rid!("db", "events"), rid!("cold", "events")),
+            ],
+            Some(source_map.clone()),
+        )
+        .unwrap();
+        let db = ResourceRouter::new([(rid!("db"), rid!("archive"))], None).unwrap();
         let routers = HashMap::from([(ResourceKind::Table, table), (ResourceKind::Database, db)]);
         for (source, expected) in [
             (rid!("db", "orders"), rid!("orders.topic")),
@@ -230,17 +245,19 @@ mod tests {
         );
         let mut routers = HashMap::from([(
             ResourceKind::Table,
-            ResourceRouter::new(Some(HashMap::new())),
+            ResourceRouter::new([], Some(HashMap::new())).unwrap(),
         )]);
         assert!(ResourceRouter::to(&routers, &DbType::Mysql, &id).is_err());
-        let mut table = ResourceRouter::new(Some(HashMap::from([
-            (rid!("a", "other"), rid!("explicit")),
-            (rid!("a", "*"), rid!("inherited")),
-            (rid!("*", "*"), rid!("shared")),
-        ])));
-        table.insert(rid!("a", "other"), rid!("x", "t")).unwrap();
-        let mut db = ResourceRouter::default();
-        db.insert(rid!("a"), rid!("x")).unwrap();
+        let table = ResourceRouter::new(
+            [(rid!("a", "other"), rid!("x", "t"))],
+            Some(HashMap::from([
+                (rid!("a", "other"), rid!("explicit")),
+                (rid!("a", "*"), rid!("inherited")),
+                (rid!("*", "*"), rid!("shared")),
+            ])),
+        )
+        .unwrap();
+        let db = ResourceRouter::new([(rid!("a"), rid!("x"))], None).unwrap();
         routers.insert(ResourceKind::Table, table);
         routers.insert(ResourceKind::Database, db);
         assert_eq!(
@@ -250,49 +267,60 @@ mod tests {
     }
 
     #[test]
-    fn routes_match_complete_rids_literally() {
-        let mut router = ResourceRouter::default();
-        for source in [
-            rid!("inventory"),
-            rid!("inventory", "order*"),
-            rid!("inventory", "order?"),
-            rid!("inventory", "r#order.*#"),
-        ] {
-            let target = source.replace_prefix(1, &rid!("archive"));
-            router.insert(source.clone(), target.clone()).unwrap();
-            assert_eq!(router.route(&source), Some(&target));
-            assert_eq!(router.reverse_route(&target), Some(&source));
-        }
-        for (source, target) in [
-            (rid!("inventory", "order"), rid!("archive", "order")),
-            (rid!("inventory", "order1"), rid!("archive", "order1")),
-            (
-                rid!("inventory", "order*", "id"),
-                rid!("archive", "order*", "id"),
-            ),
-            (rid!("other"), rid!("other")),
-        ] {
-            assert_eq!(router.route(&source), None);
-            assert_eq!(router.reverse_route(&target), None);
+    fn duplicate_sources_allow_only_the_same_target() {
+        let source = rid!("inventory", "orders");
+        let target = rid!("archive", "orders");
+        for duplicate in [target.clone(), rid!("other", "orders")] {
+            let router = ResourceRouter::new(
+                [
+                    (source.clone(), target.clone()),
+                    (source.clone(), duplicate.clone()),
+                ],
+                None,
+            );
+            if duplicate == target {
+                let router = router.unwrap();
+                assert_eq!(router.route(&source), Some(&target));
+                assert_eq!(router.reverse_route(&target), Some(&source));
+            } else {
+                assert!(router.is_err());
+            }
         }
     }
 
     #[test]
-    fn conflicts_in_either_direction_leave_both_maps_unchanged() {
-        let mut router = ResourceRouter::default();
-        let source = rid!("inventory", "orders");
-        let target = rid!("archive", "orders");
-        assert!(router.insert(source.clone(), target.clone()).unwrap());
-        assert!(!router.insert(source.clone(), target.clone()).unwrap());
-        let original = router.clone();
-        for (from, to) in [
-            (source.clone(), rid!("other", "orders")),
-            (rid!("other", "orders"), target.clone()),
+    fn reverse_map_keeps_only_unique_targets() {
+        for sources in [
+            [rid!("a"), rid!("b"), rid!("c")],
+            [rid!("c"), rid!("b"), rid!("a")],
+            [rid!("a", "t"), rid!("b", "t"), rid!("c", "t")],
         ] {
-            assert!(router.insert(from, to).is_err());
-            assert_eq!(router, original);
+            let target = sources[0].replace_prefix(1, &rid!("merged"));
+            let kind = ResourceKind::from_rid(&DbType::Mysql, &sources[0]).unwrap();
+            for count in 1..=sources.len() {
+                let rules = sources[..count]
+                    .iter()
+                    .map(|source| (source.clone(), target.clone()));
+                let router = ResourceRouter::new(rules, None).unwrap();
+                assert_eq!(
+                    router.reverse_route(&target),
+                    (count == 1).then_some(&sources[0])
+                );
+                for source in &sources[..count] {
+                    assert_eq!(router.route(source), Some(&target));
+                }
+                if count > 1 {
+                    let routers = HashMap::from([(kind, router)]);
+                    for target in [target.clone(), target.child("suffix")] {
+                        assert!(ResourceRouter::reverse(&routers, &DbType::Mysql, &target).is_err());
+                        assert_eq!(
+                            ResourceRouter::reverse_for_monitor(&routers, &DbType::Mysql, &target)
+                                .unwrap(),
+                            target
+                        );
+                    }
+                }
+            }
         }
-        assert_eq!(router.route(&source), Some(&target));
-        assert_eq!(router.reverse_route(&target), Some(&source));
     }
 }

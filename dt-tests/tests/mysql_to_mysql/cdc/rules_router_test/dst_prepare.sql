@@ -13,3 +13,7 @@ CREATE TABLE `rules_plain`.`identity` (`id` INT PRIMARY KEY, `note` VARCHAR(80),
 CREATE TABLE `rules_special`.`renamed,log:2` (`id` INT PRIMARY KEY, `note` VARCHAR(80), `secret` VARCHAR(80));
 CREATE TABLE `rules_special`.`star_renamed` (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
 CREATE TABLE `rules_archive`.`literal_other` (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
+DROP DATABASE IF EXISTS `rules_merged`;
+CREATE DATABASE `rules_merged`;
+CREATE TABLE `rules_merged`.`merge_left` (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
+CREATE TABLE `rules_merged`.`merge_right` (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));

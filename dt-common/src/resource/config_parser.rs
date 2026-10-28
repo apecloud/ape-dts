@@ -77,7 +77,6 @@ impl ResourceConfigParser {
         if let Some(value) = Self::quoted_literal(token, db_type)? {
             return Ok(Some(value));
         }
-        // Regex brackets are valid; identifier quotes from another dialect are not.
         if !token.starts_with(REGEX_PREFIX) {
             ensure!(
                 !DbType::iter()
@@ -114,7 +113,7 @@ impl ResourceConfigParser {
             .collect()
     }
 
-    /// Scan both endpoint dialects; decode each token with its own dialect later.
+    /// Scan both dialects; decode tokens using their endpoint dialect.
     fn tokens(input: &str, db_types: &[&DbType]) -> Result<Vec<String>> {
         ConfigTokenParser::tokens(input, RESOURCE_DELIMITERS, &Self::escape_pairs(db_types))
     }

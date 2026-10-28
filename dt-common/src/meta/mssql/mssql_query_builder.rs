@@ -36,14 +36,14 @@ impl MssqlTableQueryInfo<'_> {
 
 pub struct MssqlTableSqlBuilder<'a> {
     tb_meta: &'a MssqlTbMeta,
-    ignore_cols: Option<&'a HashSet<String>>,
+    excluded_columns: Option<&'a HashSet<String>>,
 }
 
 impl<'a> MssqlTableSqlBuilder<'a> {
-    pub fn new(tb_meta: &'a MssqlTbMeta, ignore_cols: Option<&'a HashSet<String>>) -> Self {
+    pub fn new(tb_meta: &'a MssqlTbMeta, excluded_columns: Option<&'a HashSet<String>>) -> Self {
         Self {
             tb_meta,
-            ignore_cols,
+            excluded_columns,
         }
     }
 
@@ -219,13 +219,11 @@ impl<'a> MssqlTableSqlBuilder<'a> {
 
     pub fn build_extract_cols_str(&self) -> anyhow::Result<String> {
         let mut extract_cols = Vec::new();
-        for col in self
-            .tb_meta
-            .basic
-            .cols
-            .iter()
-            .filter(|col| !self.ignore_cols.is_some_and(|cols| cols.contains(*col)))
-        {
+        for col in self.tb_meta.basic.cols.iter().filter(|col| {
+            !self
+                .excluded_columns
+                .is_some_and(|cols| cols.contains(*col))
+        }) {
             let escaped_col = self.escape(col);
             let col_type = self.tb_meta.get_col_type(col)?;
             let extract_col = match col_type {
