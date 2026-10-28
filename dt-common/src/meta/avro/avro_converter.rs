@@ -9,13 +9,16 @@ use crate::{
     error::DtError,
     meta::{
         col_value::ColValue,
-        ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
+        ddl_meta::{ddl_data::DdlData, ddl_parser::DdlParser, ddl_type::DdlType},
         dt_data::DtData,
         rdb_meta_manager::RdbMetaManager,
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
         row_type::RowType,
     },
+    resource::RID,
+    rid,
+    router::DtRouter,
 };
 
 #[derive(Clone)]
@@ -23,6 +26,7 @@ pub struct AvroConverter {
     schema: Schema,
     pub with_field_defs: bool,
     pub meta_manager: Option<RdbMetaManager>,
+    pub router: Option<DtRouter>,
 }
 
 const BEFORE: &str = "before";
@@ -47,22 +51,43 @@ impl AvroConverter {
             schema: AvroConverterSchema::get_avro_schema()?,
             meta_manager,
             with_field_defs,
+            router: None,
         })
     }
 
-    pub fn refresh_meta(&mut self, data: &[DdlData]) {
+    pub fn refresh_meta(&mut self, data: &[DdlData]) -> anyhow::Result<()> {
         if let Some(meta_manager) = &mut self.meta_manager {
             for ddl_data in data.iter() {
-                meta_manager.invalidate_cache_by_ddl_data(ddl_data);
+                if let Some(router) = &self.router {
+                    let source: RID = router.reverse(ddl_data.get_id::<RID>())?;
+                    let (db, schema, tb) = if router.src_db_type() == &DbType::Mssql {
+                        source.into_left::<3>().into()
+                    } else {
+                        let [schema, tb] = source.into_left();
+                        (String::new(), schema, tb)
+                    };
+                    meta_manager.invalidate_cache(&db, &schema, &tb);
+                } else {
+                    meta_manager.invalidate_cache_by_ddl_data(ddl_data);
+                }
             }
         }
+        Ok(())
     }
 
     pub async fn row_data_to_avro_key(&mut self, row_data: &RowData) -> anyhow::Result<String> {
+        let source_columns = self.source_columns(row_data);
         if let Some(tb_meta) = self.get_tb_meta(row_data).await? {
             let convert = |col_values: &HashMap<String, ColValue>| {
                 if let Some(col) = tb_meta.order_cols.first() {
-                    if let Some(value) = col_values.get(col) {
+                    let payload_col = source_columns
+                        .as_ref()
+                        .and_then(|map| {
+                            map.iter()
+                                .find_map(|(target, source)| (source == col).then_some(target))
+                        })
+                        .unwrap_or(col);
+                    if let Some(value) = col_values.get(payload_col) {
                         return value.to_option_string();
                     }
                 }
@@ -115,11 +140,16 @@ impl AvroConverter {
             Value::Union(0, Box::new(Value::Null))
         } else {
             let mut fields = vec![];
+            let source_columns = self.source_columns(row_data);
             let tb_meta = self.get_tb_meta(row_data).await?;
             for col in cols.iter() {
                 let mut column_type = String::new();
                 if let Some(tb_meta) = tb_meta {
-                    if let Some(col_origin_type) = tb_meta.col_origin_type_map.get(col) {
+                    let source_col = source_columns
+                        .as_ref()
+                        .and_then(|map| map.get(col))
+                        .unwrap_or(col);
+                    if let Some(col_origin_type) = tb_meta.col_origin_type_map.get(source_col) {
                         column_type = col_origin_type.to_owned();
                     }
                 }
@@ -179,7 +209,7 @@ impl AvroConverter {
             DDL_TYPE.into(),
             ColValue::String(ddl_data.ddl_type.to_string()),
         );
-        col_values.insert(QUERY.into(), ColValue::String(ddl_data.query));
+        col_values.insert(QUERY.into(), ColValue::String(ddl_data.to_sql()));
         if !ddl_data.default_db.is_empty() {
             col_values.insert(DB.into(), ColValue::String(ddl_data.default_db.clone()));
         }
@@ -226,19 +256,17 @@ impl AvroConverter {
         let db = get_extra_string(DB);
 
         if operation == *DDL {
-            let db_type = get_extra_string(DB_TYPE);
+            let db_type = DbType::from_str(&get_extra_string(DB_TYPE))?;
             let ddl_type = get_extra_string(DDL_TYPE);
             let query = get_extra_string(QUERY);
-            Ok(DtData::Ddl {
-                ddl_data: DdlData {
-                    default_db: db,
-                    default_schema: schema,
-                    query,
-                    db_type: DbType::from_str(&db_type)?,
-                    ddl_type: DdlType::from_str(&ddl_type)?,
-                    ..Default::default()
-                },
-            })
+            let mut ddl_data = DdlParser::new(db_type)
+                .parse(&query)?
+                .context("unsupported DDL in Kafka payload")?;
+            ddl_data.default_db = db;
+            ddl_data.default_schema = schema;
+            ddl_data.query = query;
+            ddl_data.ddl_type = DdlType::from_str(&ddl_type)?;
+            Ok(DtData::Ddl { ddl_data })
         } else {
             let _fields = self.avro_to_fields(avro_map.remove(FIELDS))?;
             let before = self.avro_to_col_values(avro_map.remove(BEFORE));
@@ -395,12 +423,23 @@ impl AvroConverter {
         row_data: &RowData,
     ) -> anyhow::Result<Option<&'a RdbTbMeta>> {
         if let Some(meta_manager) = self.meta_manager.as_mut() {
-            let tb_meta = meta_manager
-                .get_tb_meta(&row_data.db, &row_data.schema, &row_data.tb)
-                .await?;
+            // The payload is routed; metadata still belongs to the source database.
+            let id = rid!(row_data.db, row_data.schema, row_data.tb);
+            let source: RID = match &self.router {
+                Some(router) => router.reverse(id)?,
+                None => id,
+            };
+            let [db, schema, tb] = source.into_right();
+            let tb_meta = meta_manager.get_tb_meta(&db, &schema, &tb).await?;
             return Ok(Some(tb_meta));
         }
         Ok(None)
+    }
+
+    fn source_columns(&self, row: &RowData) -> Option<HashMap<String, String>> {
+        self.router
+            .as_ref()
+            .and_then(|router| router.reverse_column_map(rid!(row.db, row.schema, row.tb)))
     }
 }
 
@@ -464,17 +503,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_ddl_data_to_avro() {
-        let mut avro_converter = AvroConverter::new(None, false).unwrap();
-
-        let ddl_data = DdlData {
-            default_db: "catalog1".to_string(),
-            default_schema: "db1".to_string(),
-            query: "create table a(id int);".to_string(),
-            ddl_type: DdlType::CreateTable,
-            db_type: DbType::Mysql,
-            ..Default::default()
-        };
-        validate_ddl_data(&mut avro_converter, &ddl_data).await;
+        for engine in [DbType::Mysql, DbType::Pg] {
+            let router = DtRouter::new(
+                engine.clone(),
+                engine.clone(),
+                [(rid!("inventory"), rid!("archive"))],
+            )
+            .unwrap();
+            let parser = DdlParser::new(engine);
+            for sql in [
+                "CREATE TABLE inventory.orders (id INT PRIMARY KEY)",
+                "ALTER TABLE inventory.orders ADD COLUMN note VARCHAR(80)",
+            ] {
+                let ddl = parser.parse(sql).unwrap().unwrap();
+                let routed = router.route_ddl(ddl).unwrap();
+                let mut converter = AvroConverter::new(None, false).unwrap();
+                validate_ddl_data(&mut converter, &routed).await;
+            }
+        }
     }
 
     #[test]
@@ -518,7 +564,9 @@ mod tests {
             ddl_data: decoded_ddl_data,
         } = dt_data
         {
-            assert_eq!(ddl_data.to_owned(), decoded_ddl_data)
+            let mut expected = ddl_data.clone();
+            expected.query = ddl_data.to_sql();
+            assert_eq!(expected, decoded_ddl_data)
         } else {
             panic!()
         }

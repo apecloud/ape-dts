@@ -2,6 +2,8 @@ use std::{cmp, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::connection_auth_config::ConnectionAuthConfig,
     log_error, log_info,
@@ -14,6 +16,7 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
+    resource::RID,
     utils::limit_queue::LimitedQueue,
 };
 use sqlx::{
@@ -25,7 +28,7 @@ use tokio::{sync::RwLock, time::Instant};
 use crate::sinker::checkable_sinker::CheckableSink;
 use crate::{
     call_batch_fn, data_marker::DataMarker, rdb_query_builder::RdbQueryBuilder,
-    rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker,
+    sinker::base_sinker::BaseSinker, Sinker,
 };
 
 #[derive(Clone)]
@@ -34,7 +37,7 @@ pub struct MysqlSinker {
     pub connection_auth: ConnectionAuthConfig,
     pub conn_pool: Pool<MySql>,
     pub meta_manager: MysqlMetaManager,
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub batch_size: usize,
     pub base_sinker: BaseSinker,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
@@ -77,7 +80,7 @@ impl Sinker for MysqlSinker {
             data_size += ddl_data.get_data_size();
             data_len += 1;
             let query = sqlx::query(&sql);
-            let (db, _tb) = ddl_data.get_schema_tb();
+            let [db] = ddl_data.get_id::<RID>().into_left();
             log_info!("sink ddl, db: {}, sql: {}", db, sql);
 
             // create a tmp connection with database since sqlx conn pool does NOT support `USE db`
@@ -169,10 +172,10 @@ impl Sinker for MysqlSinker {
         {
             // Snapshot finished positions keep source table names, so route them before
             // invalidating target-side metadata cache.
-            let (routed_schema, routed_tb) = if let Some(router) = &self.router {
-                router.get_tb_map(schema, tb)
+            let (ref routed_schema, ref routed_tb) = if let Some(router) = &self.router {
+                router.forward(rid!(schema, tb))?
             } else {
-                (schema.as_str(), tb.as_str())
+                (schema.clone(), tb.clone())
             };
             self.meta_manager
                 .invalidate_cache_for_table(routed_schema, routed_tb);
@@ -207,7 +210,9 @@ impl CheckableSink for MysqlSinker {
 
 impl MysqlSinker {
     async fn serial_sink(&mut self, data: &[RowData]) -> anyhow::Result<()> {
-        let task_id = self.base_sinker.source_task_id_for_rows(data, &self.router);
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(data, &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let monitor_interval = self.base_sinker.monitor_interval_secs();
         let mut last_monitor_time = Instant::now();
@@ -273,7 +278,7 @@ impl MysqlSinker {
     ) -> anyhow::Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager
@@ -311,7 +316,7 @@ impl MysqlSinker {
     ) -> anyhow::Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let tb_meta = self
             .meta_manager

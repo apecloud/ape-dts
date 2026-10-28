@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
-    rdb_filter::RdbFilter,
+    filter::DtFilter,
     utils::sql_util::SqlUtil,
 };
 use dt_task::task_util::TaskUtil;
@@ -21,7 +22,7 @@ pub struct MysqlFetcher {
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
     pub is_source: bool,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
 }
 
 #[async_trait]
@@ -106,7 +107,7 @@ impl Fetcher for MysqlFetcher {
             Ok(mut rows) => {
                 while let Some(row) = rows.try_next().await? {
                     let schema_name = SqlUtil::try_get_mysql_string(&row, "SCHEMA_NAME")?;
-                    if !self.filter.filter_schema(&schema_name) {
+                    if !self.filter.filter(rid!(schema_name))? {
                         results.push(Database {
                             database_name: schema_name,
                         })
@@ -135,7 +136,7 @@ impl Fetcher for MysqlFetcher {
                         SqlUtil::try_get_mysql_string(&row, "TABLE_SCHEMA")?,
                         SqlUtil::try_get_mysql_string(&row, "TABLE_NAME")?,
                     );
-                    if !self.filter.filter_tb(&db, &tb) {
+                    if !self.filter.filter(rid!(db, tb))? {
                         results.push(Table {
                             database_name: db,
                             schema_name: String::from(""),
@@ -196,7 +197,7 @@ impl Fetcher for MysqlFetcher {
                         Self::get_str_with_null(&row, "CONSTRAINT_NAME")?,
                         Self::get_str_with_null(&row, "CONSTRAINT_TYPE")?,
                     );
-                    if !self.filter.filter_tb(&db, &table) {
+                    if !self.filter.filter(rid!(db, table))? {
                         results.push(Constraint {
                             database_name: db,
                             schema_name: String::from(""),

@@ -17,18 +17,8 @@ sink_type=struct
 db_type=doris
 conflict_policy=interrupt
 
-[filter]
-do_dbs=test_db
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=
-do_structures=
-
-[router]
-db_map=
-tb_map=
-col_map=
+[source.schema]
+include=test_db
 
 [runtime]
 log_level=info
@@ -58,17 +48,11 @@ url=mysql://root:123456@127.0.0.1:9030
 stream_load_url=mysql://root:123456@127.0.0.1:8040
 batch_size=5000
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert
+[source.table]
+include=test_db.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -104,12 +88,11 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert,update,delete
+[source.table]
+include=test_db.*
+
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=doris
@@ -117,11 +100,6 @@ sink_type=write
 url=mysql://root:123456@127.0.0.1:9030
 stream_load_url=mysql://root:123456@127.0.0.1:8040
 batch_size=5000
-
-[router]
-tb_map=
-col_map=
-db_map=
 
 [parallelizer]
 parallel_type=table

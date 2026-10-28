@@ -15,4 +15,26 @@ mod test {
         )
         .await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_filter_test() {
+        TestBase::run_rdb_kafka_rdb_snapshot_test(
+            "mysql_to_kafka_to_mysql/snapshot/rules_filter_test",
+            5000,
+            8000,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_router_test() {
+        TestBase::run_rdb_kafka_rdb_snapshot_test(
+            "mysql_to_kafka_to_mysql/snapshot/rules_router_test",
+            5000,
+            8000,
+        )
+        .await;
+    }
 }

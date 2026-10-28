@@ -2,6 +2,8 @@
 
 Refer to [Send data to Kafka](/docs/en/consumer/kafka_consumer.md) for consumers.
 
+These examples configure the producer in a PostgreSQL → Kafka topology. `to_<kind>` is a dispatch mapping; `to_topic` selects the receiving topic, while `route` changes names inside the message. `[source.table]` identifies the source resource kind and `topic` identifies the receiving kind. For the complete database → Kafka → database topology, consumer configurations and final table names, see the [dispatch example](/docs/en/rules.md#topology-example-mysql--kafka--mysql).
+
 # Prerequisites
 - [prerequisites](./prerequisites.md)
 
@@ -37,12 +39,14 @@ sink_type=write
 url=127.0.0.1:9093
 with_field_defs=true
 
-[filter]
-do_dbs=test_db
-do_events=insert
+[source.schema]
+include=test_db
 
-[router]
-topic_map=*.*:test
+[source.event]
+include=insert
+
+[source.table]
+to_topic=*.*:test
 
 [parallelizer]
 parallel_type=snapshot
@@ -78,13 +82,17 @@ extract_type=cdc
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 slot_name=ape_test
 
-[filter]
-do_dbs=test_db,test_db_2
-do_events=insert,update,delete
-do_ddls=*
+[source.schema]
+include=test_db,test_db_2
 
-[router]
-topic_map=*.*:test
+[source.event]
+include=insert,update,delete
+
+[source.ddl]
+include=*
+
+[source.table]
+to_topic=*.*:test
 
 [sinker]
 db_type=kafka

@@ -41,8 +41,8 @@ url=mysql://root:@127.0.0.1:9030
 sink_type=struct
 db_type=starrocks
 
-[filter]
-do_dbs=test_db
+[source.db]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -107,9 +107,11 @@ url=mysql://root:@127.0.0.1:9030
 stream_load_url=mysql://root:@127.0.0.1:8040
 batch_size=5000
 
-[filter]
-do_dbs=test_db
-do_events=insert
+[source.db]
+include=test_db
+
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -156,10 +158,14 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
-do_tbs=test_db.table1,test_db.table2
+[source.db]
+include=test_db
+
+[source.table]
+include=test_db.table1,test_db.table2
+
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=starrocks
@@ -222,9 +228,11 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
+[source.db]
+include=test_db
+
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=starrocks

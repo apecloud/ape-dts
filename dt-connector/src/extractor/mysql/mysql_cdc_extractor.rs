@@ -11,16 +11,18 @@ use std::{
 use anyhow::{bail, Context as AnyhowContext};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::{
     config::{config_enums::DbType, connection_auth_config::ConnectionAuthConfig},
     error::{DtError, DtOptionExt},
+    filter::DtFilter,
     log_debug, log_error, log_info, log_warn,
     meta::{
         adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
         dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
         row_data::RowData, row_type::RowType, syncer::Syncer,
     },
-    rdb_filter::RdbFilter,
+    resource::RID,
     utils::time_util::TimeUtil,
 };
 use mysql_binlog_connector_rust::{
@@ -48,7 +50,7 @@ pub struct MysqlCdcExtractor {
     pub extract_state: ExtractState,
     pub meta_manager: MysqlMetaManager,
     pub conn_pool: Pool<MySql>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
     pub binlog_filename: String,
@@ -244,7 +246,7 @@ impl MysqlCdcExtractor {
                     let table_map_event = ctx.table_map_event_map.get(&w.table_id).or_dt_error(
                         DtError::mysql_binlog_table_map_missing(w.table_id, "write rows"),
                     )?;
-                    if self.filter_event(table_map_event, RowType::Insert) {
+                    if self.filter_event(table_map_event, RowType::Insert)? {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
                         continue;
@@ -271,7 +273,7 @@ impl MysqlCdcExtractor {
                     let table_map_event = ctx.table_map_event_map.get(&u.table_id).or_dt_error(
                         DtError::mysql_binlog_table_map_missing(u.table_id, "update rows"),
                     )?;
-                    if self.filter_event(table_map_event, RowType::Update) {
+                    if self.filter_event(table_map_event, RowType::Update)? {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
                         continue;
@@ -301,7 +303,7 @@ impl MysqlCdcExtractor {
                     let table_map_event = ctx.table_map_event_map.get(&d.table_id).or_dt_error(
                         DtError::mysql_binlog_table_map_missing(d.table_id, "delete rows"),
                     )?;
-                    if self.filter_event(table_map_event, RowType::Delete) {
+                    if self.filter_event(table_map_event, RowType::Delete)? {
                         self.extract_state
                             .record_extracted_metrics(1, size_of_val(event) as u64);
                         continue;
@@ -373,7 +375,10 @@ impl MysqlCdcExtractor {
         let db = &table_map_event.database_name;
         let tb = &table_map_event.table_name;
         let tb_meta = self.meta_manager.get_tb_meta(db, tb).await?;
-        let ignore_cols = self.filter.get_ignore_cols(db, tb);
+        let excluded_columns = Some(
+            self.filter
+                .excluded_columns(rid!(db, tb), &tb_meta.basic.cols)?,
+        );
 
         if included_columns.len() != event.column_values.len() {
             let detail =
@@ -392,7 +397,10 @@ impl MysqlCdcExtractor {
                     DbType::Mysql,
                     format!("column index {i} is missing from MySQL table metadata"),
                 ))?;
-            if ignore_cols.is_some_and(|cols| cols.contains(col)) {
+            if excluded_columns
+                .as_ref()
+                .is_some_and(|cols| cols.contains(col))
+            {
                 continue;
             }
 
@@ -446,10 +454,10 @@ impl MysqlCdcExtractor {
                 .await
             {
                 for sub_ddl_data in ddl_data.clone().split_to_multi() {
-                    let (db, tb) = sub_ddl_data.get_schema_tb();
-                    // invalidate metadata cache
-                    self.meta_manager.invalidate_cache(&db, &tb);
-                    if !self.filter.filter_ddl(&db, &tb, &sub_ddl_data.ddl_type) {
+                    self.meta_manager
+                        .invalidate_cache_by_ddl_data(&sub_ddl_data);
+                    let id: RID = sub_ddl_data.get_id();
+                    if !self.filter.filter_ddl(&id, &sub_ddl_data.ddl_type)? {
                         self.base_extractor
                             .push_ddl(
                                 &mut self.extract_state,
@@ -471,14 +479,18 @@ impl MysqlCdcExtractor {
         Ok(())
     }
 
-    fn filter_event(&mut self, table_map_event: &TableMapEvent, row_type: RowType) -> bool {
+    fn filter_event(
+        &mut self,
+        table_map_event: &TableMapEvent,
+        row_type: RowType,
+    ) -> anyhow::Result<bool> {
         let db = &table_map_event.database_name;
         let tb = &table_map_event.table_name;
-        let filtered = self.filter.filter_event(db, tb, &row_type);
+        let filtered = self.filter.filter_event(rid!(db, tb), &row_type)?;
         if filtered {
-            return !self.extract_state.is_data_marker_info("", db, tb);
+            return Ok(!self.extract_state.is_data_marker_info("", db, tb));
         }
-        filtered
+        Ok(filtered)
     }
 
     fn start_heartbeat(&mut self, shut_down: Arc<AtomicBool>) -> anyhow::Result<()> {
@@ -491,7 +503,7 @@ impl MysqlCdcExtractor {
             return Ok(());
         }
 
-        self.filter.add_ignore_tb(&db_tb[0], &db_tb[1]);
+        self.filter.add_exclude(rid!(db_tb[0], db_tb[1]))?;
 
         let (server_id, heartbeat_interval_secs, syncer, conn_pool) = (
             self.server_id,

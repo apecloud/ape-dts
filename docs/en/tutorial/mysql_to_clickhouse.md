@@ -39,8 +39,8 @@ sink_type=struct
 db_type=clickhouse
 url=http://admin:123456@127.0.0.1:8123
 
-[filter]
-do_dbs=test_db
+[source.db]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -101,9 +101,11 @@ sink_type=write
 url=http://admin:123456@127.0.0.1:8123
 batch_size=5000
 
-[filter]
-do_dbs=test_db
-do_events=insert
+[source.db]
+include=test_db
+
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -149,9 +151,11 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
+[source.db]
+include=test_db
+
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=clickhouse

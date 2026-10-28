@@ -101,4 +101,16 @@ mod test {
     async fn check_recheck_recover_test() {
         TestBase::run_recheck_test("pg_to_pg/check/recheck_recover").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_rules_filter_test() {
+        TestBase::run_check_test("pg_to_pg/check/rules_filter_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_rules_router_test() {
+        TestBase::run_check_test("pg_to_pg/check/rules_router_test").await;
+    }
 }

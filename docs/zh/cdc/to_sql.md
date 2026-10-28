@@ -23,9 +23,11 @@ binlog_filename=
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_tbs=test_db.*
-do_events=insert,update,delete
+[source.table]
+include=test_db.*
+
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql

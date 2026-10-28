@@ -1,0 +1,3 @@
+rules.mysql.snapshot.router.default=4
+rules.mysql.snapshot.router.namespace=6
+rules.mysql.snapshot.router.exact=4

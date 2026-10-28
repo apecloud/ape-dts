@@ -1,6 +1,7 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
+use dt_common::rid;
 use dt_common::{
     config::{
         config_enums::{DbType, RdbTransactionIsolation, SinkType, TaskKind, TaskType},
@@ -14,6 +15,7 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::{DtError, DtResultExt, EndpointRole},
+    filter::DtFilter,
     log_info, log_warn,
     meta::{
         adaptor::mssql_col_value_convertor::MssqlColValueConvertor,
@@ -26,7 +28,6 @@ use dt_common::{
         rdb_meta_manager::RdbMetaManager,
     },
     monitor::FlushableMonitor,
-    rdb_filter::RdbFilter,
     system_dbs::SystemDb,
     utils::sql_util::SqlUtil,
 };
@@ -486,7 +487,7 @@ impl TaskUtil {
         conn_pool: &ConnClient,
         db_type: &DbType,
         schemas: &[String],
-        filter: &RdbFilter,
+        filter: &DtFilter,
     ) -> anyhow::Result<u64> {
         match task_type.kind {
             TaskKind::Snapshot => match db_type {
@@ -502,7 +503,7 @@ impl TaskUtil {
     async fn estimate_mysql_snapshot(
         conn_pool: &ConnClient,
         schemas: &[String],
-        filter: &RdbFilter,
+        filter: &DtFilter,
     ) -> anyhow::Result<u64> {
         let conn_pool = match conn_pool {
             ConnClient::MySQL(conn_pool) => conn_pool,
@@ -532,7 +533,7 @@ impl TaskUtil {
             let schema = SqlUtil::try_get_mysql_string(&row, 0)?;
             let tb = SqlUtil::try_get_mysql_string(&row, 1)?;
             let records: u64 = row.try_get(2)?;
-            if filter.filter_tb(&schema, &tb) {
+            if filter.filter(rid!(schema, tb))? {
                 continue;
             }
             total_records += records;
@@ -544,7 +545,7 @@ impl TaskUtil {
     async fn estimate_pg_snapshot(
         conn_pool: &ConnClient,
         schemas: &[String],
-        filter: &RdbFilter,
+        filter: &DtFilter,
     ) -> anyhow::Result<u64> {
         let conn_pool = match conn_pool {
             ConnClient::PostgreSQL(conn_pool) => conn_pool,
@@ -586,7 +587,7 @@ WHERE
             let schema: String = row.try_get(0)?;
             let table_name: String = row.try_get(1)?;
             let row_count: i64 = row.try_get(2)?;
-            if filter.filter_tb(&schema, &table_name) {
+            if filter.filter(rid!(schema, table_name))? {
                 continue;
             }
             // Convert to u64, handling negative values (which shouldn't happen but just in case)
@@ -600,7 +601,7 @@ WHERE
     async fn estimate_mssql_snapshot(
         connection_pool: &ConnClient,
         dbs: &[String],
-        filter: &RdbFilter,
+        filter: &DtFilter,
     ) -> anyhow::Result<u64> {
         let connection_pool = match connection_pool {
             ConnClient::Mssql(connection_pool) => connection_pool,
@@ -623,7 +624,7 @@ WHERE
                 let schema =
                     MssqlColValueConvertor::from_query_required_string(&row, "schema_name")?;
                 let table = MssqlColValueConvertor::from_query_required_string(&row, "table_name")?;
-                if filter.filter_tb_with_db(&db, &schema, &table) {
+                if filter.filter(rid!(db, schema, table))? {
                     continue;
                 }
                 let row_count = MssqlColValueConvertor::from_query_required_i64(&row, "row_count")?

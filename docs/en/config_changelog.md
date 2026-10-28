@@ -2,6 +2,12 @@
 
 Current reference: [Config details](/docs/en/config.md).
 
+## Unreleased: resource rules
+
+Add `[source.<kind>]` for `include`, `exclude`, `where_conditions`, `route`, and `to_<kind>` dispatch mappings. Common filters use `[source.event]`, `[source.ddl]`, `[source.dcl]`, `[source.structure]`, and `[source.cmd]`.
+
+Legacy configuration remains supported when no `[source.*]` section exists. Any source section disables the entire legacy `[filter]` / `[router]` configuration. Exclusions across all resource levels take precedence over inclusions. See [configuration examples](rules.md) and [Legacy config migration](legacy_config.md).
+
 ## 2.0.26 compared with 2.0.25
 
 ### Removed configurations

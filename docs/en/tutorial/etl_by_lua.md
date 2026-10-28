@@ -61,9 +61,11 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [processor]
 lua_code_file=/etl.lua
 
-[filter]
-do_dbs=test_db
-do_events=insert
+[source.db]
+include=test_db
+
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -110,9 +112,11 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
+[source.db]
+include=test_db
+
+[source.event]
+include=insert,update,delete
 
 [processor]
 lua_code_file=/etl.lua

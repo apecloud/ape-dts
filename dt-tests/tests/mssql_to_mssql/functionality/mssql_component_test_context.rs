@@ -1,10 +1,14 @@
 use std::collections::HashSet;
 
 use anyhow::{ensure, Context};
+use dt_common::rid;
 use dt_common::{
-    config::{config_enums::DbType, filter_config::FilterConfig},
+    config::{
+        config_enums::DbType,
+        filter_config::{FilterConfig, LegacyFilterConfig},
+    },
+    filter::DtFilter,
     meta::mssql::mssql_connection_pool::MssqlConnectionPool,
-    rdb_filter::RdbFilter,
 };
 
 use crate::test_runner::{
@@ -125,20 +129,22 @@ impl MssqlComponentTestContext {
         let meta_manager = MssqlTestEndpoint::create_meta_manager(pool.clone()).await?;
 
         for selector in selectors {
-            let table_names = if RdbFilter::is_pattern(selector.tb, &DbType::Mssql) {
-                let pattern_filter = RdbFilter::from_config(
-                    &FilterConfig {
+            let table_names = if runner.filter.matcher.is_pattern(selector.tb) {
+                let pattern_filter = DtFilter::from_config(
+                    &FilterConfig::Legacy(LegacyFilterConfig {
                         do_tbs: format!("{}.{}.{}", selector.db, selector.schema, selector.tb),
                         ..Default::default()
-                    },
-                    &DbType::Mssql,
+                    }),
+                    DbType::Mssql,
                 )?;
                 let table_names = meta_manager
                     .list_tables(selector.db, selector.schema)
                     .await?
                     .into_iter()
                     .filter(|tb| {
-                        !pattern_filter.filter_tb_with_db(selector.db, selector.schema, tb)
+                        !pattern_filter
+                            .filter(rid!(selector.db, selector.schema, tb))
+                            .unwrap()
                     })
                     .collect::<Vec<_>>();
                 ensure!(
@@ -157,7 +163,7 @@ impl MssqlComponentTestContext {
                 ensure!(
                     !runner
                         .filter
-                        .filter_tb_with_db(selector.db, selector.schema, &tb),
+                        .filter(rid!(selector.db, selector.schema, tb))?,
                     "MSSQL component test table is excluded by filter in {test_dir}: {}.{}.{}",
                     selector.db,
                     selector.schema,

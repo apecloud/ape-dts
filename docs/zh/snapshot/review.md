@@ -31,7 +31,7 @@ parallel_type=rdb_merge
 
 # 其他配置
 
-- 支持 [router]，详情请参考 [配置详解](../config.md)。
+- 支持名称路由，详情请参考 [配置详解](../config.md)。
 - 参考各类型集成测试的 task_config.ini：
     - dt-tests/tests/mysql_to_mysql/review
     - dt-tests/tests/pg_to_pg/review

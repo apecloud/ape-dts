@@ -2,6 +2,7 @@ use std::{cmp, collections::HashMap};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
     log_error, log_warn,
     meta::{
@@ -15,6 +16,7 @@ use dt_common::{
         row_data::RowData,
         row_type::RowType,
     },
+    resource::RID,
     utils::limit_queue::LimitedQueue,
 };
 use mongodb::{
@@ -26,14 +28,13 @@ use tokio::time::Instant;
 use crate::{
     call_batch_fn,
     common::mongo::{changestream_parser, oplog_parser},
-    rdb_router::RdbRouter,
     sinker::{base_sinker::BaseSinker, checkable_sinker::CheckableSink},
     Sinker,
 };
 
 #[derive(Clone)]
 pub struct MongoSinker {
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub batch_size: usize,
     pub mongo_client: Client,
     pub base_sinker: BaseSinker,
@@ -516,11 +517,11 @@ impl MongoSinker {
 
     async fn run_ddl(&mut self, ddl_data: &DdlData) -> Result<()> {
         let mut command = query_to_command(&ddl_data.query)?;
-        self.rewrite_ddl_command_namespace(ddl_data, &mut command);
+        Self::rewrite_ddl_command_namespace(ddl_data, &mut command);
 
         match ddl_data.ddl_type {
             DdlType::MongoDropDatabase => {
-                let (db, _) = ddl_data.get_schema_tb();
+                let [db] = ddl_data.get_id::<RID>().into_left();
                 self.mongo_client.database(&db).drop().await?;
             }
 
@@ -543,7 +544,7 @@ impl MongoSinker {
             | DdlType::MongoCreateIndex
             | DdlType::MongoDropIndex
             | DdlType::MongoCollMod => {
-                let (db, _) = ddl_data.get_schema_tb();
+                let [db] = ddl_data.get_id::<RID>().into_left();
                 self.mongo_client.database(&db).run_command(command).await?;
             }
 
@@ -592,17 +593,17 @@ impl MongoSinker {
         Ok(true)
     }
 
-    fn rewrite_ddl_command_namespace(&self, ddl_data: &DdlData, command: &mut Document) {
-        let (db, tb) = ddl_data.get_schema_tb();
-        let (new_db, new_tb) = ddl_data.get_rename_to_schema_tb();
+    fn rewrite_ddl_command_namespace(ddl_data: &DdlData, command: &mut Document) {
+        let [db, tb] = ddl_data.get_id::<RID>().into_left();
         for command_name in ["create", "drop", "createIndexes", "dropIndexes", "collMod"] {
             if command.contains_key(command_name) && !tb.is_empty() {
-                command.insert(command_name, tb.clone());
+                command.insert(command_name, tb);
                 return;
             }
         }
 
         if command.contains_key("renameCollection") {
+            let [new_db, new_tb] = ddl_data.get_rename_id::<RID>().into_left();
             command.insert("renameCollection", format!("{}.{}", db, tb));
             command.insert("to", format!("{}.{}", new_db, new_tb));
             return;
@@ -621,7 +622,9 @@ impl MongoSinker {
     }
 
     async fn serial_sink(&mut self, data: &[RowData]) -> Result<()> {
-        let task_id = self.base_sinker.source_task_id_for_rows(data, &self.router);
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(data, &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut rts = LimitedQueue::new(cmp::min(100, data.len()));
         let monitor_interval = self.base_sinker.monitor_interval_secs();
@@ -1131,7 +1134,7 @@ impl MongoSinker {
     ) -> Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
@@ -1191,7 +1194,7 @@ impl MongoSinker {
     ) -> Result<()> {
         let task_id = self
             .base_sinker
-            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router);
+            .source_task_id_for_rows(&data[start_index..start_index + batch_size], &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let mut data_size = 0;
 
@@ -1472,6 +1475,7 @@ impl MongoSinker {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::meta::ddl_meta::ddl_statement::{DdlStatement, MongoCommandStatement};
     use mongodb::bson::{doc, raw::RawDocumentBuf};
 
     use super::*;
@@ -1523,5 +1527,49 @@ mod tests {
             fields.get(MongoConstants::DOC),
             Some(ColValue::MongoDoc(_))
         ));
+    }
+
+    #[test]
+    fn ddl_commands_use_routed_collection_names() {
+        for (ddl_type, table, mut command, expected) in [
+            (
+                DdlType::MongoCreateCollection,
+                "orders.v2",
+                doc! { "create": "orders" },
+                doc! { "create": "orders.v2" },
+            ),
+            (
+                DdlType::MongoRenameCollection,
+                "orders.v2",
+                doc! { "renameCollection": "inventory.orders", "to": "inventory.events" },
+                doc! { "renameCollection": "archive.eu.orders.v2", "to": "history.events" },
+            ),
+            (
+                DdlType::MongoShardCollection,
+                "orders.v2",
+                doc! { "shardCollection": "inventory.orders", "key": { "id": 1 } },
+                doc! { "shardCollection": "archive.eu.orders.v2", "key": { "id": 1 } },
+            ),
+            (
+                DdlType::MongoDropDatabase,
+                "",
+                doc! { "dropDatabase": 1 },
+                doc! { "dropDatabase": 1 },
+            ),
+        ] {
+            let ddl = DdlData {
+                ddl_type,
+                statement: DdlStatement::MongoCommand(MongoCommandStatement {
+                    schema: "archive.eu".into(),
+                    tb: table.into(),
+                    new_schema: "history".into(),
+                    new_tb: "events".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            MongoSinker::rewrite_ddl_command_namespace(&ddl, &mut command);
+            assert_eq!(command, expected, "{:?}", ddl.ddl_type);
+        }
     }
 }
