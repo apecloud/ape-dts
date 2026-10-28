@@ -296,37 +296,37 @@ The CDC checker queue is deliberately decoupled from the migration pipeline. Whe
 the oldest pending batch instead of blocking writes. Checker processing/output failures are logged
 without failing the main CDC write path. Snapshot and structure checks do not use this queue.
 
-# [rules.<kind>]
+# [source.<kind>]
 
 Use these sections to select data, exclude objects, and map database, table, column or Kafka topic names.
 
 | Section | Purpose |
 | --- | --- |
-| `[rules.db]` | MySQL-style databases, MongoDB databases or Redis database numbers |
-| `[rules.schema]` | PostgreSQL schemas; `database.schema` for SQL Server |
-| `[rules.table]` / `[rules.collection]` | Tables or MongoDB collections |
-| `[rules.column]` | Column selection, exclusion and name mapping |
-| `[rules.event]` | insert, update and delete events |
-| `[rules.ddl]` / `[rules.dcl]` | DDL / DCL types |
-| `[rules.structure]` | Object types for structure migration |
-| `[rules.cmd]` | Redis commands |
+| `[source.db]` | MySQL-style databases, MongoDB databases or Redis database numbers |
+| `[source.schema]` | PostgreSQL schemas; `database.schema` for SQL Server |
+| `[source.table]` / `[source.collection]` | Tables or MongoDB collections |
+| `[source.column]` | Column selection, exclusion and name mapping |
+| `[source.event]` | insert, update and delete events |
+| `[source.ddl]` / `[source.dcl]` | DDL / DCL types |
+| `[source.structure]` | Object types for structure migration |
+| `[source.cmd]` | Redis commands |
 
 ```ini
-[rules.db]
-do=inventory
+[source.db]
+include=inventory
 route=inventory:archive
 
-[rules.table]
-ignore=inventory.tmp*
+[source.table]
+exclude=inventory.tmp*
 where_conditions=inventory.orders:"id > 100"
 route=inventory.orders:archive.order_history
 ```
 
 This selects `inventory`, excludes tables starting with `tmp`, and writes to `archive`. The `orders` table becomes `order_history`; snapshot migration and snapshot checking query only rows with `id > 100`.
 
-`do` / `ignore` support `*`, `?` and regular expressions; `route` uses exact names.
+`include` / `exclude` support `*`, `?` and regular expressions; `route` uses exact names.
 
-`to_<kind>` defines a dispatch mapping that selects the destination resource receiving the data. `<kind>` is its resource type; `to_topic` is the Kafka topic case. Place dispatch mappings in the source resource section, such as `[rules.table]`. `route` changes names carried by the data; dispatch selects the receiving location. See the [MySQL → Kafka → MySQL example](rules.md#topology-example-mysql--kafka--mysql) for the topology, producer/consumer configurations and final tables.
+`to_<kind>` defines a dispatch mapping that selects the destination resource receiving the data. `<kind>` is its resource type; `to_topic` is the Kafka topic case. Place dispatch mappings in the source resource section, such as `[source.table]`. `route` changes names carried by the data; dispatch selects the receiving location. See the [MySQL → Kafka → MySQL example](rules.md#topology-example-mysql--kafka--mysql) for the topology, producer/consumer configurations and final tables.
 
 See [filtering and routing](rules.md) for fields, precedence and database examples. Maintenance and migration of existing `[filter]` / `[router]` files are covered in [Legacy config](legacy_config.md).
 

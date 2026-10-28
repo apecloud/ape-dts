@@ -73,8 +73,8 @@ sink_type=struct
 db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -129,11 +129,11 @@ db_type=mysql
 sink_type=write
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -198,11 +198,11 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -248,8 +248,8 @@ db_type=mysql
 sink_type=write
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -307,8 +307,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -346,11 +346,11 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql
@@ -413,11 +413,11 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 gtid_enabled=true
 gtid_set=
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql
@@ -479,14 +479,14 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
-[rules.ddl]
-do=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+[source.ddl]
+include=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 [sinker]
 db_type=mysql

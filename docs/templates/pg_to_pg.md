@@ -18,11 +18,11 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 conflict_policy=interrupt
 max_connections=10
 
-[rules.schema]
-do=test_schema
+[source.schema]
+include=test_schema
 
-[rules.structure]
-do=database,table,constraint,sequence,comment,index
+[source.structure]
+include=database,table,constraint,sequence,comment,index
 
 [runtime]
 log_level=info
@@ -55,11 +55,11 @@ batch_size=200
 replace=true
 max_connections=10
 
-[rules.table]
-do=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -85,11 +85,11 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[rules.table]
-do=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=pg
@@ -172,8 +172,8 @@ Note:
 [extractor]
 ddl_meta_tb=public.ape_dts_ddl_command
 
-[rules.ddl]
-do=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+[source.ddl]
+include=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 ```
 
@@ -183,7 +183,7 @@ do=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,cr
 | :---------- | :-------------------------------------------------------- | :------ | :------ |
 | ddl_meta_tb | the meta table you created to store the captured ddl info | -       | -       |
 
-- [rules.ddl]
+- [source.ddl]
 
 | Config  | Description                                                                                                                                                                                                           | Example                             | Default                            |
 | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------------------------------- |
@@ -205,8 +205,8 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 
 
-[rules.table]
-do=test_schema.*
+[source.table]
+include=test_schema.*
 
 [parallelizer]
 parallel_type=serial
@@ -240,11 +240,11 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 batch_size=100
 
-[rules.table]
-do=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -281,11 +281,11 @@ replace=true
 [checker]
 batch_size=200
 
-[rules.table]
-do=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -327,11 +327,11 @@ is_enabled=true
 resume_type=from_target
 table_full_name=apecloud_metadata.apedts_task_position
 
-[rules.table]
-do=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=pg
@@ -375,11 +375,11 @@ sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 batch_size=200
 
-[rules.table]
-do=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -419,11 +419,11 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 batch_size=100
 
-[rules.table]
-do=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -451,11 +451,11 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[rules.schema]
-do=test_schema
+[source.schema]
+include=test_schema
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql
@@ -486,11 +486,11 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[rules.schema]
-do=test_schema
+[source.schema]
+include=test_schema
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql

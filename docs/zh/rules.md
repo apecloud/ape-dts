@@ -1,6 +1,6 @@
 # 过滤与路由配置
 
-通过 `[rules.*]` 配置需要同步哪些库、表和列，以及它们在目标端使用的名称。配置写在任务的 INI 文件中；连接地址、任务类型等参数见[配置参考](config.md)。已有 `[filter]` / `[router]` 文件的说明和迁移方法见 [Legacy config](legacy_config.md)。
+通过 `[source.*]` 按源端对象配置需要同步哪些库、表和列，以及它们在目标端使用的名称。配置写在任务的 INI 文件中；连接地址、任务类型等参数见[配置参考](config.md)。已有 `[filter]` / `[router]` 文件的说明和迁移方法见 [Legacy config](legacy_config.md)。
 
 ## 配置一个 MySQL → MySQL 全量任务
 
@@ -17,21 +17,21 @@ db_type=mysql
 sink_type=write
 url=mysql://user:password@target:3306
 
-[rules.db]
-do=inventory
+[source.db]
+include=inventory
 route=inventory:archive
 
-[rules.table]
-ignore=inventory.tmp*
+[source.table]
+exclude=inventory.tmp*
 where_conditions=inventory.orders:"id > 100"
 route=inventory.orders:archive.order_history
 
-[rules.column]
-ignore=inventory.orders.secret*
+[source.column]
+exclude=inventory.orders.secret*
 route=inventory.orders.id:archive.order_history.order_id
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -50,43 +50,43 @@ checkpoint_interval_secs=10
 
 | 数据库类型 | 配置段 | 表、集合或库编号示例 |
 | --- | --- | --- |
-| MySQL、TiDB、ClickHouse、StarRocks、Doris | `rules.db`、`rules.table`、`rules.column` | `inventory.orders`、`inventory.orders.id` |
-| PostgreSQL | `rules.schema`、`rules.table`、`rules.column` | `inventory.orders`、`inventory.orders.id` |
-| SQL Server | `rules.db`、`rules.schema`、`rules.table`、`rules.column` | `market.inventory.orders`、`market.inventory.orders.id` |
-| MongoDB | `rules.db`、`rules.collection` | `inventory.orders` |
-| Redis | `rules.db` | `0`、`1` |
+| MySQL、TiDB、ClickHouse、StarRocks、Doris | `source.db`、`source.table`、`source.column` | `inventory.orders`、`inventory.orders.id` |
+| PostgreSQL | `source.schema`、`source.table`、`source.column` | `inventory.orders`、`inventory.orders.id` |
+| SQL Server | `source.db`、`source.schema`、`source.table`、`source.column` | `market.inventory.orders`、`market.inventory.orders.id` |
+| MongoDB | `source.db`、`source.collection` | `inventory.orders` |
+| Redis | `source.db` | `0`、`1` |
 
-PostgreSQL 的连接数据库由 URL 指定，表名前一段是 schema。SQL Server 的表名包含数据库、schema、表三段。`[rules.database]` 是 `[rules.db]` 的别名，使用其中一种即可。当前数据库不支持的资源类型会被忽略。
+PostgreSQL 的连接数据库由 URL 指定，表名前一段是 schema。SQL Server 的表名包含数据库、schema、表三段。`[source.database]` 是 `[source.db]` 的别名，使用其中一种即可。当前数据库不支持的资源类型会被忽略。
 
 | 配置项 | 作用 | 示例 |
 | --- | --- | --- |
-| `do` | 选择需要同步的对象 | `inventory.orders,inventory.event*` |
-| `ignore` | 排除对象 | `inventory.tmp*` |
+| `include` | 选择需要同步的对象 | `inventory.orders,inventory.event*` |
+| `exclude` | 排除对象 | `inventory.tmp*` |
 | `where_conditions` | 全量迁移、全量校验时的查询条件 | `inventory.orders:"id > 100"` |
 | `route` | 修改目标名称，使用完整名称 | `inventory.orders:archive.order_history` |
 | `to_<kind>` | 分发映射：决定数据发送到目标端的哪个资源；`to_topic` 是分发到 topic 的特例 | `to_topic=inventory.*:events,*.*:default_events` |
 
-至少配置一条资源 `do` 规则。只配置 `route` 或 `ignore` 不会自动选择所有表。不需要改名时省略 `route`，目标沿用源端名称。
+至少配置一条资源 `include` 规则。只配置 `route` 或 `exclude` 不会自动选择所有表。不需要改名时省略 `route`，目标沿用源端名称。
 
 ## 选择和排除对象
 
 ```ini
-[rules.db]
-do=inventory,tenant_*
-ignore=tenant_private*
+[source.db]
+include=inventory,tenant_*
+exclude=tenant_private*
 
-[rules.table]
-do=other.orders*,tenant_private.public_orders
-ignore=inventory.tmp*,other.orders_archive*
+[source.table]
+include=other.orders*,tenant_private.public_orders
+exclude=inventory.tmp*,other.orders_archive*
 ```
 
-这会选择 `inventory` 和 `tenant_` 开头的库，并排除 `tenant_private` 开头的库。表规则的优先级更高，因此仍会同步 `tenant_private.public_orders`；`inventory.tmp*` 不会同步。`other.orders_archive` 同时符合表级 `do` 和 `ignore`，会被排除。
+这会选择 `inventory` 和 `tenant_` 开头的库，并排除 `tenant_private` 开头的库。即使表级 include 显式选择了 `tenant_private.public_orders`，它仍被库级 exclude 排除；`inventory.tmp*` 不会同步。`other.orders_archive` 同时符合表级 `include` 和 `exclude`，会被排除。
 
-优先使用最具体的匹配规则：表规则优先于库/schema 规则，同一层的 `ignore` 优先于 `do`。表级规则没有命中时，再使用上级规则。
+先检查所有适用层级的 `exclude`，命中任意一条就排除；再检查 `include`，命中任意一条才同步。库/schema 和表级包含规则取并集，排除规则也取并集。列规则仅控制已选中表的数据列，不会重新选中被排除的表。
 
 ### 通配符与正则
 
-以下写法适用于资源 `do` / `ignore`，每一段分别匹配：
+以下写法适用于资源 `include` / `exclude`，每一段分别匹配：
 
 | 规则 | 匹配示例 | 不匹配示例 |
 | --- | --- | --- |
@@ -113,8 +113,8 @@ ignore=inventory.tmp*,other.orders_archive*
 | SQL Server | `[market].[inventory].[order*]` | `[market].[inventory].[a]]b]` 表示表名 `a]b` |
 
 ```ini
-[rules.table]
-do=`a.b,c:d`.`order*`,`inventory`.`r#literal#`
+[source.table]
+include=`a.b,c:d`.`order*`,`inventory`.`r#literal#`
 ```
 
 上例精确选择库 `a.b,c:d` 中的表 `order*`，以及 `inventory` 中名为 `r#literal#` 的表。引号内的星号和 `r#…#` 不表示模式。
@@ -122,21 +122,21 @@ do=`a.b,c:d`.`order*`,`inventory`.`r#literal#`
 ### 选择列
 
 ```ini
-[rules.table]
-do=inventory.orders,inventory.events
+[source.table]
+include=inventory.orders,inventory.events
 
-[rules.column]
-do=inventory.orders.id,inventory.orders.amount*,inventory.orders.secret
-ignore=inventory.orders.secret,inventory.events.debug*
+[source.column]
+include=inventory.orders.id,inventory.orders.amount*,inventory.orders.secret
+exclude=inventory.orders.secret,inventory.events.debug*
 ```
 
-`orders` 只同步 `id` 和 `amount` 开头的列；`secret` 虽然在 `do` 中，仍因 `ignore` 被排除。`events` 没有列级 `do`，同步除 `debug` 开头以外的列。列选择用于数据同步和数据校验，不会自动调整目标表结构。
+`orders` 只同步 `id` 和 `amount` 开头的列；`secret` 虽然在 `include` 中，仍因 `exclude` 被排除。`events` 没有列级 `include`，同步除 `debug` 开头以外的列。列选择用于数据同步和数据校验，不会自动调整目标表结构。
 
 ## 按行筛选：WHERE 条件
 
 ```ini
-[rules.table]
-do=inventory.orders,inventory.events
+[source.table]
+include=inventory.orders,inventory.events
 ; 外层双引号用于配置字符串；内部双引号写成 \"，反斜杠写成 \\。
 where_conditions=inventory.orders:"id > 100 AND note IN ('keep\"quote','other')",inventory.events:"kind IN ('sale','refund')"
 ```
@@ -145,44 +145,44 @@ where_conditions=inventory.orders:"id > 100 AND note IN ('keep\"quote','other')"
 
 表名使用精确名称，不支持通配符或正则。同一张表重复配置时，第一条条件生效。条件不向下继承，库/schema 上的条件不会自动作用于表。
 
-WHERE 条件用于全量迁移和全量数据校验，不用于逐行过滤 CDC 变更。需要这些查询条件时，将它们放在 `[rules.table]` 中。
+WHERE 条件用于全量迁移和全量数据校验，不用于逐行过滤 CDC 变更。需要这些查询条件时，将它们放在 `[source.table]` 中。
 
 ## 事件、DDL、DCL 和结构类型
 
-这些配置段使用 `do` / `ignore` 指定类型名称，名称精确匹配。单独写 `do=*` 表示全部，`do=` 表示不选择任何类型；不要把 `*` 与具体类型混写。`ignore=*` 不表示排除全部。
+这些配置段使用 `include` / `exclude` 指定类型名称，名称精确匹配。单独写 `include=*` 表示全部，`include=` 表示不选择任何类型；不要把 `*` 与具体类型混写。`exclude=*` 不表示排除全部。
 
-| 配置段 | 未设置 `do` 时 | 常用值 |
+| 配置段 | 未设置 `include` 时 | 常用值 |
 | --- | --- | --- |
-| `[rules.event]` | 全部 | `insert,update,delete` |
-| `[rules.ddl]` | 不同步 | `create_database,drop_database,alter_database,create_schema,drop_schema,alter_schema,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index` |
-| `[rules.dcl]` | 不同步 | `create_user,alter_user,create_role,drop_user,drop_role,grant,revoke,set_role` |
-| `[rules.structure]` | 全部 | `database,table,constraint,sequence,comment,index,udf,udt,rbac,collection,shardkey` |
-| `[rules.cmd]` | 全部 | Redis 命令名，使用小写，如 `set,del,flushall,flushdb` |
+| `[source.event]` | 全部 | `insert,update,delete` |
+| `[source.ddl]` | 不同步 | `create_database,drop_database,alter_database,create_schema,drop_schema,alter_schema,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index` |
+| `[source.dcl]` | 不同步 | `create_user,alter_user,create_role,drop_user,drop_role,grant,revoke,set_role` |
+| `[source.structure]` | 全部 | `database,table,constraint,sequence,comment,index,udf,udt,rbac,collection,shardkey` |
+| `[source.cmd]` | 全部 | Redis 命令名，使用小写，如 `set,del,flushall,flushdb` |
 
 ```ini
 ; 同步插入和更新，不同步删除。
-[rules.event]
-do=*
-ignore=delete
+[source.event]
+include=*
+exclude=delete
 
 ; 同步建表、修改表，不执行清空表。
-[rules.ddl]
-do=create_table,alter_table,truncate_table
-ignore=truncate_table
+[source.ddl]
+include=create_table,alter_table,truncate_table
+exclude=truncate_table
 
 ; 同步用户创建和授权，不同步删除用户。
-[rules.dcl]
-do=create_user,grant,drop_user
-ignore=drop_user
+[source.dcl]
+include=create_user,grant,drop_user
+exclude=drop_user
 
 ; 结构迁移包含库、表和约束，排除普通独立索引。
-[rules.structure]
-do=database,table,constraint,index
-ignore=index
+[source.structure]
+include=database,table,constraint,index
+exclude=index
 
 ; Redis 增量迁移不执行这两个命令。
-[rules.cmd]
-ignore=flushall,flushdb
+[source.cmd]
+exclude=flushall,flushdb
 ```
 
 只配置当前任务需要的部分。DDL/DCL 取决于源、目标数据库及任务的支持范围。PostgreSQL CDC 同步 DDL 还需配置 `ddl_meta_tb` 和捕获触发器，见 [PostgreSQL 模板](../templates/pg_to_pg.md)。
@@ -194,14 +194,14 @@ ignore=flushall,flushdb
 `route` 只匹配精确名称，不支持通配路由。库/schema、表和列均可改名：
 
 ```ini
-[rules.db]
-do=inventory,archive
+[source.db]
+include=inventory,archive
 route=inventory:archive,archive:history
 
-[rules.table]
+[source.table]
 route=inventory.orders:special.order_history
 
-[rules.column]
+[source.column]
 route=inventory.orders.id:special.order_history.order_id
 ```
 
@@ -212,40 +212,42 @@ route=inventory.orders.id:special.order_history.order_id
 | `inventory.audit` | `archive.audit` | 使用库级规则 |
 | `archive.audit` | `history.audit` | 使用另一条库级规则 |
 
-每个对象只应用一次匹配，不会把 `inventory.audit` 连续改名成 `history.audit`。未配置映射的名称保持原样。列映射中的目标库和表必须与该表的路由结果一致；不同源对象不能配置成同一个目标对象。
+每个对象只应用一次匹配，不会把 `inventory.audit` 连续改名成 `history.audit`。未配置映射的名称保持原样。列映射中的目标库和表必须与该表的路由结果一致；多个源列不能映射到同一个目标列。
 
 PostgreSQL 使用 schema 规则：
 
 ```ini
-[rules.schema]
-do=inventory
+[source.schema]
+include=inventory
 route=inventory:archive
-[rules.table]
+[source.table]
 route=inventory.orders:archive.order_history
-[rules.column]
+[source.column]
 route=inventory.orders.id:archive.order_history.order_id
 ```
 
 SQL Server 写完整的数据库、schema、表路径：
 
 ```ini
-[rules.db]
-do=market
-[rules.schema]
+[source.db]
+include=market
+[source.schema]
 route=market.inventory:warehouse.sales
-[rules.table]
+[source.table]
 route=market.inventory.orders:warehouse.sales.order_history
-[rules.column]
+[source.column]
 route=market.inventory.orders.id:warehouse.sales.order_history.order_id
 ```
 
-MongoDB 的集合使用 `[rules.collection]`；例如 `route=inventory.orders:archive.order_history`。Redis 用 `[rules.db]` 选择库编号，例如 `do=0,2`。
+MongoDB 的集合使用 `[source.collection]`；例如 `route=inventory.orders:archive.order_history`。Redis 用 `[source.db]` 选择库编号，例如 `include=0,2`。
+
+多个源库/schema 可以映射到同一个目标，正向路由允许多对一。全量写入监控在无法唯一确定来源时，使用路由后的目标表名称统计。校验和 Kafka 分发仍需要准确的源名称；请为这些功能配置完整且可区分的表映射，存在反向歧义时会返回错误。
 
 ## 分发映射
 
 **`to_<kind>` 表示分发映射**，决定数据发送到目标端的哪个资源。`kind` 是接收数据的资源类型；`to_topic` 是其中 `kind=topic` 的特例。`route` 负责修改数据中的资源名称，`to_<kind>` 负责选择接收数据的位置，两者可以同时配置。
 
-分发映射放在源资源对应的 `[rules.<source_kind>]` 配置段下，格式为 `to_<kind>=源资源路径:目标资源路径`。配置段中的 `source_kind` 由源数据库决定，键名中的 `kind` 由目标数据库决定，两者可以不同。例如 `[rules.table] to_topic=inventory.orders:events.orders` 表示将源表 `inventory.orders` 的数据发送到目标 topic `events.orders`。
+分发映射放在源资源对应的 `[source.<source_kind>]` 配置段下，格式为 `to_<kind>=源资源路径:目标资源路径`。配置段中的 `source_kind` 由源数据库决定，键名中的 `kind` 由目标数据库决定，两者可以不同。例如 `[source.table] to_topic=inventory.orders:events.orders` 表示将源表 `inventory.orders` 的数据发送到目标 topic `events.orders`。
 
 | 目标资源类型 `<kind>` | INI 键名 | 目标资源路径示例 |
 | --- | --- | --- |
@@ -300,15 +302,15 @@ sink_type=write
 url=kafka-host:9092
 with_field_defs=true
 
-[rules.db]
-do=inventory,other
+[source.db]
+include=inventory,other
 route=inventory:archive
 
-[rules.table]
+[source.table]
 route=inventory.orders:archive.order_history
 to_topic=*.*:events.default,inventory.*:events.inventory,inventory.orders:events.orders
 
-[rules.column]
+[source.column]
 route=inventory.orders.id:archive.order_history.order_id
 
 [parallelizer]
@@ -378,4 +380,4 @@ log_level=info
 
 消费任务的 `extract_type=cdc` 表示持续读取 Kafka 消息，生产端仍然是 MySQL 全量任务。本例过滤、改名和分发都在生产任务中配置；消费任务直接按消息中的库、表、列名落表。Kafka 订阅通过 `[extractor]` 的 `topic`、`partition`、`offset` 指定。
 
-PostgreSQL → Kafka → PostgreSQL 使用相同的任务拓扑；生产端库级规则改用 `[rules.schema]`，两端数据库类型、连接地址和目标表结构改为 PostgreSQL。
+PostgreSQL → Kafka → PostgreSQL 使用相同的任务拓扑；生产端库级规则改用 `[source.schema]`，两端数据库类型、连接地址和目标表结构改为 PostgreSQL。

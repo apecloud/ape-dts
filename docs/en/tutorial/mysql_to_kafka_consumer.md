@@ -2,7 +2,7 @@
 
 Refer to [Send data to Kafka](/docs/en/consumer/kafka_consumer.md) for consumers.
 
-These examples configure the producer in a MySQL → Kafka topology. `to_<kind>` is a dispatch mapping; `to_topic` selects the receiving topic, while `route` changes names inside the message. `[rules.table]` identifies the source resource kind and `topic` identifies the receiving kind. For the complete database → Kafka → database topology, consumer configurations and final table names, see the [dispatch example](/docs/en/rules.md#topology-example-mysql--kafka--mysql).
+These examples configure the producer in a MySQL → Kafka topology. `to_<kind>` is a dispatch mapping; `to_topic` selects the receiving topic, while `route` changes names inside the message. `[source.table]` identifies the source resource kind and `topic` identifies the receiving kind. For the complete database → Kafka → database topology, consumer configurations and final table names, see the [dispatch example](/docs/en/rules.md#topology-example-mysql--kafka--mysql).
 
 # Prerequisites
 - [prerequisites](./prerequisites.md)
@@ -72,13 +72,13 @@ sink_type=write
 url=127.0.0.1:9093
 with_field_defs=true
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
-[rules.table]
+[source.table]
 to_topic=*.*:test
 
 [parallelizer]
@@ -107,16 +107,16 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.db]
-do=test_db,test_db_2
+[source.db]
+include=test_db,test_db_2
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
-[rules.ddl]
-do=*
+[source.ddl]
+include=*
 
-[rules.table]
+[source.table]
 to_topic=*.*:test
 
 [sinker]

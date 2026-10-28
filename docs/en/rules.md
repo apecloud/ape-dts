@@ -1,6 +1,6 @@
 # Filtering and routing configuration
 
-Use `[rules.*]` sections in the task INI file to choose databases, tables and columns, and to set their destination names. Connection and task settings are covered in the [configuration reference](config.md). For existing `[filter]` / `[router]` files and migration instructions, see [Legacy config](legacy_config.md).
+Use `[source.*]` sections in the task INI file to choose databases, tables and columns, and to set their destination names. Connection and task settings are covered in the [configuration reference](config.md). For existing `[filter]` / `[router]` files and migration instructions, see [Legacy config](legacy_config.md).
 
 ## Configure a MySQL → MySQL snapshot task
 
@@ -17,21 +17,21 @@ db_type=mysql
 sink_type=write
 url=mysql://user:password@target:3306
 
-[rules.db]
-do=inventory
+[source.db]
+include=inventory
 route=inventory:archive
 
-[rules.table]
-ignore=inventory.tmp*
+[source.table]
+exclude=inventory.tmp*
 where_conditions=inventory.orders:"id > 100"
 route=inventory.orders:archive.order_history
 
-[rules.column]
-ignore=inventory.orders.secret*
+[source.column]
+exclude=inventory.orders.secret*
 route=inventory.orders.id:archive.order_history.order_id
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -50,43 +50,43 @@ Separate levels in an object name with `.`, rules with `,`, and mappings with `s
 
 | Database type | Sections | Example table, collection or database number |
 | --- | --- | --- |
-| MySQL, TiDB, ClickHouse, StarRocks, Doris | `rules.db`, `rules.table`, `rules.column` | `inventory.orders`, `inventory.orders.id` |
-| PostgreSQL | `rules.schema`, `rules.table`, `rules.column` | `inventory.orders`, `inventory.orders.id` |
-| SQL Server | `rules.db`, `rules.schema`, `rules.table`, `rules.column` | `market.inventory.orders`, `market.inventory.orders.id` |
-| MongoDB | `rules.db`, `rules.collection` | `inventory.orders` |
-| Redis | `rules.db` | `0`, `1` |
+| MySQL, TiDB, ClickHouse, StarRocks, Doris | `source.db`, `source.table`, `source.column` | `inventory.orders`, `inventory.orders.id` |
+| PostgreSQL | `source.schema`, `source.table`, `source.column` | `inventory.orders`, `inventory.orders.id` |
+| SQL Server | `source.db`, `source.schema`, `source.table`, `source.column` | `market.inventory.orders`, `market.inventory.orders.id` |
+| MongoDB | `source.db`, `source.collection` | `inventory.orders` |
+| Redis | `source.db` | `0`, `1` |
 
-For PostgreSQL, the URL selects the connection database and table paths start with the schema. SQL Server table paths contain database, schema and table. `[rules.database]` is an alias of `[rules.db]`; use one spelling. Resource types unsupported by the database are ignored.
+For PostgreSQL, the URL selects the connection database and table paths start with the schema. SQL Server table paths contain database, schema and table. `[source.database]` is an alias of `[source.db]`; use one spelling. Resource types unsupported by the database are ignored.
 
 | Setting | Purpose | Example |
 | --- | --- | --- |
-| `do` | Include objects | `inventory.orders,inventory.event*` |
-| `ignore` | Exclude objects | `inventory.tmp*` |
+| `include` | Include objects | `inventory.orders,inventory.event*` |
+| `exclude` | Exclude objects | `inventory.tmp*` |
 | `where_conditions` | Query conditions for snapshot migration and snapshot checking | `inventory.orders:"id > 100"` |
 | `route` | Set complete destination names | `inventory.orders:archive.order_history` |
 | `to_<kind>` | Dispatch mapping: choose the destination resource receiving the data; `to_topic` is the topic case | `to_topic=inventory.*:events,*.*:default_events` |
 
-Include at least one resource `do` rule. Configuring only `route` or `ignore` does not select all tables. Omit `route` to retain source names.
+Include at least one resource `include` rule. Configuring only `route` or `exclude` does not select all tables. Omit `route` to retain source names.
 
 ## Include and exclude objects
 
 ```ini
-[rules.db]
-do=inventory,tenant_*
-ignore=tenant_private*
+[source.db]
+include=inventory,tenant_*
+exclude=tenant_private*
 
-[rules.table]
-do=other.orders*,tenant_private.public_orders
-ignore=inventory.tmp*,other.orders_archive*
+[source.table]
+include=other.orders*,tenant_private.public_orders
+exclude=inventory.tmp*,other.orders_archive*
 ```
 
-This selects `inventory` and databases starting with `tenant_`, excluding those starting with `tenant_private`. Table rules take precedence, so `tenant_private.public_orders` is still selected. Tables matching `inventory.tmp*` are excluded. `other.orders_archive` matches both table rules and is excluded.
+This selects `inventory` and databases starting with `tenant_`, excluding those starting with `tenant_private`. The database exclusion also removes `tenant_private.public_orders`, despite its explicit table inclusion. Tables matching `inventory.tmp*` are excluded. `other.orders_archive` matches both table rules and is excluded.
 
-The most specific matching level takes precedence: table rules override database/schema rules, and `ignore` overrides `do` within one level. If no table rule matches, the database/schema rule applies.
+All applicable `exclude` rules are checked first; any match excludes the object. Otherwise, any matching `include` rule selects it. Database/schema and table includes form a union, as do exclusions. Column rules only project columns of selected tables and cannot reselect an excluded table.
 
 ### Wildcards and regular expressions
 
-Use these patterns in resource `do` / `ignore` settings. Each level of the name is matched separately.
+Use these patterns in resource `include` / `exclude` settings. Each level of the name is matched separately.
 
 | Pattern | Matches | Does not match |
 | --- | --- | --- |
@@ -113,8 +113,8 @@ For names containing `*`, `?`, `.`, `,`, `:`, `+`, parentheses or other special 
 | SQL Server | `[market].[inventory].[order*]` | `[market].[inventory].[a]]b]` represents `a]b` |
 
 ```ini
-[rules.table]
-do=`a.b,c:d`.`order*`,`inventory`.`r#literal#`
+[source.table]
+include=`a.b,c:d`.`order*`,`inventory`.`r#literal#`
 ```
 
 This selects the table `order*` in database `a.b,c:d`, and the table literally named `r#literal#` in `inventory`. Stars and `r#…#` inside identifier quotes are literal text.
@@ -122,21 +122,21 @@ This selects the table `order*` in database `a.b,c:d`, and the table literally n
 ### Select columns
 
 ```ini
-[rules.table]
-do=inventory.orders,inventory.events
+[source.table]
+include=inventory.orders,inventory.events
 
-[rules.column]
-do=inventory.orders.id,inventory.orders.amount*,inventory.orders.secret
-ignore=inventory.orders.secret,inventory.events.debug*
+[source.column]
+include=inventory.orders.id,inventory.orders.amount*,inventory.orders.secret
+exclude=inventory.orders.secret,inventory.events.debug*
 ```
 
-`orders` includes only `id` and columns starting with `amount`. Although `secret` is included by `do`, it is excluded by `ignore`. `events` has no column inclusion rule, so all columns except those starting with `debug` are included. Column selection applies to data migration and checking; it does not change destination table definitions.
+`orders` includes only `id` and columns starting with `amount`. Although `secret` is included by `include`, it is excluded by `exclude`. `events` has no column inclusion rule, so all columns except those starting with `debug` are included. Column selection applies to data migration and checking; it does not change destination table definitions.
 
 ## Select rows with WHERE conditions
 
 ```ini
-[rules.table]
-do=inventory.orders,inventory.events
+[source.table]
+include=inventory.orders,inventory.events
 ; Outer double quotes delimit a configuration string; escape inner quotes as \" and backslashes as \\.
 where_conditions=inventory.orders:"id > 100 AND note IN ('keep\"quote','other')",inventory.events:"kind IN ('sale','refund')"
 ```
@@ -145,44 +145,44 @@ The outer double quotes belong to the configuration, not to SQL. Escaping follow
 
 Table names are exact, without wildcards or regex. If the same table appears more than once, the first condition applies. Conditions are not inherited: a condition on a database/schema does not automatically apply to its tables.
 
-WHERE conditions apply to snapshot migration and snapshot data checking, not to individual CDC changes. Put these query conditions in `[rules.table]`.
+WHERE conditions apply to snapshot migration and snapshot data checking, not to individual CDC changes. Put these query conditions in `[source.table]`.
 
 ## Events, DDL, DCL and structure types
 
-These sections accept exact type names in `do` / `ignore`. A standalone `do=*` selects all types; `do=` selects none. Do not mix `*` with individual type names. `ignore=*` does not exclude every type.
+These sections accept exact type names in `include` / `exclude`. A standalone `include=*` selects all types; `include=` selects none. Do not mix `*` with individual type names. `exclude=*` does not exclude every type.
 
-| Section | Default when `do` is absent | Common values |
+| Section | Default when `include` is absent | Common values |
 | --- | --- | --- |
-| `[rules.event]` | All | `insert,update,delete` |
-| `[rules.ddl]` | None | `create_database,drop_database,alter_database,create_schema,drop_schema,alter_schema,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index` |
-| `[rules.dcl]` | None | `create_user,alter_user,create_role,drop_user,drop_role,grant,revoke,set_role` |
-| `[rules.structure]` | All | `database,table,constraint,sequence,comment,index,udf,udt,rbac,collection,shardkey` |
-| `[rules.cmd]` | All | Lowercase Redis command names, such as `set,del,flushall,flushdb` |
+| `[source.event]` | All | `insert,update,delete` |
+| `[source.ddl]` | None | `create_database,drop_database,alter_database,create_schema,drop_schema,alter_schema,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index` |
+| `[source.dcl]` | None | `create_user,alter_user,create_role,drop_user,drop_role,grant,revoke,set_role` |
+| `[source.structure]` | All | `database,table,constraint,sequence,comment,index,udf,udt,rbac,collection,shardkey` |
+| `[source.cmd]` | All | Lowercase Redis command names, such as `set,del,flushall,flushdb` |
 
 ```ini
 ; Copy inserts and updates, excluding deletes.
-[rules.event]
-do=*
-ignore=delete
+[source.event]
+include=*
+exclude=delete
 
 ; Create and alter tables, excluding truncation.
-[rules.ddl]
-do=create_table,alter_table,truncate_table
-ignore=truncate_table
+[source.ddl]
+include=create_table,alter_table,truncate_table
+exclude=truncate_table
 
 ; Create users and grant permissions, excluding user deletion.
-[rules.dcl]
-do=create_user,grant,drop_user
-ignore=drop_user
+[source.dcl]
+include=create_user,grant,drop_user
+exclude=drop_user
 
 ; Migrate databases, tables and constraints, excluding ordinary standalone indexes.
-[rules.structure]
-do=database,table,constraint,index
-ignore=index
+[source.structure]
+include=database,table,constraint,index
+exclude=index
 
 ; Skip these commands in Redis CDC.
-[rules.cmd]
-ignore=flushall,flushdb
+[source.cmd]
+exclude=flushall,flushdb
 ```
 
 Configure the sections needed by your task. DDL/DCL availability depends on the source, destination and task type. PostgreSQL CDC DDL also requires `ddl_meta_tb` and a capture trigger; see the [PostgreSQL template](../templates/pg_to_pg.md).
@@ -194,14 +194,14 @@ Primary keys and unique indexes migrate with tables; `index` controls ordinary s
 `route` matches exact names and does not support wildcard routing. Databases/schemas, tables and columns can be renamed:
 
 ```ini
-[rules.db]
-do=inventory,archive
+[source.db]
+include=inventory,archive
 route=inventory:archive,archive:history
 
-[rules.table]
+[source.table]
 route=inventory.orders:special.order_history
 
-[rules.column]
+[source.column]
 route=inventory.orders.id:special.order_history.order_id
 ```
 
@@ -212,40 +212,42 @@ route=inventory.orders.id:special.order_history.order_id
 | `inventory.audit` | `archive.audit` | Database rule |
 | `archive.audit` | `history.audit` | Another database rule |
 
-Each object is mapped once: `inventory.audit` does not continue on to `history.audit`. Unmapped names remain unchanged. A column mapping's destination database/table must agree with the table's route. Different source objects cannot be configured to share one destination object.
+Each object is mapped once: `inventory.audit` does not continue on to `history.audit`. Unmapped names remain unchanged. A column mapping's destination database/table must agree with the table's route. Multiple source columns cannot map to the same destination column.
 
 For PostgreSQL, use schema rules:
 
 ```ini
-[rules.schema]
-do=inventory
+[source.schema]
+include=inventory
 route=inventory:archive
-[rules.table]
+[source.table]
 route=inventory.orders:archive.order_history
-[rules.column]
+[source.column]
 route=inventory.orders.id:archive.order_history.order_id
 ```
 
 For SQL Server, include database, schema and table:
 
 ```ini
-[rules.db]
-do=market
-[rules.schema]
+[source.db]
+include=market
+[source.schema]
 route=market.inventory:warehouse.sales
-[rules.table]
+[source.table]
 route=market.inventory.orders:warehouse.sales.order_history
-[rules.column]
+[source.column]
 route=market.inventory.orders.id:warehouse.sales.order_history.order_id
 ```
 
-Use `[rules.collection]` for MongoDB collections, for example `route=inventory.orders:archive.order_history`. Use `[rules.db]` for Redis database numbers, for example `do=0,2`.
+Use `[source.collection]` for MongoDB collections, for example `route=inventory.orders:archive.order_history`. Use `[source.db]` for Redis database numbers, for example `include=0,2`.
+
+Forward routing allows multiple source databases/schemas to share a destination. Snapshot sink monitoring uses the routed destination table name when the source is ambiguous. Checking and Kafka dispatch still require accurate source names; configure complete, distinguishable table routes for these features. Ambiguous reverse routes return an error.
 
 ## Dispatch mappings
 
 **`to_<kind>` defines a dispatch mapping**, selecting the destination resource that receives the data. `kind` names that resource type; `to_topic` is the specific case where `kind=topic`. `route` changes resource names carried by the data, while `to_<kind>` selects where the data is sent. Both can be configured together.
 
-Place the dispatch mapping in the source resource's `[rules.<source_kind>]` section using `to_<kind>=source_path:destination_path`. The source engine determines `source_kind`; the destination engine determines `kind`. The kinds can differ: `[rules.table] to_topic=inventory.orders:events.orders` sends data from the source table `inventory.orders` to the destination topic `events.orders`.
+Place the dispatch mapping in the source resource's `[source.<source_kind>]` section using `to_<kind>=source_path:destination_path`. The source engine determines `source_kind`; the destination engine determines `kind`. The kinds can differ: `[source.table] to_topic=inventory.orders:events.orders` sends data from the source table `inventory.orders` to the destination topic `events.orders`.
 
 | Destination resource kind `<kind>` | INI key | Destination path example |
 | --- | --- | --- |
@@ -300,15 +302,15 @@ sink_type=write
 url=kafka-host:9092
 with_field_defs=true
 
-[rules.db]
-do=inventory,other
+[source.db]
+include=inventory,other
 route=inventory:archive
 
-[rules.table]
+[source.table]
 route=inventory.orders:archive.order_history
 to_topic=*.*:events.default,inventory.*:events.inventory,inventory.orders:events.orders
 
-[rules.column]
+[source.column]
 route=inventory.orders.id:archive.order_history.order_id
 
 [parallelizer]
@@ -378,4 +380,4 @@ Start the three consumers before the producer. `partition=0` selects each topic'
 
 The consumers use `extract_type=cdc` to keep reading Kafka messages; the producer remains a MySQL snapshot task. This example configures filtering, renaming and dispatch in the producer. Consumers write using the database, table and column names carried by the messages. Kafka subscriptions use `[extractor]` settings `topic`, `partition` and `offset`.
 
-PostgreSQL → Kafka → PostgreSQL uses the same task topology. Use `[rules.schema]` for producer namespace rules, and PostgreSQL engine types, connection settings and destination table definitions.
+PostgreSQL → Kafka → PostgreSQL uses the same task topology. Use `[source.schema]` for producer namespace rules, and PostgreSQL engine types, connection settings and destination table definitions.

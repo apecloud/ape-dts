@@ -25,11 +25,11 @@ binlog_filename=
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql

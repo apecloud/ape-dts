@@ -50,24 +50,24 @@ conflict_policy=interrupt
 ## 只迁移 库表结构 + 主键 + 唯一键
 
 ```
-[rules.structure]
-do=database,table
+[source.structure]
+include=database,table
 
 ```
 
 ## 只迁移 索引 + 约束
 
 ```
-[rules.structure]
-do=constraint,index
+[source.structure]
+include=constraint,index
 
 ```
 
 ## MongoDB 结构类型
 
 ```
-[rules.structure]
-do=collection,shardkey
+[source.structure]
+include=collection,shardkey
 
 ```
 

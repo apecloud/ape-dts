@@ -54,9 +54,9 @@ extract_type=snapshot
 repl_port=10008
 url=redis://:123456@127.0.0.1:6380
 
-[rules.db]
-do=*
-ignore=1,2
+[source.db]
+include=*
+exclude=1,2
 
 [sinker]
 db_type=redis
@@ -92,12 +92,12 @@ extract_type=snapshot_and_cdc
 repl_port=10008
 url=redis://:123456@127.0.0.1:6380
 
-[rules.db]
-do=*
-ignore=1,2
+[source.db]
+include=*
+exclude=1,2
 
-[rules.cmd]
-ignore=flushall,flushdb
+[source.cmd]
+exclude=flushall,flushdb
 
 [sinker]
 db_type=redis
@@ -128,12 +128,12 @@ extract_type=cdc
 repl_port=10008
 url=redis://:123456@127.0.0.1:6380
 
-[rules.db]
-do=*
-ignore=1,2
+[source.db]
+include=*
+exclude=1,2
 
-[rules.cmd]
-ignore=flushall,flushdb
+[source.cmd]
+exclude=flushall,flushdb
 
 [sinker]
 db_type=redis

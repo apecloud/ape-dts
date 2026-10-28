@@ -16,8 +16,8 @@ db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 conflict_policy=interrupt
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
 [runtime]
 log_level=info
@@ -38,7 +38,7 @@ buffer_size=100
 | :-------------- | :----------------- | :-------- | :-------- |
 | conflict_policy | interrupt / ignore | interrupt | interrupt |
 
-- [rules.structure]
+- [source.structure]
 
 | Config        | Description                                                           | Example        | Default             |
 | :------------ | :-------------------------------------------------------------------- | :------------- | :------------------ |
@@ -60,11 +60,11 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=200
 replace=true
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -91,11 +91,11 @@ binlog_filename=mysql-bin.000035
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql
@@ -137,11 +137,11 @@ gtid_set=6d3960f6-4b36-11ef-8614-0242ac110002:1-10,787d08c4-4b36-11ef-8614-0242a
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql
@@ -176,12 +176,12 @@ log4rs_file=./log4rs.yaml
 - The differences with CDC task config:
 
 ```
-[rules.ddl]
-do=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+[source.ddl]
+include=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 ```
 
-- [rules.ddl]
+- [source.ddl]
 
 | Config  | Description                                                                                                                                                                                                                 | Example                             | Default                            |
 | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------------------------------- |
@@ -203,8 +203,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -238,11 +238,11 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 batch_size=100
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -279,11 +279,11 @@ replace=true
 [checker]
 batch_size=200
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -316,11 +316,11 @@ heartbeat_interval_secs=1
 heartbeat_tb=heartbeat_db.ape_dts_heartbeat
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql
@@ -374,8 +374,8 @@ sink_type=write
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=200
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -415,8 +415,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 batch_size=100
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -445,11 +445,11 @@ binlog_filename=mysql-bin.000035
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql
@@ -481,11 +481,11 @@ binlog_filename=mysql-bin.000035
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mysql

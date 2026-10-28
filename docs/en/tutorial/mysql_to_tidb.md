@@ -55,8 +55,8 @@ url=mysql://demo:123456@127.0.0.1:4000?ssl-mode=disabled
 sink_type=struct
 db_type=tidb
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
 [parallelizer]
 parallel_type=serial

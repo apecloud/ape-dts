@@ -15,8 +15,8 @@ sink_type=struct
 db_type=doris
 conflict_policy=interrupt
 
-[rules.db]
-do=test_db
+[source.db]
+include=test_db
 
 [runtime]
 log_level=info
@@ -46,11 +46,11 @@ url=mysql://root:123456@127.0.0.1:9030
 stream_load_url=mysql://root:123456@127.0.0.1:8040
 batch_size=5000
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -87,11 +87,11 @@ binlog_filename=mysql-bin.000035
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=doris
