@@ -17,8 +17,8 @@ sink_type=struct
 db_type=starrocks
 conflict_policy=interrupt
 
-[rules.schema]
-do=test_db
+[source.schema]
+include=test_db
 
 [runtime]
 log_level=info
@@ -48,11 +48,11 @@ url=mysql://root:123456@127.0.0.1:9030
 stream_load_url=mysql://root:123456@127.0.0.1:8040
 batch_size=5000
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -89,11 +89,11 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=starrocks

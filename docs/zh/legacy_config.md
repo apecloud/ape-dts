@@ -2,7 +2,7 @@
 
 本文用于维护已有的 `[filter]` / `[router]` 配置。创建任务请使用[配置参考](config.md)和[过滤与路由配置](rules.md)。
 
-只有配置文件中**没有任何 `[rules.*]` 段**时，才会读取本文的配置。加入任意 `[rules.*]` 段（包括空段）后，整个 `[filter]` 和 `[router]` 都不再生效，因此过滤、事件类型、WHERE 条件和路由应一起迁移。
+只有配置文件中**没有任何 `[source.*]` 段**时，才会读取本文的配置。加入任意 `[source.*]` 段（包括空段）后，整个 `[filter]` 和 `[router]` 都不再生效，因此过滤、事件类型、WHERE 条件和路由应一起迁移。
 
 ## [filter]
 
@@ -36,9 +36,8 @@
 
 ### 优先级
 
-- 表规则优先于库/schema 规则；表规则未命中时再使用库/schema 规则。
-- 同一层同时命中 do 和 ignore 时，ignore 优先；表级 do 可以覆盖库级 ignore。
-- 未命中表级规则时继续检查库/schema 级规则。
+- `ignore_dbs` 与 `ignore_tbs` 取并集，优先于所有 `do_dbs`、`do_tbs`。
+- 未命中排除规则时，命中任意库/schema 或表级包含规则即可同步。
 
 ### 通配符
 
@@ -97,12 +96,12 @@
 
 | 旧配置 | 配置 |
 | --- | --- |
-| `[filter] do_dbs / ignore_dbs` | 顶层资源配置段的 `do / ignore`；MySQL 为 `[rules.db]`，PG 为 `[rules.schema]` |
-| `do_tbs / ignore_tbs` | `[rules.table] do / ignore` |
-| `ignore_cols` 的 JSON 列表 | `[rules.column] ignore=db.table.column,...` |
-| `do_events / do_ddls / do_dcls / do_structures / ignore_cmds` | 对应公共配置段的 `do` 或 `ignore` |
-| `where_conditions` 的 JSON 列表 | `[rules.table] where_conditions=db.table:"SQL",...` |
+| `[filter] do_dbs / ignore_dbs` | 顶层资源配置段的 `include / exclude`；MySQL 为 `[source.db]`，PG 为 `[source.schema]` |
+| `do_tbs / ignore_tbs` | `[source.table] include / exclude` |
+| `ignore_cols` 的 JSON 列表 | `[source.column] exclude=db.table.column,...` |
+| `do_events / do_ddls / do_dcls / do_structures / ignore_cmds` | 对应公共配置段的 `include` 或 `exclude` |
+| `where_conditions` 的 JSON 列表 | `[source.table] where_conditions=db.table:"SQL",...` |
 | `[router] db_map / tb_map / col_map` | 对应资源配置段的 `route` |
-| `[router] topic_map` | `[rules.table]` 下的 `to_topic`，即通用分发映射 `to_<kind>` 的 topic 特例 |
+| `[router] topic_map` | `[source.table]` 下的 `to_topic`，即通用分发映射 `to_<kind>` 的 topic 特例 |
 
-MSSQL 旧二段标识迁移时需显式补上 schema。不要只新增 `route` 或 `to_topic` 而保留旧 `[filter]` 的资源选择，因为任意 `[rules.*]` 都会整体切换配置模式。
+MSSQL 旧二段标识迁移时需显式补上 schema。不要只新增 `route` 或 `to_topic` 而保留旧 `[filter]` 的资源选择，因为任意 `[source.*]` 都会整体切换配置模式。

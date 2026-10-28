@@ -41,11 +41,11 @@ sink_type=struct
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 conflict_policy=interrupt
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.structure]
-do=collection
+[source.structure]
+include=collection
 
 [parallelizer]
 parallel_type=serial
@@ -61,7 +61,7 @@ log4rs_file=./log4rs.yaml
 log_dir=./logs
 ```
 
-- [rules.structure]
+- [source.structure]
 
 | Config        | Description                                                                                                   | Example                   | Default             |
 | :------------ | :------------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------ |
@@ -91,11 +91,11 @@ sink_type=write
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=200
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -121,11 +121,11 @@ url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 source=op_log
 start_timestamp=1728525445
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mongo
@@ -181,11 +181,11 @@ resume_token={"_data":"826707373B000000012B022C0100296E5A1004B4A9FD2BFD9C4460936
 url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 source=change_stream
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=mongo
@@ -229,11 +229,11 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [checker]
 batch_size=100
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=mongo
@@ -268,11 +268,11 @@ batch_size=200
 [checker]
 batch_size=200
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -313,11 +313,11 @@ sink_type=write
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=200
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=mongo
@@ -357,11 +357,11 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [checker]
 batch_size=100
 
-[rules.collection]
-do=test_db_1.*,test_db_2.*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[rules.event]
-do=*
+[source.event]
+include=*
 
 [parallelizer]
 parallel_type=mongo

@@ -280,37 +280,37 @@ Inline CDC check 还要求：
 CDC checker queue 用于主动与迁移 pipeline 解耦；队列满时淘汰最旧的待处理 batch，不阻塞写入。
 Checker 处理/输出失败只记录日志，不让主 CDC 写入链路失败。Snapshot 和 struct check 不使用该队列。
 
-# [rules.<kind>]
+# [source.<kind>]
 
 通过这些配置选择需要同步的数据，排除指定对象，或修改目标库、表、列和 Kafka topic。
 
 | 配置段 | 用途 |
 | --- | --- |
-| `[rules.db]` | MySQL 等数据库、MongoDB 数据库或 Redis 库编号 |
-| `[rules.schema]` | PostgreSQL schema；SQL Server 的 `数据库.schema` |
-| `[rules.table]` / `[rules.collection]` | 表或 MongoDB 集合 |
-| `[rules.column]` | 数据列的选择、排除和名称映射 |
-| `[rules.event]` | insert、update、delete 事件 |
-| `[rules.ddl]` / `[rules.dcl]` | DDL / DCL 类型 |
-| `[rules.structure]` | 结构迁移的对象类型 |
-| `[rules.cmd]` | Redis 命令 |
+| `[source.db]` | MySQL 等数据库、MongoDB 数据库或 Redis 库编号 |
+| `[source.schema]` | PostgreSQL schema；SQL Server 的 `数据库.schema` |
+| `[source.table]` / `[source.collection]` | 表或 MongoDB 集合 |
+| `[source.column]` | 数据列的选择、排除和名称映射 |
+| `[source.event]` | insert、update、delete 事件 |
+| `[source.ddl]` / `[source.dcl]` | DDL / DCL 类型 |
+| `[source.structure]` | 结构迁移的对象类型 |
+| `[source.cmd]` | Redis 命令 |
 
 ```ini
-[rules.db]
-do=inventory
+[source.db]
+include=inventory
 route=inventory:archive
 
-[rules.table]
-ignore=inventory.tmp*
+[source.table]
+exclude=inventory.tmp*
 where_conditions=inventory.orders:"id > 100"
 route=inventory.orders:archive.order_history
 ```
 
 上例选择 `inventory`，排除 `tmp` 开头的表，将数据写入 `archive`。其中 `orders` 写入 `order_history`；全量迁移或全量校验时仅查询 `id > 100` 的行。
 
-`do` / `ignore` 支持 `*`、`?` 和正则；`route` 使用精确名称。
+`include` / `exclude` 支持 `*`、`?` 和正则；`route` 使用精确名称。
 
-`to_<kind>` 表示分发映射，决定数据发送到目标端的哪个资源；`<kind>` 是接收资源的类型，`to_topic` 是分发到 Kafka topic 的特例。分发映射放在源资源对应的配置段下，例如 `[rules.table]`。`route` 修改数据中的资源名称，分发映射选择接收位置。完整的 MySQL → Kafka → MySQL 拓扑、生产/消费任务配置及落表结果见[分发示例](rules.md#拓扑示例mysql--kafka--mysql)。
+`to_<kind>` 表示分发映射，决定数据发送到目标端的哪个资源；`<kind>` 是接收资源的类型，`to_topic` 是分发到 Kafka topic 的特例。分发映射放在源资源对应的配置段下，例如 `[source.table]`。`route` 修改数据中的资源名称，分发映射选择接收位置。完整的 MySQL → Kafka → MySQL 拓扑、生产/消费任务配置及落表结果见[分发示例](rules.md#拓扑示例mysql--kafka--mysql)。
 
 完整字段、匹配优先级和各数据库用例见[过滤与路由配置](rules.md)。已有 `[filter]` / `[router]` 文件的维护与迁移见 [Legacy config](legacy_config.md)。
 

@@ -2,7 +2,7 @@
 
 Use this reference to maintain existing `[filter]` / `[router]` files. For task configuration, see the [configuration reference](config.md) and [filtering and routing](rules.md).
 
-These sections are read only when the file contains **no `[rules.*]` section**. Adding any `[rules.*]` section, including an empty one, disables both `[filter]` and `[router]` in full. Migrate resource selection, event types, WHERE conditions and routing together.
+These sections are read only when the file contains **no `[source.*]` section**. Adding any `[source.*]` section, including an empty one, disables both `[filter]` and `[router]` in full. Migrate resource selection, event types, WHERE conditions and routing together.
 
 ## [filter]
 
@@ -38,9 +38,8 @@ These sections are read only when the file contains **no `[rules.*]` section**. 
 
 ### Priority
 
-- Table rules take priority over database/schema rules.
-- Within the same level, ignore wins over do. A table include can override a namespace ignore.
-- Parent rules are considered only when no table rule matches.
+- `ignore_dbs` and `ignore_tbs` form a union and override all `do_dbs` and `do_tbs` rules.
+- Otherwise, any matching database/schema or table inclusion selects the object.
 
 ### Wildcard
 
@@ -99,12 +98,12 @@ Use the same identifier quoting as `[filter]`.
 
 | Legacy field | Configuration |
 | --- | --- |
-| filter do_dbs / ignore_dbs | top-level resource do / ignore (db for MySQL, schema for PG) |
-| do_tbs / ignore_tbs | rules.table do / ignore |
-| ignore_cols JSON | rules.column ignore with full column paths |
-| do_events / do_ddls / do_dcls / do_structures / ignore_cmds | common section do / ignore |
-| where_conditions JSON | rules.table where_conditions with quoted SQL strings |
+| filter do_dbs / ignore_dbs | `include / exclude` in the top-level resource section (`source.db` for MySQL, `source.schema` for PG) |
+| do_tbs / ignore_tbs | `source.table` include / exclude |
+| ignore_cols JSON | `source.column` exclude with full column paths |
+| do_events / do_ddls / do_dcls / do_structures / ignore_cmds | common section include / exclude |
+| where_conditions JSON | `source.table` where_conditions with quoted SQL strings |
 | router db_map / tb_map / col_map | corresponding resource route |
-| router topic_map | `to_topic` in `[rules.table]`, the topic case of general `to_<kind>` dispatch mappings |
+| router topic_map | `to_topic` in `[source.table]`, the topic case of general `to_<kind>` dispatch mappings |
 
 Include the schema when migrating MSSQL's old two-segment table names. Do not keep legacy filter settings while adding only new routing sections: the entire configuration mode changes.

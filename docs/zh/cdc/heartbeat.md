@@ -16,8 +16,8 @@
 heartbeat_interval_secs=10
 heartbeat_tb=test_db_1.ape_dts_heartbeat
 
-[rules.table]
-ignore=test_db_1.ape_dts_heartbeat
+[source.table]
+exclude=test_db_1.ape_dts_heartbeat
 
 ```
 

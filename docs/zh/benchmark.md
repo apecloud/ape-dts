@@ -112,14 +112,14 @@ rebalance_strategy=auto_split
 buffer_size=128000
 checkpoint_interval_secs=1
 
-[rules.db]
-do=sbtest
+[source.db]
+include=sbtest
 
-[rules.table]
-do=sbtest.sbtest1,sbtest.sbtest2,sbtest.sbtest3,sbtest.sbtest4,sbtest.sbtest5,sbtest.sbtest6,sbtest.sbtest7,sbtest.sbtest8
+[source.table]
+include=sbtest.sbtest1,sbtest.sbtest2,sbtest.sbtest3,sbtest.sbtest4,sbtest.sbtest5,sbtest.sbtest6,sbtest.sbtest7,sbtest.sbtest8
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [runtime]
 log_level=info
@@ -159,17 +159,17 @@ parallel_size=16
 buffer_size=128000
 checkpoint_interval_secs=1
 
-[rules.db]
-do=sbtest_cdc
+[source.db]
+include=sbtest_cdc
 
-[rules.table]
-do=sbtest_cdc.sbtest1,sbtest_cdc.sbtest2,sbtest_cdc.sbtest3,sbtest_cdc.sbtest4,sbtest_cdc.sbtest5,sbtest_cdc.sbtest6,sbtest_cdc.sbtest7,sbtest_cdc.sbtest8,sbtest_cdc.ape_dts_bench_cdc_done
+[source.table]
+include=sbtest_cdc.sbtest1,sbtest_cdc.sbtest2,sbtest_cdc.sbtest3,sbtest_cdc.sbtest4,sbtest_cdc.sbtest5,sbtest_cdc.sbtest6,sbtest_cdc.sbtest7,sbtest_cdc.sbtest8,sbtest_cdc.ape_dts_bench_cdc_done
 
-[rules.event]
-do=insert,update
+[source.event]
+include=insert,update
 
-[rules.ddl]
-do=alter_table
+[source.ddl]
+include=alter_table
 
 [runtime]
 log_level=info

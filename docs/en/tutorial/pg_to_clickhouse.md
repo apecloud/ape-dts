@@ -41,8 +41,8 @@ sink_type=struct
 db_type=clickhouse
 url=http://admin:123456@127.0.0.1:8123
 
-[rules.schema]
-do=test_db
+[source.schema]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -104,11 +104,11 @@ sink_type=write
 url=http://admin:123456@127.0.0.1:8123
 batch_size=5000
 
-[rules.schema]
-do=test_db
+[source.schema]
+include=test_db
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -161,11 +161,11 @@ extract_type=cdc
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 slot_name=ape_test
 
-[rules.schema]
-do=test_db
+[source.schema]
+include=test_db
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [sinker]
 db_type=clickhouse

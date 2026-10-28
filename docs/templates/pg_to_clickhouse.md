@@ -15,8 +15,8 @@ db_type=clickhouse
 url=http://admin:123456@127.0.0.1:8123
 conflict_policy=interrupt
 
-[rules.schema]
-do=test_db
+[source.schema]
+include=test_db
 
 [runtime]
 log_level=info
@@ -46,11 +46,11 @@ url=http://admin:123456@127.0.0.1:8123
 conflict_policy=interrupt
 batch_size=5000
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -83,11 +83,11 @@ url=http://admin:123456@127.0.0.1:8123
 conflict_policy=interrupt
 batch_size=5000
 
-[rules.table]
-do=test_db.*
+[source.table]
+include=test_db.*
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
 [parallelizer]
 parallel_type=table

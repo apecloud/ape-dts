@@ -2,7 +2,7 @@
 
 Refer to [config details](/docs/en/config.md) for explanations of common fields.
 
-`to_<kind>` defines a dispatch mapping; `to_topic` dispatches data to Kafka topics. In `[rules.table]`, the source kind is `table` and the receiving kind is `topic`; use source table names on the left. `route` changes names inside messages, while dispatch selects where messages are sent.
+`to_<kind>` defines a dispatch mapping; `to_topic` dispatches data to Kafka topics. In `[source.table]`, the source kind is `table` and the receiving kind is `topic`; use source table names on the left. `route` changes names inside messages, while dispatch selects where messages are sent.
 
 The configurations below cover the producer leg of a MySQL/PostgreSQL → Kafka topology. For a complete MySQL → Kafka → MySQL topology, including one producer, three consumers and final destination tables, see the [dispatch example](/docs/en/rules.md#topology-example-mysql--kafka--mysql).
 
@@ -13,12 +13,12 @@ db_type=mysql
 extract_type=snapshot
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.table]
-do=test_db_1.*,test_db_2.*
+[source.table]
+include=test_db_1.*,test_db_2.*
 to_topic=*.*:default_topic,test_db_2.*:topic2,test_db_2.tb_1:topic3
 
-[rules.event]
-do=insert
+[source.event]
+include=insert
 
 [sinker]
 db_type=kafka
@@ -41,7 +41,7 @@ log_level=info
 log4rs_file=./log4rs.yaml
 ```
 
-- refer to [config details](/docs/en/config.md) for `[rules.table] to_topic`
+- refer to [config details](/docs/en/config.md) for `[source.table] to_topic`
 
 - [sinker]
 
@@ -60,15 +60,15 @@ binlog_filename=
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[rules.table]
-do=*.*
+[source.table]
+include=*.*
 to_topic=*.*:test
 
-[rules.event]
-do=insert,update,delete
+[source.event]
+include=insert,update,delete
 
-[rules.ddl]
-do=*
+[source.ddl]
+include=*
 
 [sinker]
 db_type=kafka
