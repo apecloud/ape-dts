@@ -150,3 +150,18 @@ CREATE TABLE tb_meta_test.full_column_type (
     uuid_col uuid, 
     xml_col xml
 );
+
+CREATE TABLE tb_meta_test.mixed_expression_key (id INT NOT NULL, code VARCHAR(30));
+CREATE UNIQUE INDEX mixed_expression_key_idx ON tb_meta_test.mixed_expression_key (id, COALESCE(code, ''));
+
+CREATE TABLE tb_meta_test.expression_only_key (code VARCHAR(30));
+CREATE UNIQUE INDEX expression_only_key_idx ON tb_meta_test.expression_only_key (COALESCE(code, ''));
+
+CREATE TABLE tb_meta_test.primary_and_expression_key (id INT PRIMARY KEY, code VARCHAR(30));
+CREATE UNIQUE INDEX primary_and_expression_key_idx ON tb_meta_test.primary_and_expression_key (COALESCE(code, ''));
+
+CREATE TABLE tb_meta_test.primary_and_nonunique_expression (id INT PRIMARY KEY, code VARCHAR(30));
+CREATE INDEX nonunique_expression_idx ON tb_meta_test.primary_and_nonunique_expression (COALESCE(code, ''));
+
+CREATE TABLE tb_meta_test.ordinary_unique_key (id INT NOT NULL, code VARCHAR(30));
+CREATE UNIQUE INDEX ordinary_unique_key_idx ON tb_meta_test.ordinary_unique_key (id);

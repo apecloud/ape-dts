@@ -131,4 +131,41 @@ mod test {
             assert_eq!(expect_col_alias, col_type.alias);
         }
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn expression_unique_key_metadata_test() {
+        let runner = RdbTestRunner::new("pg_to_pg/tb_meta/basic_test")
+            .await
+            .unwrap();
+        runner.execute_prepare_sqls().await.unwrap();
+        let mut manager = PgMetaManager::new(runner.src_conn_pool_pg.as_ref().unwrap().clone())
+            .await
+            .unwrap();
+        for table in ["mixed_expression_key", "expression_only_key"] {
+            let meta = manager.get_tb_meta("tb_meta_test", table).await.unwrap();
+            assert!(meta.basic.has_expression_unique_index, "{table}");
+            assert!(meta.basic.key_map.is_empty(), "{table}");
+            assert!(meta.basic.order_cols.is_empty(), "{table}");
+            assert_eq!(meta.basic.id_cols, meta.basic.cols, "{table}");
+        }
+        let meta = manager
+            .get_tb_meta("tb_meta_test", "primary_and_expression_key")
+            .await
+            .unwrap();
+        assert!(meta.basic.has_expression_unique_index);
+        assert_eq!(meta.basic.key_map.len(), 1);
+        assert_eq!(meta.basic.key_map["primary"], vec!["id"]);
+        assert_eq!(meta.basic.id_cols, vec!["id"]);
+        assert!(meta.basic.order_cols.is_empty());
+
+        for table in ["primary_and_nonunique_expression", "ordinary_unique_key"] {
+            let meta = manager.get_tb_meta("tb_meta_test", table).await.unwrap();
+            assert!(!meta.basic.has_expression_unique_index, "{table}");
+            assert_eq!(meta.basic.key_map.len(), 1, "{table}");
+            assert_eq!(meta.basic.id_cols, vec!["id"], "{table}");
+            assert_eq!(meta.basic.order_cols, vec!["id"], "{table}");
+        }
+        runner.close().await.unwrap();
+    }
 }

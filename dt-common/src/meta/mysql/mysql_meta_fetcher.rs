@@ -86,9 +86,13 @@ impl MysqlMetaFetcher {
         if !self.cache.contains_key(&full_name) {
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
-            let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            let (order_cols, partition_col, id_cols) =
+            let (key_map, has_expression_unique_index) =
+                Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let (mut order_cols, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+            if has_expression_unique_index {
+                order_cols.clear();
+            }
             // disable get_foreign_keys since we don't support foreign key check,
             // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
@@ -102,6 +106,7 @@ impl MysqlMetaFetcher {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
+                has_expression_unique_index,
                 order_cols,
                 partition_col,
                 id_cols,
@@ -330,8 +335,9 @@ impl MysqlMetaFetcher {
         conn_pool: &Pool<MySql>,
         schema: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
+    ) -> anyhow::Result<(HashMap<String, Vec<String>>, bool)> {
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut expression_indexes = HashSet::new();
         // let mut prefixed_keys = HashSet::new();
         let sql = format!("SHOW INDEXES FROM `{}`.`{}`", schema, tb);
         let mut rows = sqlx::raw_sql(&sql).fetch(conn_pool);
@@ -357,14 +363,21 @@ impl MysqlMetaFetcher {
             if key_name == "PRIMARY" {
                 key_name = RDB_PRIMARY_KEY_FLAG.to_string();
             }
-            let col_name = SqlUtil::try_get_mysql_string(&row, "Column_name")?;
+            let Some(col_name) = SqlUtil::try_get_mysql_optional_string(&row, "Column_name")?
+            else {
+                expression_indexes.insert(key_name);
+                continue;
+            };
             if let Some(key_cols) = key_map.get_mut(&key_name) {
                 key_cols.push(col_name);
             } else {
                 key_map.insert(key_name, vec![col_name]);
             }
         }
-        Ok(key_map)
+        for index_name in &expression_indexes {
+            key_map.remove(index_name);
+        }
+        Ok((key_map, !expression_indexes.is_empty()))
     }
 
     #[allow(dead_code)]
