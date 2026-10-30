@@ -51,3 +51,8 @@ CREATE TABLE test_db_1.fk_tb_2 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int
 CREATE TABLE test_db_1.fk_tb_1 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
 ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_1 FOREIGN KEY (f_1) REFERENCES test_db_1.fk_tb_2 (f_1);
 ALTER TABLE test_db_1.fk_tb_1 ADD CONSTRAINT fk_tb_1_2 FOREIGN KEY (f_2) REFERENCES test_db_1.fk_tb_2 (f_2);
+
+CREATE TABLE test_db_1.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val VARCHAR(30));
+-- Functional key parts require MySQL 8.0.13+; retain the no-key table on MySQL 5.7.
+/*!80013 CREATE UNIQUE INDEX expression_uk_rows_idx ON test_db_1.expression_uk_rows (id, (COALESCE(code, ''))) */;
+INSERT INTO test_db_1.expression_uk_rows VALUES (1, NULL, 'keep_null'), (1, 'code1', 'before_update');

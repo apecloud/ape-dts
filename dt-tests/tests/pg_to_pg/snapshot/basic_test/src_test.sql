@@ -114,3 +114,7 @@ INSERT INTO test_db_1.tbl_3 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3
 -- INSERT INTO test_db_1.tbl_3 VALUES(4, 'code3', 'name4'); 
 INSERT INTO test_db_1.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
 INSERT INTO test_db_1.tbl_5 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+
+-- Three rows share id=1, exceeding extractor.batch_size=2; code makes them distinct.
+INSERT INTO test_db_1.expression_uk_as_unkeyed VALUES (1, NULL, 'null_code'), (1, 'code1', 'first'), (1, 'code2', 'second'), (2, NULL, 'next_id');
+INSERT INTO test_db_1.expression_uk_rows VALUES (1, NULL, 'null_code'), (1, 'code1', 'first'), (1, 'code2', 'second'), (2, NULL, 'next_id');

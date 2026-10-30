@@ -189,3 +189,8 @@ UPDATE pkuk.tbl_4 SET name='name4' WHERE code='code1';
 DELETE FROM pkuk.tbl_4 WHERE code='code3';
 -- pkuk.tbl_5 no pk & uk, no `ALTER TABLE schema.tb_5 REPLICA IDENTITY FULL;`, cannot do update or delete
 INSERT INTO pkuk.tbl_5 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+
+INSERT INTO pkuk.expression_uk_rows VALUES (2, NULL, 'inserted');
+-- Preserve the sibling with id=1 and code=NULL when updating only code1.
+UPDATE pkuk.expression_uk_rows SET val='after_update' WHERE id=1 AND code='code1';
+DELETE FROM pkuk.expression_uk_rows WHERE id=1 AND code IS NULL;

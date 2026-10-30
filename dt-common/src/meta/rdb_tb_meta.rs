@@ -15,6 +15,7 @@ pub struct RdbTbMeta {
     pub nullable_cols: HashSet<String>,
     pub col_origin_type_map: HashMap<String, String>,
     pub key_map: HashMap<String, Vec<String>>,
+    pub has_expression_unique_index: bool,
     pub order_cols: Vec<String>,
     pub partition_col: String,
     pub id_cols: Vec<String>,

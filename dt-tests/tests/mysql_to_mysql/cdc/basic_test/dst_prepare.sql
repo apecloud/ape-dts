@@ -46,6 +46,10 @@ CREATE TABLE Upper_Case_DB.Upper_Case_TB (
     UNIQUE KEY(FIELD_1, field_2, Field_3)
 );
 
+CREATE TABLE test_db_1.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val VARCHAR(30));
+/*!80013 CREATE UNIQUE INDEX expression_uk_rows_idx ON test_db_1.expression_uk_rows (id, (COALESCE(code, ''))) */;
+INSERT INTO test_db_1.expression_uk_rows VALUES (1, NULL, 'keep_null'), (1, 'code1', 'before_update');
+
 -- test foreign key
 CREATE TABLE test_db_1.fk_tb_2 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
 CREATE TABLE test_db_1.fk_tb_1 (f_0 int, f_1 int UNIQUE, f_2 int UNIQUE, f_3 int, PRIMARY KEY(f_0));
