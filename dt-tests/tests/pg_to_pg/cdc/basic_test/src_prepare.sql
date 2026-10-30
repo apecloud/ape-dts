@@ -151,4 +151,10 @@ ALTER TABLE pkuk.tbl_4 REPLICA IDENTITY FULL;
 CREATE TABLE pkuk.tbl_5 (
     code    varchar(21),
     name    varchar(30)
-); 
+);
+
+-- The ordinary part of an expression unique index is not a unique row identifier.
+CREATE TABLE pkuk.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX expression_uk_rows_idx ON pkuk.expression_uk_rows (id, COALESCE(code, ''));
+ALTER TABLE pkuk.expression_uk_rows REPLICA IDENTITY FULL;
+INSERT INTO pkuk.expression_uk_rows VALUES (1, NULL, 'keep_null'), (1, 'code1', 'before_update');

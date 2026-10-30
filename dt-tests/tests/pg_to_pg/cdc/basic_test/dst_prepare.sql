@@ -156,3 +156,7 @@ INSERT INTO pkuk.tbl_1 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'co
 INSERT INTO pkuk.tbl_2 VALUES('code1', 'name1'),('code1', 'name2'),('code3', 'name3');
 INSERT INTO pkuk.tbl_3 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
 INSERT INTO pkuk.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+
+CREATE TABLE pkuk.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX expression_uk_rows_idx ON pkuk.expression_uk_rows (id, COALESCE(code, ''));
+INSERT INTO pkuk.expression_uk_rows VALUES (1, NULL, 'keep_null'), (1, 'code1', 'before_update');
