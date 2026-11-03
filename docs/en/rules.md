@@ -100,11 +100,11 @@ Use these patterns in resource `include` / `exclude` settings. Each level of the
 | `inventory.order?` | `inventory.order`, `inventory.order1` | `inventory.order12` |
 | `inventory.r#order[0-9]+#` | `inventory.order1`, `inventory.order12` | `inventory.order`, `inventory.order1_backup` |
 
-`*` matches zero or more characters; `?` matches zero or one. Put regular expressions between `r#` and `#`. For alternatives, use a group such as `inventory.r#(?:orders|events)[0-9]+#`.
+`*` matches zero or more characters; `?` matches zero or one. Outside `r#...#`, other characters such as `+`, `()`, `[]`, `{}`, `^`, `$`, and `|` match literally, including in patterns that contain wildcards. Put regular expressions between `r#` and `#`. For alternatives, use a group such as `inventory.r#(?:orders|events)[0-9]+#`.
 
 ### Names containing special characters
 
-For names containing `*`, `?`, `.`, `,`, `:`, `+`, parentheses or other special characters, quote each name with the source database's identifier quotes to match it exactly.
+Quote names containing path separators (`.`, `,`, `:`) or identifier quote delimiters using the source database's quoting syntax. Also quote literal `*`, `?` and names beginning with `r#` to disable pattern interpretation. Ordinary regex metacharacters such as `+` and parentheses do not enable regex matching by themselves.
 
 | Database | Exact table named `order*` | A name containing a quote |
 | --- | --- | --- |

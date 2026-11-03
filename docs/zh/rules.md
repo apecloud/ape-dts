@@ -100,11 +100,11 @@ exclude=inventory.tmp*,other.orders_archive*
 | `inventory.order?` | `inventory.order`、`inventory.order1` | `inventory.order12` |
 | `inventory.r#order[0-9]+#` | `inventory.order1`、`inventory.order12` | `inventory.order`、`inventory.order1_backup` |
 
-`*` 匹配零个或多个字符；`?` 匹配零个或一个字符。正则表达式放在 `r#` 和 `#` 之间。需要匹配多个备选名称时，例如写成 `inventory.r#(?:orders|events)[0-9]+#`。
+`*` 匹配零个或多个字符；`?` 匹配零个或一个字符。`r#...#` 外的其他字符（如 `+`、`()`、`[]`、`{}`、`^`、`$`、`|`）均按字面值匹配，与通配符混用时也如此。正则表达式放在 `r#` 和 `#` 之间。需要匹配多个备选名称时，例如写成 `inventory.r#(?:orders|events)[0-9]+#`。
 
 ### 名称中有特殊字符
 
-名称本身包含 `*`、`?`、`.`、`,`、`:`、`+`、括号等字符时，用源数据库的标识符引号包围该段，表示精确名称。
+名称包含路径分隔符（`.`、`,`、`:`）或标识符引号时，按源数据库语法引用该段。名称中的 `*`、`?` 或开头的 `r#` 需要按字面值匹配时，也应使用标识符引号。`+`、括号等普通正则元字符本身不会启用正则匹配。
 
 | 数据库 | 精确匹配名为 `order*` 的表 | 名称中包含引号 |
 | --- | --- | --- |

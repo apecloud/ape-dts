@@ -50,6 +50,8 @@ The `[filter]` keys `do_events`, `do_ddls`, `do_dcls`, `do_structures` and `igno
 
 Used in: do_dbs, ignore_dbs, do_tbs, and ignore_tbs.
 
+Only `r#...#` declares a regular expression, for example `do_tbs=inventory.r#order_[0-9]+#`. Outside that wrapper, only `*` and `?` are wildcards; other characters such as `+`, `()`, `[]`, `{}`, `^`, `$` and `|` are literal. These rules apply to database/table selectors, not the exact names in JSON `ignore_cols`.
+
 ### Escapes
 
 | Database | Before      | After               |

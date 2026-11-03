@@ -447,15 +447,23 @@ ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
     }
 
     #[test]
-    fn legacy_scope_matches_existing_filter_for_flattened_names_and_regexes() {
+    fn legacy_scope_keeps_flattened_names_and_requires_explicit_regexes() {
         for db_type in [DbType::Mysql, DbType::Mssql] {
             let include_rules = "db.name,store[0-9]+,r#inventory|market#";
             let new =
                 load_filter(&ini(&format!("[filter]\ndo_dbs={include_rules}")), db_type).unwrap();
-            for name in ["db", "name", "db.name", "store12", "inventory", "other"] {
+            for name in [
+                "db",
+                "name",
+                "db.name",
+                "store12",
+                "store[0-9]+",
+                "inventory",
+                "other",
+            ] {
                 assert_eq!(
                     new.filter(RID::new([name])).unwrap(),
-                    matches!(name, "db.name" | "other"),
+                    matches!(name, "db.name" | "store12" | "other"),
                     "{name}"
                 );
             }

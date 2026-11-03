@@ -12,11 +12,7 @@ pub const REGEX_SUFFIX: &str = "#";
 pub const WILDCARD: &str = "*";
 pub const OPTIONAL_WILDCARD: &str = "?";
 
-const REGEX_META_CHARS: &[char] = &[
-    '\\', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|',
-];
-
-/// Legacy matching: SQL quotes are exact; `r#...#` is regex; bare `*` / `?` become `.*` / `.?`.
+/// SQL quotes are exact; `r#...#` is regex; only bare `*` / `?` are wildcards.
 /// Regex anchors wrap the raw expression; use `r#(?:a|b)#` to anchor all alternatives.
 #[derive(Debug, Clone, Default)]
 pub struct PatternMatcher {
@@ -33,10 +29,7 @@ impl PatternMatcher {
     }
 
     pub fn is_pattern(&self, value: &str) -> bool {
-        self.character_escape(value).is_none()
-            && (value.contains(WILDCARD)
-                || value.contains(OPTIONAL_WILDCARD)
-                || value.starts_with(REGEX_PREFIX))
+        self.character_escape(value).is_none() && Self::requires_regex(value)
     }
 
     pub fn is_match_segments(&self, input: &[String], pattern: &[String]) -> bool {
@@ -82,10 +75,9 @@ impl PatternMatcher {
             .and_then(|inner| inner.strip_suffix(REGEX_SUFFIX));
         let expression = match raw {
             Some(raw) => raw.to_owned(),
-            None => pattern
-                .replace('.', "\\.")
-                .replace(WILDCARD, ".*")
-                .replace(OPTIONAL_WILDCARD, ".?"),
+            None => regex::escape(pattern)
+                .replace(r"\*", ".*")
+                .replace(r"\?", ".?"),
         };
         Ok(self
             .regex_cache
@@ -95,7 +87,9 @@ impl PatternMatcher {
     }
 
     fn requires_regex(pattern: &str) -> bool {
-        pattern.starts_with(REGEX_PREFIX) || pattern.contains(REGEX_META_CHARS)
+        pattern.starts_with(REGEX_PREFIX)
+            || pattern.contains(WILDCARD)
+            || pattern.contains(OPTIONAL_WILDCARD)
     }
 }
 
@@ -134,11 +128,11 @@ mod tests {
             ),
             (rid!("db", "order"), rid!("db", "r#[#"), false),
             (rid!("db", "order"), rid!("db", "Order"), false),
-            (rid!("db", "order10"), rid!("db", "order[0-9]+"), true),
+            (rid!("db", "order10"), rid!("db", "order[0-9]+"), false),
             (rid!("inventory_extra"), rid!("r#inventory|market#"), true),
             (rid!("othermarket"), rid!("r#inventory|market#"), true),
             (rid!("unselected"), rid!("r#inventory|market#"), false),
-            (rid!("db", "order[0-9]+"), rid!("db", "order[0-9]+"), false),
+            (rid!("db", "order[0-9]+"), rid!("db", "order[0-9]+"), true),
             (rid!("a.b", "c"), rid!("a", "b.c"), false),
             (rid!("db", "order"), rid!("*"), false),
             (rid!("db"), rid!("*", "*"), false),
@@ -173,6 +167,27 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_metacharacters_match_literally_without_compiling_regexes() {
+        let matcher = PatternMatcher::default();
+        for name in [
+            "plus+name",
+            "paren(name)",
+            "bracket[12]",
+            "brace{2}",
+            "caret^name",
+            "dollar$name",
+            "pipe|name",
+            r"back\slash",
+        ] {
+            assert!(!matcher.is_pattern(name), "{name}");
+            matcher.validate(&RID::new([name])).unwrap();
+            assert!(matcher.is_match_segment(name, name), "{name}");
+            assert!(!matcher.is_match_segment(&format!("{name}_tail"), name));
+        }
+        assert!(matcher.regex_cache.is_empty());
+    }
+
+    #[test]
     fn wildcard_matching_handles_optional_characters_unicode_and_multiple_stars() {
         for (input, expect, matches) in [
             ("", "*", true),
@@ -190,6 +205,14 @@ mod tests {
             ("FT.SEARCH", "FT.*", true),
             ("FTxSEARCH", "FT.*", false),
             ("order+10", "order+*", true),
+            ("order10", "order+*", false),
+            ("bracket[12]", "bracket[12]?", true),
+            ("bracket[12]x", "bracket[12]?", true),
+            ("bracket1x", "bracket[12]?", false),
+            ("pipe|tail", "pipe|*", true),
+            ("pipe_tail", "pipe|*", false),
+            (r"back\slash_tail", r"back\slash*", true),
+            ("backslash_tail", r"back\slash*", false),
             ("a\nb", "a*b", false),
             ("a\nb", "a?b", false),
         ] {
