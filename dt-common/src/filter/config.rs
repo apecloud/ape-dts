@@ -3,12 +3,12 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{ensure, Context, Result};
 use strum::IntoEnumIterator;
 
-use super::{CommonFilter, CommonFilterKind, DtFilter, ExpressionFilter, ResourceFilter};
+use super::{CommonFilter, CommonFilterKind, DtFilter, ResourceFilter};
 use crate::{
     config::{
         config_enums::DbType,
         config_token_parser::ConfigTokenParser,
-        filter_config::{CommonFilterConfig, ExpressionFilterConfig, FilterConfig},
+        filter_config::{CommonFilterConfig, FilterConfig},
     },
     resource::{
         ResourceConfigParser, ResourceKind, MAPPING_SEPARATOR, REGEX_PREFIX, REGEX_SUFFIX,
@@ -43,14 +43,10 @@ impl DtFilter {
             let depth = kind.depth(&db_type).context("unsupported resource kind")?;
             resource_filter.validate(depth + 1, &filter.matcher)?;
             filter.set_resource_filter(kind, resource_filter)?;
-            for expression in &base.expression_filters {
-                let expression = match expression {
-                    ExpressionFilterConfig::WhereConditions(value) => {
-                        ExpressionFilter::parse_where_conditions(value, kind, &db_type)
-                            .with_context(|| format!("{kind:?}.where_conditions"))?
-                    }
-                };
-                filter.set_expression_filter(kind, expression)?;
+            if let Some(value) = &base.where_conditions {
+                let conditions = Self::parse_where_conditions(value, kind, &db_type)
+                    .with_context(|| format!("{kind:?}.where_conditions"))?;
+                filter.set_where_conditions(conditions);
             }
         }
         Ok(filter)
@@ -120,8 +116,12 @@ impl CommonFilter {
     }
 }
 
-impl ExpressionFilter {
-    fn parse_where_conditions(value: &str, kind: ResourceKind, db_type: &DbType) -> Result<Self> {
+impl DtFilter {
+    fn parse_where_conditions(
+        value: &str,
+        kind: ResourceKind,
+        db_type: &DbType,
+    ) -> Result<HashMap<RID, String>> {
         let pairs = ResourceConfigParser::escape_pairs(&[db_type]);
         let mut remaining = value.trim();
         let mut conditions = HashMap::new();
@@ -158,7 +158,7 @@ impl ExpressionFilter {
                 ensure!(!remaining.is_empty(), "trailing comma in WHERE conditions");
             }
         }
-        Ok(Self::WhereConditions { conditions })
+        Ok(conditions)
     }
 }
 
@@ -288,7 +288,7 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
             assert!(!filter.filter(rid!("selected")).unwrap(), "{text}");
             assert!(filter.filter(rid!("other")).unwrap(), "{text}");
             assert_eq!(filter.resource_filters().len(), 1);
-            assert!(filter.expression_filters.is_empty());
+            assert!(filter.where_conditions.is_empty());
         }
     }
 
@@ -415,7 +415,7 @@ ignore_cmds=SET
     }
 
     #[test]
-    fn expressions_support_each_engine_resource_level() {
+    fn where_conditions_support_each_engine_resource_level() {
         for engine in [
             DbType::Mysql,
             DbType::Pg,
@@ -449,7 +449,7 @@ ignore_cmds=SET
                 ids.push((id, name));
             }
             let filter = load_filter(&ini, engine).unwrap();
-            assert_eq!(filter.expression_filters.len(), ids.len());
+            assert_eq!(filter.where_conditions.len(), ids.len());
             for (id, condition) in ids {
                 assert_eq!(filter.where_condition(&id).unwrap(), Some(condition));
                 let mut sibling = id.segments().to_vec();
@@ -517,9 +517,7 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
         ] {
             assert_eq!(f.where_condition(&id).unwrap(), expected, "{id}");
         }
-        let ExpressionFilter::WhereConditions { conditions } =
-            &f.expression_filters[&ResourceKind::Table];
-        assert_eq!(conditions.len(), 3);
+        assert_eq!(f.where_conditions.len(), 4);
     }
 
     #[test]
@@ -609,12 +607,8 @@ where_conditions=inventory.orders:"id > 100",`inventory`.`orders`:"discarded",in
             r#"db.t:"ok",,db.other:"extra comma""#,
         ] {
             assert!(
-                ExpressionFilter::parse_where_conditions(
-                    value,
-                    ResourceKind::Table,
-                    &DbType::Mysql
-                )
-                .is_err(),
+                DtFilter::parse_where_conditions(value, ResourceKind::Table, &DbType::Mysql)
+                    .is_err(),
                 "{value}"
             );
         }

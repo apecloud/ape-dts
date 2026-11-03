@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 
-use super::{DtFilter, ExpressionFilter, ResourceFilter};
+use super::{DtFilter, ResourceFilter};
 use crate::{
     config::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
@@ -37,15 +37,10 @@ impl DtFilter {
         if ResourceKind::Table.depth(&db_type).is_some()
             && !options.where_conditions.trim().is_empty()
         {
-            let expression = ExpressionFilter::parse_legacy_where_conditions(
-                &options.where_conditions,
-                &db_type,
-            )
-            .context("[filter].where_conditions")?;
-            let ExpressionFilter::WhereConditions { conditions } = &expression;
-            if !conditions.is_empty() {
-                filter.set_expression_filter(ResourceKind::Table, expression)?;
-            }
+            let conditions =
+                Self::parse_legacy_where_conditions(&options.where_conditions, &db_type)
+                    .context("[filter].where_conditions")?;
+            filter.set_where_conditions(conditions);
         }
         Ok(filter)
     }
@@ -112,15 +107,18 @@ impl DtFilter {
     }
 }
 
-impl ExpressionFilter {
-    fn parse_legacy_where_conditions(value: &str, db_type: &DbType) -> Result<Self> {
+impl DtFilter {
+    fn parse_legacy_where_conditions(
+        value: &str,
+        db_type: &DbType,
+    ) -> Result<HashMap<RID, String>> {
         let mut conditions = HashMap::new();
         for rule in ResourceConfigParser::legacy_json::<Vec<LegacyWhere>>(value)? {
             let id = ResourceConfigParser::legacy_json_table(&rule.db, &rule.tb, db_type)?;
             ResourceKind::Table.validate_rid(db_type, &id)?;
             conditions.entry(id).or_insert(rule.condition);
         }
-        Ok(Self::WhereConditions { conditions })
+        Ok(conditions)
     }
 }
 
@@ -440,7 +438,7 @@ ignore_cmds=*,r#GET|SET#,`GET`,SET*,GET|SET"#,
             } else {
                 assert!(f.resource_filters().is_empty());
             }
-            assert!(f.expression_filters.is_empty());
+            assert!(f.where_conditions.is_empty());
             assert!(!f.filter_common(CommonFilterKind::Event, "insert"));
             assert!(f.filter_common(CommonFilterKind::Event, "update"));
         }

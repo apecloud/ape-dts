@@ -4,7 +4,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use strum::IntoEnumIterator;
 
-use super::{CommonFilter, CommonFilterKind, ExpressionFilter, ResourceFilter};
+use super::{CommonFilter, CommonFilterKind, ResourceFilter};
 use crate::{
     config::config_enums::DbType,
     meta::{
@@ -21,7 +21,7 @@ pub struct DtFilter {
     pub matcher: PatternMatcher,
     resource_filters: HashMap<ResourceKind, ResourceFilter>,
     common_filters: HashMap<CommonFilterKind, CommonFilter>,
-    pub expression_filters: HashMap<ResourceKind, ExpressionFilter>,
+    pub where_conditions: HashMap<RID, String>,
     cache: DashMap<RID, bool>,
 }
 
@@ -34,7 +34,7 @@ impl DtFilter {
             db_type,
             matcher: PatternMatcher::new(escape_pairs),
             common_filters: HashMap::new(),
-            expression_filters: HashMap::new(),
+            where_conditions: HashMap::new(),
             cache: DashMap::new(),
         }
     }
@@ -45,6 +45,27 @@ impl DtFilter {
 
     pub fn resource_filters(&self) -> &HashMap<ResourceKind, ResourceFilter> {
         &self.resource_filters
+    }
+
+    pub fn where_condition(&self, id: impl Into<RID>) -> Result<Option<&str>> {
+        let id = id.into();
+        if ResourceKind::from_rid(&self.db_type, &id).is_none() {
+            return Ok(None);
+        }
+        Ok(self.where_conditions.get(&id).map(String::as_str))
+    }
+
+    pub fn set_where_condition(&mut self, id: RID, condition: String) -> Result<()> {
+        if ResourceKind::from_rid(&self.db_type, &id).is_some() {
+            self.where_conditions.entry(id).or_insert(condition);
+        }
+        Ok(())
+    }
+
+    pub(super) fn set_where_conditions(&mut self, conditions: HashMap<RID, String>) {
+        for (id, condition) in conditions {
+            self.where_conditions.entry(id).or_insert(condition);
+        }
     }
 
     pub fn filter_all_ddl(&self) -> bool {
@@ -130,8 +151,10 @@ impl DtFilter {
 
     pub fn filter(&self, id: impl Into<RID>) -> Result<bool> {
         let id = id.into();
-        let kind = ResourceKind::from_rid(&self.db_type, &id);
-        if kind == Some(ResourceKind::Column) {
+        let kind = ResourceKind::from_rid(&self.db_type, &id)
+            .ok_or_else(|| anyhow::anyhow!("invalid resource path for {}: {}", self.db_type, id))?;
+
+        if kind == ResourceKind::Column {
             let table = id.prefix(id.len().saturating_sub(1));
             let Some(columns) = self.resource_filters.get(&ResourceKind::Column) else {
                 return self.filter(table);
@@ -149,15 +172,15 @@ impl DtFilter {
             }
             return self.filter(table);
         }
-        let cacheable = matches!(kind, Some(ResourceKind::Table | ResourceKind::Collection));
-        if cacheable {
+
+        if kind.is_cacheable() {
             if let Some(value) = self.cache.get(&id) {
                 return Ok(*value);
             }
         }
         let excluded =
             self.matches_resource_rules(&id, true) || !self.matches_resource_rules(&id, false);
-        if cacheable {
+        if kind.is_cacheable() {
             self.cache.insert(id, excluded);
         }
         Ok(excluded)
@@ -231,6 +254,58 @@ mod tests {
 
     fn filter(text: &str) -> DtFilter {
         load_filter(&ini(text), DbType::Mysql).unwrap()
+    }
+
+    #[test]
+    fn where_ids_are_literal() {
+        let mut filter = DtFilter::new(DbType::Mysql);
+        for name in ["order*", "event?", "r#[#", "a.b,c:d"] {
+            let id = rid!("db", name);
+            filter.set_where_condition(id.clone(), name.into()).unwrap();
+            assert_eq!(filter.where_condition(id).unwrap(), Some(name));
+        }
+        for id in [
+            rid!("db"),
+            rid!("db", "orders"),
+            rid!("db", "event1"),
+            rid!("db", "order*", "id"),
+        ] {
+            assert_eq!(filter.where_condition(id).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn where_updates_keep_first_conditions_and_ignore_unsupported_depths() {
+        let mut filter = DtFilter::new(DbType::Mysql);
+        let table = rid!("db", "t");
+        for condition in ["id > 1", "id > 1", "id > 2"] {
+            filter
+                .set_where_condition(table.clone(), condition.into())
+                .unwrap();
+        }
+        let invalid = rid!("db", "t", "id", "extra");
+        filter
+            .set_where_condition(invalid.clone(), "unused".into())
+            .unwrap();
+        filter
+            .set_where_condition(rid!("db"), "db condition".into())
+            .unwrap();
+        filter.set_where_conditions(HashMap::from([
+            (table.clone(), "later".into()),
+            (rid!("db", "other"), "other".into()),
+            (rid!("db"), "different level".into()),
+        ]));
+        assert_eq!(filter.where_condition(&table).unwrap(), Some("id > 1"));
+        assert_eq!(filter.where_condition(invalid).unwrap(), None);
+        assert_eq!(
+            filter.where_condition(rid!("db", "other")).unwrap(),
+            Some("other")
+        );
+        assert_eq!(
+            filter.where_condition(rid!("db")).unwrap(),
+            Some("db condition")
+        );
+        assert_eq!(filter.where_conditions.len(), 3);
     }
 
     #[test]

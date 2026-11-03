@@ -55,15 +55,10 @@ pub struct FilterSectionConfig {
     pub include_rules: Option<String>,
     /// `exclude=inventory.secret` in `[source.table]`.
     pub exclude_rules: Option<String>,
-    pub expression_filters: Vec<ExpressionFilterConfig>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExpressionFilterConfig {
     /// `[source.table]`: `where_conditions=inventory.orders:"id > 100"`.
     /// RID keys use SQL quoting, never patterns; duplicates keep the first value.
     /// Expression quotes use JSON escaping: `\"` for `"`, `\\` for `\`.
-    WhereConditions(String),
+    pub where_conditions: Option<String>,
 }
 
 impl FilterSectionConfig {
@@ -87,10 +82,7 @@ impl FilterSectionConfig {
                 Self {
                     include_rules: value(INCLUDE),
                     exclude_rules: value(EXCLUDE),
-                    expression_filters: value(WHERE_CONDITIONS)
-                        .map(ExpressionFilterConfig::WhereConditions)
-                        .into_iter()
-                        .collect(),
+                    where_conditions: value(WHERE_CONDITIONS),
                 },
             );
         }
@@ -240,14 +232,7 @@ include=new
             let section = &sections[kind];
             assert_eq!(section.include_rules.as_deref(), include_rules, "{kind}");
             assert_eq!(section.exclude_rules.as_deref(), exclude_rules, "{kind}");
-            assert_eq!(
-                section.expression_filters,
-                condition
-                    .map(|s| ExpressionFilterConfig::WhereConditions(s.into()))
-                    .into_iter()
-                    .collect::<Vec<_>>(),
-                "{kind}"
-            );
+            assert_eq!(section.where_conditions.as_deref(), condition, "{kind}");
         }
     }
 

@@ -10,7 +10,9 @@ pub enum ResourceKind {
     #[strum(to_string = "db", serialize = "database")]
     Database,
     Schema,
+    #[strum(to_string = "tb", serialize = "table")]
     Table,
+    #[strum(to_string = "col", serialize = "column")]
     Column,
     Collection,
     Topic,
@@ -87,5 +89,9 @@ impl ResourceKind {
         Self::levels(db_type)
             .iter()
             .position(|&level| level == self)
+    }
+
+    pub fn is_cacheable(self) -> bool {
+        matches!(self, ResourceKind::Table | ResourceKind::Collection)
     }
 }
