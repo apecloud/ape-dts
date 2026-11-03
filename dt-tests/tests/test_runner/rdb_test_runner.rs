@@ -985,7 +985,11 @@ impl RdbTestRunner {
             .router
             .as_ref()
             .and_then(|router| router.column_map(src_db_tb));
-        let excluded_columns = self.filter.excluded_columns(src_db_tb, &columns).unwrap();
+        // The runner has already selected this table, including tables supplied by check logs.
+        let excluded_columns = self
+            .filter
+            .excluded_children_in_scope(src_db_tb, &columns)
+            .unwrap();
         let col_map = col_map.as_ref();
         let excluded_columns = Some(&excluded_columns);
 

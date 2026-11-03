@@ -107,3 +107,5 @@
 | `[router] topic_map` | `[source.table]` 下的 `to_topic`，即通用分发映射 `to_<kind>` 的 topic 特例 |
 
 MSSQL 旧二段标识迁移时需显式补上 schema。不要只新增 `route` 或 `to_topic` 而保留旧 `[filter]` 的资源选择，因为任意 `[source.*]` 都会切换对象配置模式；类型和命令过滤仍保留在 `[filter]`。
+
+旧配置的 `do_dbs` / `do_tbs` 仍保持全局并集；新 source 白名单按父路径生效。`[source.db] include=inventory` 与 `[source.table] include=archive.orders` 会同步 `inventory` 的全部表和 `archive.orders`。如果下级 include 位于同一父路径，例如 `[source.table] include=inventory.orders`，则会把 `inventory` 的表范围收窄为 `orders`；要保留旧配置在这种组合下的全部表范围，可使用 `[source.table] include=inventory.*`。

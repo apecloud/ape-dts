@@ -255,6 +255,11 @@ impl MysqlCdcExtractor {
                     let col_values = self
                         .parse_row_data(table_map_event, &w.included_columns, event)
                         .await?;
+                    if col_values.is_empty() {
+                        self.extract_state
+                            .record_extracted_metrics(1, size_of_val(event) as u64);
+                        continue;
+                    }
                     let row_data = RowData::new(
                         String::new(),
                         table_map_event.database_name.clone(),
@@ -285,6 +290,11 @@ impl MysqlCdcExtractor {
                     let col_values_after = self
                         .parse_row_data(table_map_event, &u.included_columns_after, &mut event.1)
                         .await?;
+                    if col_values_before.is_empty() && col_values_after.is_empty() {
+                        self.extract_state
+                            .record_extracted_metrics(1, size_of_val(event) as u64);
+                        continue;
+                    }
                     let row_data = RowData::new(
                         String::new(),
                         table_map_event.database_name.clone(),
@@ -312,6 +322,11 @@ impl MysqlCdcExtractor {
                     let col_values = self
                         .parse_row_data(table_map_event, &d.included_columns, event)
                         .await?;
+                    if col_values.is_empty() {
+                        self.extract_state
+                            .record_extracted_metrics(1, size_of_val(event) as u64);
+                        continue;
+                    }
                     let row_data = RowData::new(
                         String::new(),
                         table_map_event.database_name.clone(),
@@ -375,10 +390,14 @@ impl MysqlCdcExtractor {
         let db = &table_map_event.database_name;
         let tb = &table_map_event.table_name;
         let tb_meta = self.meta_manager.get_tb_meta(db, tb).await?;
-        let excluded_columns = Some(
-            self.filter
-                .excluded_columns(rid!(db, tb), &tb_meta.basic.cols)?,
-        );
+        let excluded_columns = if self.extract_state.is_data_marker_info("", db, tb) {
+            None
+        } else {
+            Some(
+                self.filter
+                    .excluded_children(rid!(db, tb), &tb_meta.basic.cols)?,
+            )
+        };
 
         if included_columns.len() != event.column_values.len() {
             let detail =

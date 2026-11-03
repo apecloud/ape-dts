@@ -68,8 +68,17 @@ impl BatchCheckExtractor for PgCheckExtractor {
 
         let excluded_columns = Some(
             self.filter
-                .excluded_columns(rid!(schema, tb), &tb_meta.basic.cols)?,
+                .excluded_children_in_scope(rid!(schema, tb), &tb_meta.basic.cols)?,
         );
+        if excluded_columns.as_ref().is_some_and(|excluded| {
+            tb_meta
+                .basic
+                .cols
+                .iter()
+                .all(|column| excluded.contains(column))
+        }) {
+            return Ok(());
+        }
         let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, excluded_columns.as_ref());
         let batch_refs: Vec<&RowData> = check_row_data_items.iter().collect();
         let query_info = if check_logs.len() == 1 {

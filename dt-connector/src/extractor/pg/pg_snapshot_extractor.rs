@@ -175,12 +175,12 @@ impl PgSnapshotExtractor {
             return Ok((state, Some(work)));
         }
 
-        let Some(table_id) = state.pending_tables.pop_front() else {
-            return Ok((state, None));
-        };
-
-        let work = state.prepare_table_work(table_id).await?;
-        Ok((state, work))
+        while let Some(table_id) = state.pending_tables.pop_front() {
+            if let Some(work) = state.prepare_table_work(table_id).await? {
+                return Ok((state, Some(work)));
+            }
+        }
+        Ok((state, None))
     }
 
     async fn run_work(work: PgSnapshotWork) -> anyhow::Result<PgSnapshotWorkResult> {
@@ -429,7 +429,7 @@ impl PgSnapshotExtractor {
 
         let mut extracted_cnt = 0u64;
         let mut partition_col_value = ColValue::None;
-        let excluded_columns = Some(shared.filter.excluded_columns(
+        let excluded_columns = Some(shared.filter.excluded_children(
             rid!(tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
@@ -569,6 +569,19 @@ impl PgSnapshotDispatchState {
             .get_tb_meta(&table_id.schema, &table_id.tb)
             .await?
             .to_owned();
+        let excluded = self.shared.filter.excluded_children(
+            rid!(table_id.db, table_id.schema, table_id.tb),
+            &tb_meta.basic.cols,
+        )?;
+        if excluded.len() == tb_meta.basic.cols.len() {
+            log_info!(
+                "skipping {}.{}: no selected columns",
+                table_id.schema,
+                table_id.tb
+            );
+            return Ok(None);
+        }
+
         table_ctx.sample_limit = table_ctx.estimate_sample_limit(&tb_meta).await?;
         let active_mode = table_ctx.prepare_active_mode(&tb_meta).await?;
 
@@ -765,7 +778,7 @@ impl PgTableCtx {
         let order_cols = vec![partition_col.clone()];
         let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = tb_meta.get_col_type(&partition_col)?.clone();
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -938,7 +951,7 @@ impl PgTableCtx {
         );
 
         let base_count = extract_state.monitor.counters.pushed_record_count;
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1008,7 +1021,7 @@ impl PgTableCtx {
         let mut start_values = resume_values;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
         let page_limit = self.sample_limit.unwrap_or(self.shared.batch_size);
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1191,7 +1204,7 @@ impl PgTableCtx {
     ) -> anyhow::Result<u64> {
         let mut extracted_count = 0u64;
         let mut chunk_id_generator = SnapshotChunkIdGenerator::new(self.shared.batch_size);
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);

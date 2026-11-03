@@ -23,6 +23,7 @@ const MYSQL_RESOURCE_LEVELS: &[ResourceKind] = &[
     ResourceKind::Table,
     ResourceKind::Column,
 ];
+// TODO: ResourceKind::Database for PG
 const PG_RESOURCE_LEVELS: &[ResourceKind] = &[
     ResourceKind::Schema,
     ResourceKind::Table,
@@ -93,5 +94,99 @@ impl ResourceKind {
 
     pub fn is_cacheable(self) -> bool {
         matches!(self, ResourceKind::Table | ResourceKind::Collection)
+    }
+
+    pub fn child(self, db_type: &DbType) -> Option<Self> {
+        self.depth(db_type)
+            .and_then(|depth| Self::levels(db_type).get(depth + 1))
+            .copied()
+    }
+
+    pub fn object_kind(db_type: &DbType) -> Option<Self> {
+        Self::levels(db_type)
+            .iter()
+            .rev()
+            .copied()
+            .find(|kind| *kind != Self::Column)
+    }
+
+    pub fn precheck_path(db_type: &DbType, id: &RID) -> Result<RID> {
+        Self::from_rid(db_type, id)
+            .with_context(|| format!("invalid resource path for {db_type}: {id}"))?;
+        let depth = Self::object_kind(db_type)
+            .and_then(|kind| kind.depth(db_type))
+            .with_context(|| format!("no record resource for {db_type}"))?;
+        let mut len = id.len().min(depth + 1);
+        // A complete wildcard suffix denotes the enclosing exact precheck scope.
+        while len > 1 && id.segment(len - 1) == super::WILDCARD {
+            len -= 1;
+        }
+        Ok(id.prefix(len))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registered_hierarchies_define_children_objects_and_cache_policy() {
+        for (db, levels, object) in [
+            (
+                DbType::Mysql,
+                vec![
+                    ResourceKind::Database,
+                    ResourceKind::Table,
+                    ResourceKind::Column,
+                ],
+                ResourceKind::Table,
+            ),
+            (
+                DbType::Pg,
+                vec![
+                    ResourceKind::Schema,
+                    ResourceKind::Table,
+                    ResourceKind::Column,
+                ],
+                ResourceKind::Table,
+            ),
+            (
+                DbType::Mssql,
+                vec![
+                    ResourceKind::Database,
+                    ResourceKind::Schema,
+                    ResourceKind::Table,
+                    ResourceKind::Column,
+                ],
+                ResourceKind::Table,
+            ),
+            (
+                DbType::Mongo,
+                vec![ResourceKind::Database, ResourceKind::Collection],
+                ResourceKind::Collection,
+            ),
+            (
+                DbType::Redis,
+                vec![ResourceKind::Database],
+                ResourceKind::Database,
+            ),
+            (
+                DbType::Kafka,
+                vec![ResourceKind::Topic],
+                ResourceKind::Topic,
+            ),
+        ] {
+            assert_eq!(ResourceKind::levels(&db), levels);
+            assert_eq!(ResourceKind::object_kind(&db), Some(object));
+            for (index, &kind) in levels.iter().enumerate() {
+                assert_eq!(kind.child(&db), levels.get(index + 1).copied());
+                let id = RID::new(vec!["name"; index + 1]);
+                let path = ResourceKind::precheck_path(&db, &id).unwrap();
+                assert_eq!(path.len(), (index + 1).min(object.depth(&db).unwrap() + 1));
+            }
+        }
+        assert!(ResourceKind::Table.is_cacheable());
+        assert!(ResourceKind::Collection.is_cacheable());
+        assert!(!ResourceKind::Column.is_cacheable());
     }
 }

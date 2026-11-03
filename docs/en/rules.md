@@ -80,9 +80,13 @@ include=other.orders*,tenant_private.public_orders
 exclude=inventory.tmp*,other.orders_archive*
 ```
 
-This selects `inventory` and databases starting with `tenant_`, excluding those starting with `tenant_private`. The database exclusion also removes `tenant_private.public_orders`, despite its explicit table inclusion. Tables matching `inventory.tmp*` are excluded. `other.orders_archive` matches both table rules and is excluded.
+This selects `inventory` and databases starting with `tenant_`, and additionally selects `other.orders*` through the table rule. Databases starting with `tenant_private` are excluded. The database exclusion also removes `tenant_private.public_orders`, despite its explicit table inclusion. Tables matching `inventory.tmp*` are excluded. `other.orders_archive` matches both table rules and is excluded.
 
-All applicable `exclude` rules are checked first; any match excludes the object. Otherwise, any matching `include` rule selects it. Database/schema and table includes form a union, as do exclusions. Column rules only project columns of selected tables and cannot reselect an excluded table.
+Exclusions across all levels form a union and take precedence; child includes cannot override a parent exclusion. Includes at the same level form a union within each matching parent path and constrain that parent's children. A parent without matching child includes retains its inherited selection. For example, database includes `inventory,archive` and a table include `inventory.orders` select only `orders` in `inventory`, but all tables in `archive`. An empty include adds no whitelist constraint.
+
+When ancestor includes are absent, descendant includes keep their ancestors available for enumeration without selecting sibling resources. Configuring only `[source.column] include=inventory.orders.id` selects the database and table and copies only `id`. Missing an ancestor include does not veto an explicit descendant inclusion; only exclusions veto the entire path. For example, `[source.db] include=inventory` plus `[source.table] include=archive.orders` selects all tables in `inventory` and only `orders` in `archive`.
+
+A descendant exclusion whose remaining segments are all whole-segment `*` wildcards can exclude its ancestor early. For example, `[source.column] exclude=inventory.orders.*` skips the entire table. SQL-quoted literal `*` names are not wildcards. Separate column exclusions and regexes are not combined to infer full table exclusion during rule matching. Once actual columns are known, tables or row events with no selected columns are skipped.
 
 ### Wildcards and regular expressions
 

@@ -215,11 +215,12 @@ impl MssqlSnapshotExtractor {
         if let Some(work) = state.take_next_pending_work()? {
             return Ok((state, Some(work)));
         }
-        let Some(table_id) = state.pending_tables.pop_front() else {
-            return Ok((state, None));
-        };
-        let work = state.prepare_table_work(table_id).await?;
-        Ok((state, work))
+        while let Some(table_id) = state.pending_tables.pop_front() {
+            if let Some(work) = state.prepare_table_work(table_id).await? {
+                return Ok((state, Some(work)));
+            }
+        }
+        Ok((state, None))
     }
 
     async fn run_work(work: MssqlSnapshotWork) -> anyhow::Result<MssqlSnapshotWorkResult> {
@@ -451,7 +452,7 @@ impl MssqlSnapshotExtractor {
             )));
         }
         let query = snapshot_query.create_mssql_query(&tb_meta, values)?;
-        let excluded_columns = Some(shared.filter.excluded_columns(
+        let excluded_columns = Some(shared.filter.excluded_children(
             rid!(tb_meta.basic.db, tb_meta.basic.schema, tb_meta.basic.tb),
             &tb_meta.basic.cols,
         )?);
@@ -555,6 +556,19 @@ impl MssqlSnapshotDispatchState {
             .get_tb_meta(&table_id.db, &table_id.schema, &table_id.tb)
             .await?
             .clone();
+        let excluded = self.shared.filter.excluded_children(
+            rid!(table_id.db, table_id.schema, table_id.tb),
+            &tb_meta.basic.cols,
+        )?;
+        if excluded.len() == tb_meta.basic.cols.len() {
+            log_info!(
+                "skipping {}.{}: no selected columns",
+                table_id.schema,
+                table_id.tb
+            );
+            return Ok(None);
+        }
+
         let table_ctx = MssqlTableCtx {
             shared: self.shared.clone(),
             table_id: table_id.clone(),
@@ -800,7 +814,7 @@ impl MssqlTableCtx {
         let order_cols = vec![partition_col.clone()];
         let order_col_attrs = HashMap::from([(partition_col.clone(), SortDirection::Asc)]);
         let partition_col_type = *tb_meta.get_col_type(&partition_col)?;
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -870,7 +884,7 @@ impl MssqlTableCtx {
         tb_meta: &MssqlTbMeta,
         order_cols: &[String],
     ) -> anyhow::Result<u64> {
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1012,7 +1026,7 @@ impl MssqlTableCtx {
             MssqlSnapshotExtractor::quote(&self.table_id.schema),
             MssqlSnapshotExtractor::quote(&self.table_id.tb)
         );
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);
@@ -1067,7 +1081,7 @@ impl MssqlTableCtx {
         if start_from_beginning {
             start_values = tb_meta.basic.get_default_order_col_values();
         }
-        let excluded_columns = Some(self.shared.filter.excluded_columns(
+        let excluded_columns = Some(self.shared.filter.excluded_children(
             rid!(self.table_id.db, self.table_id.schema, self.table_id.tb),
             &tb_meta.basic.cols,
         )?);

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dashmap::DashMap;
 use strum::IntoEnumIterator;
 
@@ -76,23 +76,41 @@ impl DtFilter {
         DclType::iter().all(|dcl| self.filter_dcl(&dcl))
     }
 
-    pub fn excluded_columns<'a>(
+    pub fn excluded_children<'a>(
         &self,
-        table: impl Into<RID>,
-        columns: impl IntoIterator<Item = &'a String>,
+        parent: impl Into<RID>,
+        children: impl IntoIterator<Item = &'a String>,
     ) -> Result<HashSet<String>> {
+        self.excluded_children_with_scope(parent.into(), children, false)
+    }
+
+    pub fn excluded_children_in_scope<'a>(
+        &self,
+        parent: impl Into<RID>,
+        children: impl IntoIterator<Item = &'a String>,
+    ) -> Result<HashSet<String>> {
+        self.excluded_children_with_scope(parent.into(), children, true)
+    }
+
+    fn excluded_children_with_scope<'a>(
+        &self,
+        parent: RID,
+        children: impl IntoIterator<Item = &'a String>,
+        selected_parent: bool,
+    ) -> Result<HashSet<String>> {
+        ResourceKind::from_rid(&self.db_type, &parent)
+            .and_then(|kind| kind.child(&self.db_type))
+            .with_context(|| format!("resource has no registered children: {parent}"))?;
         let mut excluded = HashSet::new();
-        let Some(rules) = self.resource_filters.get(&ResourceKind::Column) else {
-            return Ok(excluded);
-        };
-        let table = table.into();
-        let selected = ResourceFilter::matches_prefix(&rules.include_set, &table, &self.matcher);
-        for column in columns {
-            let id = table.child(column.clone());
-            if ResourceFilter::matches(&rules.exclude_set, &id, &self.matcher)
-                || (selected && !ResourceFilter::matches(&rules.include_set, &id, &self.matcher))
-            {
-                excluded.insert(column.clone());
+        for child in children {
+            let id = parent.child(child.clone());
+            let filtered = if selected_parent {
+                self.matches_exclude(&id) || !self.matches_include_from(&id, parent.len(), true)
+            } else {
+                self.filter(id)?
+            };
+            if filtered {
+                excluded.insert(child.clone());
             }
         }
         Ok(excluded)
@@ -154,32 +172,12 @@ impl DtFilter {
         let kind = ResourceKind::from_rid(&self.db_type, &id)
             .ok_or_else(|| anyhow::anyhow!("invalid resource path for {}: {}", self.db_type, id))?;
 
-        if kind == ResourceKind::Column {
-            let table = id.prefix(id.len().saturating_sub(1));
-            let Some(columns) = self.resource_filters.get(&ResourceKind::Column) else {
-                return self.filter(table);
-            };
-            if self.matches_resource_rules(&id, true)
-                || ResourceFilter::matches(&columns.exclude_set, &id, &self.matcher)
-            {
-                return Ok(true);
-            }
-            if ResourceFilter::matches(&columns.include_set, &id, &self.matcher) {
-                return Ok(false);
-            }
-            if ResourceFilter::matches_prefix(&columns.include_set, &table, &self.matcher) {
-                return Ok(true);
-            }
-            return self.filter(table);
-        }
-
         if kind.is_cacheable() {
             if let Some(value) = self.cache.get(&id) {
                 return Ok(*value);
             }
         }
-        let excluded =
-            self.matches_resource_rules(&id, true) || !self.matches_resource_rules(&id, false);
+        let excluded = self.matches_exclude(&id) || !self.matches_include(&id);
         if kind.is_cacheable() {
             self.cache.insert(id, excluded);
         }
@@ -206,28 +204,47 @@ impl DtFilter {
         self.filter_common(CommonFilterKind::Cmd, command)
     }
 
-    fn matches_resource_rules(&self, id: &RID, exclude: bool) -> bool {
+    fn matches_exclude(&self, id: &RID) -> bool {
         ResourceKind::levels(&self.db_type)
             .iter()
             .enumerate()
-            .filter(|(_, kind)| **kind != ResourceKind::Column)
             .any(|(index, kind)| {
                 let Some(filter) = self.resource_filters.get(kind) else {
                     return false;
                 };
-                let rules = if exclude {
-                    &filter.exclude_set
-                } else {
-                    &filter.include_set
-                };
+                let rules = &filter.exclude_set;
                 if index < id.len() {
                     ResourceFilter::matches(rules, &id.prefix(index + 1), &self.matcher)
-                } else if exclude {
-                    ResourceFilter::covers_descendants(rules, id, &self.matcher)
                 } else {
-                    // Descendant includes keep namespaces available for enumeration.
-                    ResourceFilter::matches_prefix(rules, id, &self.matcher)
+                    ResourceFilter::covers_descendants(rules, id, &self.matcher)
                 }
+            })
+    }
+
+    fn matches_include(&self, id: &RID) -> bool {
+        self.matches_include_from(id, 0, false)
+    }
+
+    fn matches_include_from(&self, id: &RID, start: usize, mut inherited: bool) -> bool {
+        let levels = ResourceKind::levels(&self.db_type);
+        for (index, kind) in levels.iter().take(id.len()).enumerate().skip(start) {
+            let Some(rules) = self.resource_filters.get(kind) else {
+                continue;
+            };
+            if ResourceFilter::matches_prefix(&rules.include_set, &id.prefix(index), &self.matcher)
+            {
+                inherited = ResourceFilter::matches(
+                    &rules.include_set,
+                    &id.prefix(index + 1),
+                    &self.matcher,
+                );
+            }
+        }
+        inherited
+            || levels.iter().skip(id.len()).any(|kind| {
+                self.resource_filters.get(kind).is_some_and(|rules| {
+                    ResourceFilter::matches_prefix(&rules.include_set, id, &self.matcher)
+                })
             })
     }
 }
@@ -401,30 +418,192 @@ mod tests {
     }
 
     #[test]
-    fn namespace_discovery_and_projection_have_distinct_semantics() {
-        let f = filter("[source.table]\ninclude=db1.t1,db1.t2\nexclude=db1.t2\n[source.column]\ninclude=db1.t1.id,db2.t1.id\nexclude=db1.t1.secret");
-        assert!(!f.filter(rid!("db1")).unwrap());
-        assert!(f.filter(rid!("db2")).unwrap());
-        assert!(!f.filter(rid!("db1", "t1", "id")).unwrap());
-        assert!(f.filter(rid!("db1", "t1", "other")).unwrap());
-        assert!(f.filter(rid!("db1", "t1", "secret")).unwrap());
-        assert!(f.filter(rid!("db1", "t2", "id")).unwrap());
-        assert!(!f.filter(rid!("db2", "t1", "id")).unwrap());
+    fn includes_constrain_only_their_parent_scope_and_excludes_always_win() {
+        for (config, checks) in [
+            ("[source.column]\ninclude=db1.tb1.id", vec![
+                (rid!("db1"), false), (rid!("db1", "tb1"), false),
+                (rid!("db1", "tb1", "id"), false), (rid!("db1", "tb1", "other"), true),
+                (rid!("db1", "tb2"), true), (rid!("db2"), true),
+            ]),
+            ("[source.table]\ninclude=db1.tb1,db1.tb2\n[source.column]\ninclude=db1.tb1.id,db1.tb1.name", vec![
+                (rid!("db1", "tb1", "id"), false), (rid!("db1", "tb1", "name"), false),
+                (rid!("db1", "tb1", "secret"), true), (rid!("db1", "tb2", "secret"), false),
+                (rid!("db1", "tb3"), true),
+            ]),
+            ("[source.db]\ninclude=db1,db2\n[source.table]\ninclude=db1.tb1\n[source.column]\ninclude=db1.tb1.id", vec![
+                (rid!("db1", "tb1", "id"), false), (rid!("db1", "tb1", "other"), true),
+                (rid!("db1", "tb2"), true), (rid!("db2", "tb2", "other"), false),
+            ]),
+            ("[source.db]\ninclude=db1\n[source.column]\ninclude=db2.tb1.id", vec![
+                (rid!("db2"), false), (rid!("db2", "tb1"), false), (rid!("db2", "tb1", "id"), false),
+                (rid!("db2", "tb1", "other"), true), (rid!("db2", "tb2"), true),
+            ]),
+            ("[source.table]\ninclude=db1.tb1\n[source.column]\ninclude=db1.tb2.id", vec![
+                (rid!("db1", "tb2"), false), (rid!("db1", "tb2", "id"), false),
+                (rid!("db1", "tb2", "other"), true), (rid!("db1", "tb1", "other"), false),
+            ]),
+            ("[source.db]\ninclude=db1\n[source.column]\nexclude=db1.tb1.*", vec![
+                (rid!("db1"), false), (rid!("db1", "tb1"), true),
+                (rid!("db1", "tb1", "id"), true), (rid!("db1", "tb2", "id"), false),
+            ]),
+            ("[source.table]\ninclude=db1.tb1\n[source.column]\nexclude=db1.tb1.`*`", vec![
+                (rid!("db1", "tb1"), false), (rid!("db1", "tb1", "id"), false),
+                (rid!("db1", "tb1", "*"), true),
+            ]),
+            ("[source.db]\nexclude=db1\n[source.column]\ninclude=db1.tb1.id", vec![
+                (rid!("db1"), true), (rid!("db1", "tb1"), true), (rid!("db1", "tb1", "id"), true),
+            ]),
+            ("[source.table]\ninclude=db1.tb1\n[source.column]\ninclude=db1.tb1.id\nexclude=db1.tb1.id", vec![
+                (rid!("db1", "tb1"), false), (rid!("db1", "tb1", "id"), true),
+                (rid!("db1", "tb1", "other"), true),
+            ]),
+            ("[source.table]\ninclude=db1.tb1\n[source.column]\ninclude=", vec![
+                (rid!("db1", "tb1", "other"), false),
+            ]),
+        ] {
+            let f = filter(config);
+            for (id, excluded) in checks {
+                assert_eq!(f.filter(&id).unwrap(), excluded, "{config}: {id}");
+            }
+        }
+        let f = filter("[source.table]\ninclude=db1.tb1,db1.tb2\n[source.column]\ninclude=db1.tb1.id\nexclude=db1.tb2.secret");
         let columns = vec!["id".into(), "other".into(), "secret".into()];
         for (table, expected) in [
-            (rid!("db1", "t1"), vec!["other", "secret"]),
-            (rid!("db2", "t1"), vec!["other", "secret"]),
-            (rid!("marker", "t"), vec![]),
+            (rid!("db1", "tb1"), vec!["other", "secret"]),
+            (rid!("db1", "tb2"), vec!["secret"]),
+            (rid!("db2", "tb1"), vec!["id", "other", "secret"]),
         ] {
             assert_eq!(
-                f.excluded_columns(&table, &columns).unwrap(),
-                expected.into_iter().map(String::from).collect(),
+                f.excluded_children(table, &columns).unwrap(),
+                expected.into_iter().map(String::from).collect()
             );
         }
-        let f = filter("[source.db]\ninclude=db1\n[source.column]\ninclude=db1.t1.id");
-        assert!(!f.filter(rid!("db1", "t2", "other")).unwrap());
-        let f = filter("[source.db]\ninclude=db1\n[source.table]\nexclude=db1.*");
-        assert!(f.filter(rid!("db1")).unwrap());
+    }
+
+    #[test]
+    fn explicit_descendant_includes_select_paths_outside_ancestor_whitelists() {
+        let mut f =
+            filter("[source.db]\ninclude=inventory\n[source.table]\ninclude=archive.orders");
+        for (id, excluded) in [
+            (rid!("inventory"), false),
+            (rid!("inventory", "any_table"), false),
+            (rid!("inventory", "any_table", "any_column"), false),
+            (rid!("archive"), false),
+            (rid!("archive", "orders"), false),
+            (rid!("archive", "orders", "any_column"), false),
+            (rid!("archive", "other"), true),
+            (rid!("unselected"), true),
+        ] {
+            assert_eq!(f.filter(&id).unwrap(), excluded, "{id}");
+        }
+        f.add_include(rid!("archive", "other", "id")).unwrap();
+        assert!(!f.filter(rid!("archive", "other")).unwrap());
+        assert!(!f.filter(rid!("archive", "other", "id")).unwrap());
+        assert!(f.filter(rid!("archive", "other", "name")).unwrap());
+        f.add_exclude(rid!("archive")).unwrap();
+        assert!(f.filter(rid!("archive", "orders")).unwrap());
+        assert!(f.filter(rid!("archive", "other", "id")).unwrap());
+        assert!(!f.filter(rid!("inventory", "any_table")).unwrap());
+    }
+
+    #[test]
+    fn scoped_inheritance_and_leaf_discovery_work_at_every_registered_level() {
+        for engine in [
+            DbType::Mysql,
+            DbType::Pg,
+            DbType::Mssql,
+            DbType::Mongo,
+            DbType::Redis,
+            DbType::Kafka,
+        ] {
+            let levels = ResourceKind::levels(&engine);
+            let leaf = RID::new(vec!["selected"; levels.len()]);
+            let mut f = DtFilter::new(engine.clone());
+            f.add_include(&leaf).unwrap();
+            for depth in 1..=leaf.len() {
+                assert!(!f.filter(leaf.prefix(depth)).unwrap(), "{engine}: {depth}");
+                assert!(f.filter(leaf.prefix(depth - 1).child("sibling")).unwrap());
+            }
+            f.add_exclude(leaf.prefix(1)).unwrap();
+            for depth in 1..=leaf.len() {
+                assert!(f.filter(leaf.prefix(depth)).unwrap());
+            }
+            let mut discovered = DtFilter::new(engine.clone());
+            discovered.add_include(rid!("another_root")).unwrap();
+            discovered.add_include(&leaf).unwrap();
+            for depth in 1..=leaf.len() {
+                assert!(!discovered.filter(leaf.prefix(depth)).unwrap());
+                assert!(discovered
+                    .filter(leaf.prefix(depth - 1).child("unselected"))
+                    .unwrap());
+            }
+            for parent_depth in 1..levels.len() {
+                let prefix = RID::new(vec!["scope"; parent_depth - 1]);
+                let first = prefix.child("first");
+                let second = prefix.child("second");
+                let mut f = DtFilter::new(engine.clone());
+                f.add_include(&first).unwrap();
+                f.add_include(&second).unwrap();
+                f.add_include(first.child("keep")).unwrap();
+                f.add_include(first.child("also_keep")).unwrap();
+                assert!(!f.filter(first.child("keep")).unwrap());
+                assert!(!f.filter(first.child("also_keep")).unwrap());
+                assert!(f.filter(first.child("drop")).unwrap());
+                assert!(!f.filter(second.child("drop")).unwrap());
+                let children = vec!["keep".into(), "drop".into()];
+                assert_eq!(
+                    f.excluded_children(&first, &children).unwrap(),
+                    HashSet::from(["drop".into()])
+                );
+                f.add_exclude(first.child("*")).unwrap();
+                assert!(f.filter(&first).unwrap());
+                assert!(f.filter(first.child("keep")).unwrap());
+                assert!(!f.filter(&second).unwrap());
+            }
+            assert!(DtFilter::new(engine)
+                .excluded_children(leaf, &Vec::<String>::new())
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn wildcard_parent_scopes_and_log_selected_parents_keep_local_rules() {
+        let f = filter("[source.db]\ninclude=db\n[source.column]\ninclude=db.tb*.id,db.r#event[0-9]+#.name,db.`literal*`.id");
+        for (table, column, excluded) in [
+            ("tb1", "id", false),
+            ("tb1", "other", true),
+            ("tb2", "other", true),
+            ("event12", "name", false),
+            ("event12", "id", true),
+            ("other", "other", false),
+            ("literal*", "other", true),
+            ("literal1", "other", false),
+        ] {
+            assert_eq!(f.filter(rid!("db", table, column)).unwrap(), excluded);
+        }
+        let f = filter(
+            "[source.table]\ninclude=db.selected\n[source.column]\nexclude=db.logged.secret",
+        );
+        let columns = vec!["id".into(), "other".into(), "secret".into()];
+        let logged = rid!("db", "logged");
+        assert!(f.filter(&logged).unwrap());
+        assert_eq!(
+            f.excluded_children_in_scope(&logged, &columns).unwrap(),
+            HashSet::from(["secret".into()])
+        );
+        // Replay scope is local and must not broaden the original filter.
+        assert!(f.filter(&logged).unwrap());
+        let f =
+            filter("[source.table]\ninclude=db.selected\n[source.column]\ninclude=db.logged.id");
+        assert_eq!(
+            f.excluded_children_in_scope(&logged, &columns).unwrap(),
+            HashSet::from(["other".into(), "secret".into()])
+        );
+        let f = filter("[source.table]\nexclude=db.logged\n[source.column]\ninclude=db.logged.id");
+        assert_eq!(
+            f.excluded_children_in_scope(&logged, &columns).unwrap(),
+            columns.into_iter().collect()
+        );
     }
 
     #[test]
@@ -454,8 +633,8 @@ mod tests {
 
         let mut columns_only = DtFilter::new(DbType::Mssql);
         columns_only.add_include(&column).unwrap();
-        assert!(columns_only.filter(rid!("db")).unwrap());
-        assert!(columns_only.filter(&table).unwrap());
+        assert!(!columns_only.filter(rid!("db")).unwrap());
+        assert!(!columns_only.filter(&table).unwrap());
         assert!(!columns_only.filter(&column).unwrap());
     }
 
@@ -523,15 +702,14 @@ mod tests {
     }
 
     #[test]
-    fn runtime_filtering_does_not_reject_resource_depths_or_kinds() {
+    fn runtime_filtering_rejects_unregistered_resource_paths() {
         let f = filter("[source.table]\ninclude=db.orders\n[filter]\ndo_ddls=*");
         for (id, excluded) in [
-            (rid!(""), false),
             (rid!("db"), false),
             (rid!("db", "orders"), false),
             (rid!("db", "orders", "id"), false),
-            (rid!("db", "orders", "id", "extra"), false),
-            (rid!("other", "orders", "id", "extra"), true),
+            (rid!("db", "other"), true),
+            (rid!("other", "orders", "id"), true),
         ] {
             assert_eq!(f.filter(&id).unwrap(), excluded, "{id}");
             assert_eq!(
@@ -544,6 +722,11 @@ mod tests {
                 excluded,
                 "{id}"
             );
+        }
+        for id in [rid!(""), rid!("db", "orders", "id", "extra")] {
+            assert!(f.filter(&id).is_err());
+            assert!(f.filter_event(&id, &RowType::Insert).is_err());
+            assert!(f.filter_ddl(&id, &DdlType::CreateTable).is_err());
         }
     }
 
@@ -560,7 +743,7 @@ mod tests {
                 (true, true, false, true),
                 (false, false, true, true),
                 (true, false, false, true),
-                (false, false, false, false),
+                (false, false, false, true),
                 (false, true, true, true),
             ] {
                 let mut f = DtFilter::new(engine.clone());

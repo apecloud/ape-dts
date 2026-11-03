@@ -109,3 +109,5 @@ Use the same identifier quoting as `[filter]`.
 | router topic_map | `to_topic` in `[source.table]`, the topic case of general `to_<kind>` dispatch mappings |
 
 Include the schema when migrating MSSQL's old two-segment table names. Do not keep legacy object filters while adding only new routing sections: any source section switches object configuration. Type and command filters remain in `[filter]`.
+
+The legacy `do_dbs` / `do_tbs` union remains unchanged. New source includes are scoped to their parent resource. `[source.db] include=inventory` plus `[source.table] include=archive.orders` copies all tables in `inventory` and only `orders` in `archive`. A child include within the same parent, such as `[source.table] include=inventory.orders`, narrows `inventory` to `orders`; use `[source.table] include=inventory.*` to retain the legacy all-table scope in that combination.

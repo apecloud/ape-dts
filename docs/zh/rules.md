@@ -80,9 +80,13 @@ include=other.orders*,tenant_private.public_orders
 exclude=inventory.tmp*,other.orders_archive*
 ```
 
-这会选择 `inventory` 和 `tenant_` 开头的库，并排除 `tenant_private` 开头的库。即使表级 include 显式选择了 `tenant_private.public_orders`，它仍被库级 exclude 排除；`inventory.tmp*` 不会同步。`other.orders_archive` 同时符合表级 `include` 和 `exclude`，会被排除。
+这会选择 `inventory` 和 `tenant_` 开头的库，并通过表级规则额外选中 `other.orders*`；`tenant_private` 开头的库被排除。即使表级 include 显式选择了 `tenant_private.public_orders`，它仍被库级 exclude 排除；`inventory.tmp*` 不会同步。`other.orders_archive` 同时符合表级 `include` 和 `exclude`，会被排除。
 
-先检查所有适用层级的 `exclude`，命中任意一条就排除；再检查 `include`，命中任意一条才同步。库/schema 和表级包含规则取并集，排除规则也取并集。列规则仅控制已选中表的数据列，不会重新选中被排除的表。
+所有层级的 `exclude` 取并集且优先，父级排除不能被子级 `include` 救回。同一父路径下的本层 `include` 取并集并限定子资源；该父路径下没有本层 `include` 时，继承父级的选择。例如库级选中 `inventory,archive`、表级只配置 `inventory.orders`，则 `inventory` 只选中 `orders`，`archive` 仍选中全部表。空 `include` 不形成白名单约束。
+
+缺少上级 `include` 时，下级规则会放行对应父级以便枚举，不会把父级加入白名单或选中兄弟资源。因此只配置 `[source.column] include=inventory.orders.id` 就会选中对应库表并只同步 `id`。未命中上级 `include` 不会直接否决更深层显式包含的路径；只有 `exclude` 能否决整条路径。例如 `[source.db] include=inventory` 与 `[source.table] include=archive.orders` 会选择 `inventory` 的全部表，以及 `archive.orders`，不会选中 `archive` 的其他表。
+
+下级排除规则的剩余各段均为整段 `*` 时，可以提前排除父级，例如 `[source.column] exclude=inventory.orders.*` 会跳过整张 `orders` 表。带数据库引号的字面 `*` 不表示通配。逐个列名排除或正则匹配不会在规则匹配阶段做整表覆盖推导；读取真实元数据后，若没有可输出列，则跳过该表的数据读取或对应行事件。
 
 ### 通配符与正则
 

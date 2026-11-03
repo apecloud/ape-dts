@@ -15,14 +15,13 @@ pub struct DbTable {
 impl DbTable {
     pub fn from_filter(filter: &DtFilter) -> Result<Vec<Self>> {
         let mut ids = BTreeSet::new();
-        for (kind, rules) in filter.resource_filters() {
-            if *kind != ResourceKind::Column {
-                for id in &rules.include_set {
-                    ids.insert(ResourceConfigParser::exact_path(
-                        id.segments().to_vec(),
-                        filter.db_type(),
-                    )?);
-                }
+        for rules in filter.resource_filters().values() {
+            for id in &rules.include_set {
+                let object = ResourceKind::precheck_path(filter.db_type(), id)?;
+                ids.insert(ResourceConfigParser::exact_path(
+                    object.segments().to_vec(),
+                    filter.db_type(),
+                )?);
             }
         }
         let mut result = Vec::new();
@@ -99,6 +98,25 @@ mod tests {
     use crate::prechecker::basic::BasicPrechecker;
 
     #[test]
+    fn legacy_exact_database_includes_remain_exact_precheck_scopes() {
+        for text in [
+            "[filter]\ndo_dbs=inventory",
+            "[source.table]\ninclude=inventory.*",
+        ] {
+            let mut ini = configparser::ini::Ini::new();
+            ini.read(text.into()).unwrap();
+            let filter =
+                DtFilter::from_config(&FilterConfig::from_ini(&ini).unwrap(), DbType::Mysql)
+                    .unwrap();
+            assert!(!BasicPrechecker::is_filter_pattern(&filter));
+            let tables = DbTable::from_filter(&filter).unwrap();
+            assert_eq!(tables.len(), 1);
+            assert_eq!(tables[0].database_name, "inventory");
+            assert!(tables[0].is_all);
+        }
+    }
+
+    #[test]
     fn legacy_and_basic_selectors_keep_quoted_names_and_exclusions() {
         for text in [
             "[filter]\ndo_tbs=`db.name`.`order.name`,`db.name`.ignored\nignore_tbs=`db.name`.ignored",
@@ -113,6 +131,50 @@ mod tests {
             assert_eq!(tables[0].database_name, "db.name");
             assert_eq!(tables[0].table_name, "order.name");
             assert!(!tables[0].is_all);
+        }
+    }
+
+    #[test]
+    fn field_includes_contribute_parent_objects_without_treating_field_patterns_as_table_patterns()
+    {
+        for (include, exclude, pattern, names) in [
+            ("db.orders.id", "", false, vec!["orders"]),
+            ("db.orders.r#note.*#", "*.*.secret", false, vec!["orders"]),
+            (
+                "db.orders.id,db.events.id",
+                "db.events.*",
+                false,
+                vec!["orders"],
+            ),
+            ("db.order*.id", "", true, vec![]),
+        ] {
+            let mut ini = configparser::ini::Ini::new();
+            ini.set_inline_comment_symbols(Some(&Vec::new()));
+            ini.read(format!(
+                "[source.column]\ninclude={include}\nexclude={exclude}"
+            ))
+            .unwrap();
+            let filter =
+                DtFilter::from_config(&FilterConfig::from_ini(&ini).unwrap(), DbType::Mysql)
+                    .unwrap();
+            assert_eq!(
+                BasicPrechecker::is_filter_pattern(&filter),
+                pattern,
+                "{include}"
+            );
+            if !pattern {
+                let tables = DbTable::from_filter(&filter).unwrap();
+                assert_eq!(
+                    tables
+                        .iter()
+                        .map(|table| table.table_name.as_str())
+                        .collect::<Vec<_>>(),
+                    names
+                );
+                assert!(tables
+                    .iter()
+                    .all(|table| table.database_name == "db" && !table.is_all));
+            }
         }
     }
 }

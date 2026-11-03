@@ -6,7 +6,7 @@
 
 新增 `[source.<kind>]`，统一配置 `include`、`exclude`、`where_conditions`、`route` 和分发映射 `to_<kind>`。事件、DDL、DCL、结构和命令过滤继续使用 `[filter]` 的原字段。
 
-没有 `[source.*]` 时兼容旧配置；出现任意 source section 后，对象过滤、WHERE 条件和路由使用 source 定义，忽略旧对象字段和 `[router]`；`[filter]` 中的类型和命令过滤仍生效。所有适用层级的 exclude 优先于 include，包含和排除规则分别取并集。详见[配置用例](rules.md)和 [Legacy config 迁移说明](legacy_config.md)。
+没有 `[source.*]` 时兼容旧配置；出现任意 source section 后，对象过滤、WHERE 条件和路由使用 source 定义，忽略旧对象字段和 `[router]`；`[filter]` 中的类型和命令过滤仍生效。所有适用层级的 exclude 优先，取并集；include 在同一父路径下取并集，无本层 include 时继承父级，缺少上级配置时可从下级推导访问路径。旧 `[filter]` 的库表包含规则仍保持全局并集。详见[配置用例](rules.md)和 [Legacy config 迁移说明](legacy_config.md)。
 
 普通对象名称中的 `+`、括号、`[]`、`{}`、`^`、`$`、`|` 等字符现在按字面值匹配，仅 `*`、`?` 保留通配含义。已有配置如果依赖未声明的正则（例如 `store[0-9]+`），需改为显式的 `r#store[0-9]+#`；该规则也适用于旧 `[filter]` 库表选择。
 

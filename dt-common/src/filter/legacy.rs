@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashMap, HashSet},
+};
 
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
@@ -9,7 +12,7 @@ use crate::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         filter_config::LegacyFilterConfig,
     },
-    resource::{ResourceConfigParser, ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID},
+    resource::{ResourceConfigParser, ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID, WILDCARD},
 };
 
 const FILTER_DELIMITERS: &[char] = &['.', ','];
@@ -50,6 +53,8 @@ impl DtFilter {
         options: &LegacyFilterConfig,
         db_type: &DbType,
     ) -> Result<()> {
+        let object_depth = ResourceKind::object_kind(db_type).and_then(|kind| kind.depth(db_type));
+        let mut object_includes = HashSet::new();
         for (index, &kind) in ResourceKind::levels(db_type).iter().enumerate() {
             let (include_key, include_value, exclude_key, exclude_value, table) =
                 if index == 0 && matches!(kind, ResourceKind::Database | ResourceKind::Schema) {
@@ -71,12 +76,25 @@ impl DtFilter {
                 } else {
                     continue;
                 };
-            let resource_filter = ResourceFilter::new(
+            let mut resource_filter = ResourceFilter::new(
                 ResourceFilter::parse_legacy_patterns(include_value, db_type, table)
                     .with_context(|| format!("[filter].{include_key}"))?,
                 ResourceFilter::parse_legacy_patterns(exclude_value, db_type, table)
                     .with_context(|| format!("[filter].{exclude_key}"))?,
             );
+            if let Some(depth) = object_depth {
+                match index.cmp(&depth) {
+                    Ordering::Less => {
+                        for id in resource_filter.include_set.drain() {
+                            let mut segments = id.segments().to_vec();
+                            segments.resize(depth + 1, WILDCARD.into());
+                            object_includes.insert(RID::new(segments));
+                        }
+                    }
+                    Ordering::Equal => resource_filter.include_set.extend(object_includes.drain()),
+                    Ordering::Greater => {}
+                }
+            }
             resource_filter.validate(index + 1, &self.matcher)?;
             self.set_resource_filter(kind, resource_filter)?;
         }

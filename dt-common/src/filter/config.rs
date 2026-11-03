@@ -295,7 +295,7 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
     #[test]
     fn new_and_legacy_configs_keep_union_exclude_and_question_mark_semantics() {
         let old = filter("[filter]\ndo_dbs=test_db_*\nignore_dbs=test_db_3\ndo_tbs=other_test_db_1.*\nignore_tbs=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2\ndo_events=insert");
-        let new = filter("[filter]\ndo_events=insert\n[source.db]\ninclude=test_db_*\nexclude=test_db_3\n[source.table]\ninclude=other_test_db_1.*\nexclude=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2");
+        let new = filter("[filter]\ndo_events=insert\n[source.db]\nexclude=test_db_3\n[source.table]\ninclude=test_db_*.*,other_test_db_1.*\nexclude=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2");
         for (db, table, excluded) in [
             ("test_db_1", "t1", false),
             ("other_test_db_1", "t1", false),

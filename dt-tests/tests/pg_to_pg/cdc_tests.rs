@@ -76,6 +76,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_column_scope_filter_test() {
+        TestBase::run_cdc_test("pg_to_pg/cdc/column_scope_filter_test", 3000, 4000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_route_test() {
         TestBase::run_cdc_test("pg_to_pg/cdc/route_test", 3000, 4000).await;
     }
