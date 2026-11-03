@@ -1,7 +1,7 @@
 use futures::TryStreamExt;
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{bail, Ok};
+use anyhow::{bail, Context, Ok};
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
 use super::{mysql_col_type::MysqlColType, mysql_tb_meta::MysqlTbMeta};
@@ -88,7 +88,9 @@ impl MysqlMetaFetcher {
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
             let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols).with_context(
+                    || format!("database: {}, table: {} parse cols error.", schema, tb),
+                )?;
             // disable get_foreign_keys since we don't support foreign key check,
             // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
