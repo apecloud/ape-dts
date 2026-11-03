@@ -132,7 +132,10 @@ impl RdbMetaManager {
             id_cols = cols.to_owned();
         }
 
-        let partition_col = id_cols[0].clone();
+        let partition_col = id_cols
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no columns available"))?;
 
         Ok((order_cols, partition_col, id_cols))
     }

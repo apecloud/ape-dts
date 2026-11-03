@@ -89,7 +89,8 @@ impl PgMetaManager {
                 key_map.entry(k).or_insert(v);
             }
             let (order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
+                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)
+                    .with_context(|| format!("schema: {}, tb: {} parse cols error.", schema, tb))?;
             // disable get_foreign_keys since we don't support foreign key check
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
             // let (foreign_keys, ref_by_foreign_keys) =
