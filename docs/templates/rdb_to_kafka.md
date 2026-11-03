@@ -17,15 +17,15 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 include=test_db_1.*,test_db_2.*
 to_topic=*.*:default_topic,test_db_2.*:topic2,test_db_2.tb_1:topic3
 
-[source.event]
-include=insert
-
 [sinker]
 db_type=kafka
 sink_type=write
 batch_size=200
 url=127.0.0.1:9093
 with_field_defs=true
+
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -64,18 +64,16 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 include=*.*
 to_topic=*.*:test
 
-[source.event]
-include=insert,update,delete
-
-[source.ddl]
-include=*
-
 [sinker]
 db_type=kafka
 sink_type=write
 batch_size=200
 url=127.0.0.1:9093
 with_field_defs=true
+
+[filter]
+do_events=insert,update,delete
+do_ddls=*
 
 [parallelizer]
 parallel_type=serial

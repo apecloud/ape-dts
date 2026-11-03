@@ -30,8 +30,8 @@ route=inventory.orders:archive.order_history
 exclude=inventory.orders.secret*
 route=inventory.orders.id:archive.order_history.order_id
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -149,40 +149,25 @@ WHERE 条件用于全量迁移和全量数据校验，不用于逐行过滤 CDC 
 
 ## 事件、DDL、DCL 和结构类型
 
-这些配置段使用 `include` / `exclude` 指定类型名称，名称精确匹配。单独写 `include=*` 表示全部，`include=` 表示不选择任何类型；不要把 `*` 与具体类型混写。`exclude=*` 不表示排除全部。
+这些类型选择继续使用 `[filter]` 的原字段，与 `[source.*]` 对象配置同时生效。`do_events`、`do_structures` 未设置或留空时选择全部；`do_ddls`、`do_dcls` 默认不选择，`ignore_cmds` 默认不排除命令。类型名称精确匹配，`do_*` 单独设置为 `*` 表示全部；排除某类 DDL 等操作时，枚举需要保留的类型。
 
-| 配置段 | 未设置 `include` 时 | 常用值 |
+| `[filter]` 字段 | 默认 | 常用值 |
 | --- | --- | --- |
-| `[source.event]` | 全部 | `insert,update,delete` |
-| `[source.ddl]` | 不同步 | `create_database,drop_database,alter_database,create_schema,drop_schema,alter_schema,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index` |
-| `[source.dcl]` | 不同步 | `create_user,alter_user,create_role,drop_user,drop_role,grant,revoke,set_role` |
-| `[source.structure]` | 全部 | `database,table,constraint,sequence,comment,index,udf,udt,rbac,collection,shardkey` |
-| `[source.cmd]` | 全部 | Redis 命令名，使用小写，如 `set,del,flushall,flushdb` |
+| `do_events` | 全部 | `insert,update,delete` |
+| `do_ddls` | 不同步 | `create_table,alter_table,truncate_table` |
+| `do_dcls` | 不同步 | `create_user,grant,revoke` |
+| `do_structures` | 全部 | `database,table,constraint,index,collection,shardkey` |
+| `ignore_cmds` | 不排除 | `flushall,flushdb` |
 
 ```ini
+[filter]
 ; 同步插入和更新，不同步删除。
-[source.event]
-include=*
-exclude=delete
-
-; 同步建表、修改表，不执行清空表。
-[source.ddl]
-include=create_table,alter_table,truncate_table
-exclude=truncate_table
-
-; 同步用户创建和授权，不同步删除用户。
-[source.dcl]
-include=create_user,grant,drop_user
-exclude=drop_user
-
-; 结构迁移包含库、表和约束，排除普通独立索引。
-[source.structure]
-include=database,table,constraint,index
-exclude=index
-
-; Redis 增量迁移不执行这两个命令。
-[source.cmd]
-exclude=flushall,flushdb
+do_events=insert,update
+; 同步建表和修改表，不执行清空表。
+do_ddls=create_table,alter_table
+do_dcls=create_user,grant
+do_structures=database,table,constraint
+ignore_cmds=flushall,flushdb
 ```
 
 只配置当前任务需要的部分。DDL/DCL 取决于源、目标数据库及任务的支持范围。PostgreSQL CDC 同步 DDL 还需配置 `ddl_meta_tb` 和捕获触发器，见 [PostgreSQL 模板](../templates/pg_to_pg.md)。

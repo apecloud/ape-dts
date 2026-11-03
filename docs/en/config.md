@@ -306,10 +306,10 @@ Use these sections to select data, exclude objects, and map database, table, col
 | `[source.schema]` | PostgreSQL schemas; `database.schema` for SQL Server |
 | `[source.table]` / `[source.collection]` | Tables or MongoDB collections |
 | `[source.column]` | Column selection, exclusion and name mapping |
-| `[source.event]` | insert, update and delete events |
-| `[source.ddl]` / `[source.dcl]` | DDL / DCL types |
-| `[source.structure]` | Object types for structure migration |
-| `[source.cmd]` | Redis commands |
+| `[filter].do_events` | insert, update and delete events |
+| `[filter].do_ddls` / `[filter].do_dcls` | DDL / DCL types |
+| `[filter].do_structures` | Object types for structure migration |
+| `[filter].ignore_cmds` | Redis commands |
 
 ```ini
 [source.db]

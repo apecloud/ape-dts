@@ -6,10 +6,8 @@ use super::DtRouter;
 use crate::{
     config::{
         config_enums::DbType,
-        filter_config::SOURCE,
         router_config::{RouterConfig, TO_PREFIX},
     },
-    filter::CommonFilterKind,
     resource::{ResourceConfigParser, ResourceKind, RESOURCE_SEPARATOR, RID, WILDCARD},
 };
 
@@ -21,13 +19,6 @@ impl DtRouter {
         };
         let mut bases = Vec::new();
         for (name, base) in sections {
-            if name.parse::<CommonFilterKind>().is_ok() {
-                ensure!(
-                    base.route.is_none() && base.to.is_empty(),
-                    "[{SOURCE}.{name}] does not support routing"
-                );
-                continue;
-            }
             if let Some(kind) = ResourceKind::from_section(name, &src)? {
                 bases.push((kind, base));
             }
@@ -190,6 +181,7 @@ mod tests {
     use strum::IntoEnumIterator;
 
     use super::*;
+    use crate::filter::CommonFilterKind;
     use crate::rid;
 
     fn load_router(ini: &Ini, src: DbType, dst: DbType) -> Result<DtRouter> {
@@ -372,15 +364,18 @@ col_map=json:[{"db":"db","tb":"t","col_map":{"id":"old_id","value":"old_value"}}
     }
 
     #[test]
-    fn common_filter_sections_select_basic_and_reject_router_fields() {
-        let config = RouterConfig::from_ini(&ini("[router]\ntb_map=db.t:archive.orders\ntopic_map=*.*:events\n[source.event]\ninclude=insert\nexclude=delete\n[source.cmd]\nexclude=SET")).unwrap();
-        let router = DtRouter::from_config(&config, DbType::Mysql, DbType::Pg).unwrap();
+    fn common_filters_do_not_select_basic_routing_and_source_requires_objects() {
+        let config = RouterConfig::from_ini(&ini("[router]\ntb_map=db.t:archive.orders\ntopic_map=*.*:events\n[filter]\ndo_events=insert\nignore_cmds=SET")).unwrap();
+        let router = DtRouter::from_config(&config, DbType::Mysql, DbType::Kafka).unwrap();
         assert_eq!(
             router.forward::<RID>(rid!("db", "t")).unwrap(),
-            rid!("db", "t")
+            rid!("archive", "orders")
         );
-        assert_eq!(router.route_db_type(), &DbType::Pg);
-        assert_eq!(router.to::<RID>(rid!("db", "t")).unwrap(), rid!("db", "t"));
+        assert_eq!(router.route_db_type(), &DbType::Mysql);
+        assert_eq!(
+            router.to::<RID>(rid!("archive", "orders")).unwrap(),
+            rid!("events")
+        );
         for kind in CommonFilterKind::iter() {
             for mapping in ["", "a:b"] {
                 let config = RouterConfig::from_ini(&ini(&format!(

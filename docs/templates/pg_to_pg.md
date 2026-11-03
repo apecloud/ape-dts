@@ -21,8 +21,8 @@ max_connections=10
 [source.schema]
 include=test_schema
 
-[source.structure]
-include=database,table,constraint,sequence,comment,index
+[filter]
+do_structures=database,table,constraint,sequence,comment,index
 
 [runtime]
 log_level=info
@@ -58,8 +58,8 @@ max_connections=10
 [source.table]
 include=test_schema.a,test_schema.b
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -88,9 +88,6 @@ slot_name=ape_test
 [source.table]
 include=test_schema.a,test_schema.b
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=pg
 sink_type=write
@@ -98,6 +95,9 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 batch_size=200
 replace=true
 max_connections=10
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -172,8 +172,8 @@ Note:
 [extractor]
 ddl_meta_tb=public.ape_dts_ddl_command
 
-[source.ddl]
-include=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+[filter]
+do_ddls=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 ```
 
@@ -183,11 +183,11 @@ include=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_tab
 | :---------- | :-------------------------------------------------------- | :------ | :------ |
 | ddl_meta_tb | the meta table you created to store the captured ddl info | -       | -       |
 
-- [source.ddl]
+- [filter]
 
 | Config  | Description                                                                                                                                                                                                           | Example                             | Default                            |
 | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------------------------------- |
-| do | the ddl types to capture and sync to target, it should be one or more among "create_schema, drop_schema, alter_schema, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
+| do_ddls | the ddl types to capture and sync to target, it should be one or more among "create_schema, drop_schema, alter_schema, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
 
 # Struct check
 
@@ -243,8 +243,8 @@ batch_size=100
 [source.table]
 include=test_schema.a,test_schema.b
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -284,8 +284,8 @@ batch_size=200
 [source.table]
 include=test_schema.a,test_schema.b
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -330,15 +330,15 @@ table_full_name=apecloud_metadata.apedts_task_position
 [source.table]
 include=test_schema.a,test_schema.b
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=pg
 sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 batch_size=200
 replace=true
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -378,8 +378,8 @@ batch_size=200
 [source.table]
 include=test_schema.a,test_schema.b
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -422,8 +422,8 @@ batch_size=100
 [source.table]
 include=test_schema.a,test_schema.b
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -454,12 +454,12 @@ slot_name=ape_test
 [source.schema]
 include=test_schema
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=sql
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial
@@ -489,13 +489,13 @@ slot_name=ape_test
 [source.schema]
 include=test_schema
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=sql
 reverse=true
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial

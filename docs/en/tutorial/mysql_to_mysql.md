@@ -132,8 +132,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [source.db]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -201,8 +201,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [source.db]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -248,8 +248,8 @@ db_type=mysql
 sink_type=write
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -307,8 +307,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -349,14 +349,14 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.db]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -416,14 +416,14 @@ gtid_set=
 [source.db]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -482,17 +482,15 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.db]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
-[source.ddl]
-include=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
-
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[filter]
+do_events=insert,update,delete
+do_ddls=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 [parallelizer]
 parallel_type=rdb_merge

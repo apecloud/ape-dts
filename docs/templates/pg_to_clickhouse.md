@@ -49,8 +49,8 @@ batch_size=5000
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -86,8 +86,8 @@ batch_size=5000
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert,update,delete
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=table

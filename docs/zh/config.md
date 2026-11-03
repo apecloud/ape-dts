@@ -290,10 +290,10 @@ Checker 处理/输出失败只记录日志，不让主 CDC 写入链路失败。
 | `[source.schema]` | PostgreSQL schema；SQL Server 的 `数据库.schema` |
 | `[source.table]` / `[source.collection]` | 表或 MongoDB 集合 |
 | `[source.column]` | 数据列的选择、排除和名称映射 |
-| `[source.event]` | insert、update、delete 事件 |
-| `[source.ddl]` / `[source.dcl]` | DDL / DCL 类型 |
-| `[source.structure]` | 结构迁移的对象类型 |
-| `[source.cmd]` | Redis 命令 |
+| `[filter].do_events` | insert、update、delete 事件 |
+| `[filter].do_ddls` / `[filter].do_dcls` | DDL / DCL 类型 |
+| `[filter].do_structures` | 结构迁移的对象类型 |
+| `[filter].ignore_cmds` | Redis 命令 |
 
 ```ini
 [source.db]

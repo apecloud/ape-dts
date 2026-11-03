@@ -114,8 +114,8 @@ batch_size=5000
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -172,15 +172,15 @@ slot_name=ape_test
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=doris
 sink_type=write
 url=mysql://root:@127.0.0.1:9030
 stream_load_url=mysql://root:@127.0.0.1:8040
 batch_size=5000
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge

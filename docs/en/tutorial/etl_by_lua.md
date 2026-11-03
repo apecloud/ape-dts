@@ -64,8 +64,8 @@ lua_code_file=/etl.lua
 [source.db]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -115,9 +115,6 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.db]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [processor]
 lua_code_file=/etl.lua
 
@@ -126,6 +123,9 @@ db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge

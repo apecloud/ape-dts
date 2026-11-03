@@ -1,45 +1,30 @@
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{ensure, Context, Result};
+use strum::IntoEnumIterator;
 
 use super::{CommonFilter, CommonFilterKind, DtFilter, ExpressionFilter, ResourceFilter};
 use crate::{
     config::{
         config_enums::DbType,
         config_token_parser::ConfigTokenParser,
-        filter_config::{ExpressionFilterConfig, FilterConfig, FilterSectionConfig, SOURCE},
-    },
-    meta::{
-        dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
-        struct_meta::structure::structure_type::StructureType,
+        filter_config::{CommonFilterConfig, ExpressionFilterConfig, FilterConfig},
     },
     resource::{
-        ResourceConfigParser, ResourceKind, MAPPING_SEPARATOR, REGEX_PREFIX, RESOURCE_DELIMITERS,
-        RESOURCE_SEPARATOR, RID, RULE_SEPARATOR, WILDCARD,
+        ResourceConfigParser, ResourceKind, MAPPING_SEPARATOR, REGEX_PREFIX, REGEX_SUFFIX,
+        RESOURCE_DELIMITERS, RESOURCE_SEPARATOR, RID, RULE_SEPARATOR, WILDCARD,
     },
 };
 
-const VALUE_DELIMITERS: &[char] = &[','];
-
 impl DtFilter {
     pub fn from_config(config: &FilterConfig, db_type: DbType) -> Result<Self> {
-        let sections = match config {
+        let (sections, common) = match config {
             FilterConfig::Legacy(options) => return Self::from_legacy_config(options, db_type),
-            FilterConfig::Basic(sections) => sections,
+            FilterConfig::Basic(sections, common) => (sections, common),
         };
         let mut filter = Self::new(db_type.clone());
+        filter.load_common_filters(common, &db_type)?;
         for (name, base) in sections {
-            if let Ok(kind) = name.parse::<CommonFilterKind>() {
-                ensure!(
-                    base.expression_filters.is_empty(),
-                    "[{SOURCE}.{name}].where_conditions requires a resource section"
-                );
-                filter.set_common_filter(kind, CommonFilter::from_config(kind, base)?);
-                continue;
-            }
             let Some(kind) = ResourceKind::from_section(name, &db_type)? else {
                 continue;
             };
@@ -70,72 +55,68 @@ impl DtFilter {
         }
         Ok(filter)
     }
+
+    pub(super) fn load_common_filters(
+        &mut self,
+        options: &CommonFilterConfig,
+        db_type: &DbType,
+    ) -> Result<()> {
+        for kind in CommonFilterKind::iter() {
+            if let Some(common) = CommonFilter::from_filter_config(kind, options, db_type)? {
+                self.set_common_filter(kind, common);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl CommonFilter {
-    fn from_config(kind: CommonFilterKind, base: &FilterSectionConfig) -> Result<Self> {
-        let context = format!("[{SOURCE}.{}]", kind.as_ref());
-        Ok(Self {
-            include_set: Self::parse_values(
-                base.include_rules
-                    .as_deref()
-                    .unwrap_or_else(|| kind.default_include()),
-                kind,
-            )
-            .with_context(|| format!("{context}.include"))?,
-            exclude_set: Self::parse_values(
-                base.exclude_rules.as_deref().unwrap_or_default(),
-                kind,
-            )
-            .with_context(|| format!("{context}.exclude"))?,
-        })
+    fn from_filter_config(
+        kind: CommonFilterKind,
+        options: &CommonFilterConfig,
+        db_type: &DbType,
+    ) -> Result<Option<Self>> {
+        let (key, value) = match kind {
+            CommonFilterKind::Event => ("do_events", options.do_events.as_str()),
+            CommonFilterKind::Ddl => ("do_ddls", options.do_ddls.as_str()),
+            CommonFilterKind::Dcl => ("do_dcls", options.do_dcls.as_str()),
+            CommonFilterKind::Structure => ("do_structures", options.do_structures.as_str()),
+            CommonFilterKind::Cmd => ("ignore_cmds", WILDCARD),
+        };
+        let value = if value.trim().is_empty() {
+            kind.default_include()
+        } else {
+            value
+        };
+        let exclude_set = if kind == CommonFilterKind::Cmd {
+            Self::parse_values(&options.ignore_cmds, db_type).context("[filter].ignore_cmds")?
+        } else {
+            HashSet::new()
+        };
+        if value == kind.default_include() && exclude_set.is_empty() {
+            return Ok(None);
+        }
+        let include_set =
+            Self::parse_values(value, db_type).with_context(|| format!("[filter].{key}"))?;
+        Ok(Some(Self::new(include_set, exclude_set)))
     }
 
-    fn parse_values(value: &str, kind: CommonFilterKind) -> Result<HashSet<String>> {
-        ensure!(
-            kind == CommonFilterKind::Cmd || !value.trim_end().ends_with(RULE_SEPARATOR),
-            "trailing comma in {} filter values",
-            kind.as_ref()
-        );
+    fn parse_values(value: &str, db_type: &DbType) -> Result<HashSet<String>> {
         let pairs = ResourceConfigParser::escape_pairs(&[]);
-        let mut rules = HashSet::new();
-        let mut remaining = value.trim();
-        while !remaining.is_empty() {
-            // Keep commas inside r#...# in the same literal command token.
-            let (name, rest) = if kind == CommonFilterKind::Cmd
-                && remaining.starts_with(REGEX_PREFIX)
-            {
-                let (name, rest) = ConfigTokenParser::token(remaining, VALUE_DELIMITERS, &pairs)?;
-                ensure!(
-                    rest.is_empty() || rest.starts_with(RULE_SEPARATOR),
-                    "expected comma after command value"
-                );
-                (name, rest.strip_prefix(RULE_SEPARATOR).unwrap_or(rest))
-            } else {
-                remaining
-                    .split_once(RULE_SEPARATOR)
-                    .unwrap_or((remaining, ""))
-            };
-            let name = name.trim();
-            remaining = rest.trim_start();
-            if kind == CommonFilterKind::Cmd && name.is_empty() {
-                continue;
-            }
-            if name == WILDCARD {
-                rules.insert(name.to_owned());
-                continue;
-            }
-            let valid = match kind {
-                CommonFilterKind::Event => RowType::from_str(name).is_ok(),
-                CommonFilterKind::Ddl => DdlType::from_str(name).is_ok(),
-                CommonFilterKind::Dcl => DclType::from_str(name).is_ok(),
-                CommonFilterKind::Structure => StructureType::from_str(name).is_ok(),
-                CommonFilterKind::Cmd => true,
-            };
-            ensure!(valid, "invalid {} filter value {name}", kind.as_ref());
-            rules.insert(name.to_owned());
-        }
-        Ok(rules)
+        ConfigTokenParser::parse_config(value, db_type, &['.', ','], Some(&pairs))?
+            .into_iter()
+            .map(|token| {
+                // Preserve regex validation even though common values match literally.
+                if let Some(pattern) = token
+                    .strip_prefix(REGEX_PREFIX)
+                    .and_then(|inner| inner.strip_suffix(REGEX_SUFFIX))
+                {
+                    regex::Regex::new(pattern)
+                        .with_context(|| format!("invalid filter regex {token}"))?;
+                }
+                Ok(token)
+            })
+            .collect()
     }
 }
 
@@ -200,7 +181,14 @@ mod tests {
     use configparser::ini::Ini;
 
     use super::*;
-    use crate::rid;
+    use crate::{
+        filter::CommonFilterKind,
+        meta::{
+            dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
+            struct_meta::structure::structure_type::StructureType,
+        },
+        rid,
+    };
 
     fn load_filter(ini: &Ini, db_type: DbType) -> Result<DtFilter> {
         DtFilter::from_config(&FilterConfig::from_ini(ini)?, db_type)
@@ -241,7 +229,7 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
                 assert_eq!(f.filter(rid!("db", "t", "id")).unwrap(), excluded, "{section}");
                 assert!(f.filter(rid!("legacy", "t")).unwrap());
                 for event in [RowType::Insert, RowType::Update] {
-                    assert_eq!(f.filter_event(rid!("db", "t"), &event).unwrap(), excluded, "{section}");
+                    assert_eq!(f.filter_event(rid!("db", "t"), &event).unwrap(), excluded || event != RowType::Insert, "{section}");
                 }
                 assert_eq!(f.where_condition(rid!("db", "t")).unwrap(), condition, "{section}");
                 assert_eq!(f.where_condition(rid!("db", "t", "id")).unwrap(), None);
@@ -307,7 +295,7 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
     #[test]
     fn new_and_legacy_configs_keep_union_exclude_and_question_mark_semantics() {
         let old = filter("[filter]\ndo_dbs=test_db_*\nignore_dbs=test_db_3\ndo_tbs=other_test_db_1.*\nignore_tbs=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2\ndo_events=insert");
-        let new = filter("[source.event]\ninclude=insert\n[source.db]\ninclude=test_db_*\nexclude=test_db_3\n[source.table]\ninclude=other_test_db_1.*\nexclude=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2");
+        let new = filter("[filter]\ndo_events=insert\n[source.db]\ninclude=test_db_*\nexclude=test_db_3\n[source.table]\ninclude=other_test_db_1.*\nexclude=test_db_4.*,test_db_?.one_pk_no_uk_2,*_test_db_1.one_pk_no_uk_2");
         for (db, table, excluded) in [
             ("test_db_1", "t1", false),
             ("other_test_db_1", "t1", false),
@@ -330,124 +318,100 @@ where_conditions=json:[{"db":"db","tb":"t","condition":"legacy"}]"#,
     }
 
     #[test]
-    fn common_sections_support_include_and_exclude_for_every_engine() {
-        let config = FilterConfig::from_ini(&ini(r#"[filter]
-do_events=r#[#
-do_ddls=r#[#
-do_dcls=r#[#
-do_structures=r#[#
-ignore_cmds=GET
-[source.event]
-include=insert,update
-exclude=update
-[source.ddl]
-include=create_table,drop_table
-exclude=drop_table
-[source.dcl]
-include=grant,revoke
-exclude=revoke
-[source.structure]
-include=table,index
-exclude=index
-[source.cmd]
-include=GET,SET,FT.SEARCH
-exclude=SET"#))
-        .unwrap();
-        for engine in [
-            DbType::Mysql,
-            DbType::Tidb,
-            DbType::Pg,
-            DbType::Mssql,
-            DbType::Mongo,
-            DbType::Redis,
-            DbType::Kafka,
-            DbType::ClickHouse,
-            DbType::StarRocks,
-            DbType::Doris,
-        ] {
-            let depth = ResourceKind::levels(&engine)
-                .iter()
-                .take_while(|&&kind| kind != ResourceKind::Column)
-                .count();
-            let id = RID::new(vec!["object"; depth]);
-            let mut f = DtFilter::from_config(&config, engine).unwrap();
-            f.add_include(&id).unwrap();
-            assert!(!f.filter_event(&id, &RowType::Insert).unwrap());
-            assert!(f.filter_event(&id, &RowType::Update).unwrap());
-            assert!(f.filter_event(&id, &RowType::Delete).unwrap());
-            assert!(!f.filter_ddl(&id, &DdlType::CreateTable).unwrap());
-            assert!(f.filter_ddl(&id, &DdlType::DropTable).unwrap());
-            assert!(!f.filter_dcl(&DclType::Grant));
-            assert!(f.filter_dcl(&DclType::Revoke));
-            assert!(!f.filter_structure(&StructureType::Table));
-            assert!(f.filter_structure(&StructureType::Index));
-            assert!(!f.filter_cmd("GET"));
-            assert!(!f.filter_cmd("FT.SEARCH"));
-            assert!(f.filter_cmd("SET"));
-            assert!(f.filter_cmd("DEL"));
-            assert!(!f.filter(&id).unwrap());
-        }
-    }
-
-    #[test]
-    fn common_sections_select_basic_without_any_legacy_fallback() {
-        let mut f = filter(
-            r#"[filter]
-do_tbs=db.t
+    fn common_filters_survive_source_object_selection_for_every_engine() {
+        for source in ["", "[source.table]"] {
+            let config = FilterConfig::from_ini(&ini(&format!(
+                r#"[filter]
+do_dbs=legacy
+do_tbs=legacy.t
 do_events=insert
 do_ddls=create_table
 do_dcls=grant
 do_structures=table
 ignore_cmds=SET
-where_conditions=json:[{"db":"db","tb":"t","condition":"id > 1"}]
-[source.event]
-exclude=update"#,
-        );
-        assert!(f.filter(rid!("db", "t")).unwrap());
-        assert_eq!(f.where_condition(rid!("db", "t")).unwrap(), None);
-        f.add_include(&rid!("db", "t")).unwrap();
-        assert!(!f.filter_event(rid!("db", "t"), &RowType::Delete).unwrap());
-        assert!(f.filter_event(rid!("db", "t"), &RowType::Update).unwrap());
-        assert!(f
-            .filter_ddl(rid!("db", "t"), &DdlType::CreateTable)
-            .unwrap());
-        assert!(f.filter_dcl(&DclType::Grant));
-        assert!(!f.filter_structure(&StructureType::Table));
-        assert!(!f.filter_structure(&StructureType::Index));
-        assert!(!f.filter_cmd("SET"));
+{source}"#
+            )))
+            .unwrap();
+            for engine in [
+                DbType::Mysql,
+                DbType::Tidb,
+                DbType::Pg,
+                DbType::Mssql,
+                DbType::Mongo,
+                DbType::Redis,
+                DbType::Kafka,
+                DbType::ClickHouse,
+                DbType::StarRocks,
+                DbType::Doris,
+            ] {
+                let depth = ResourceKind::levels(&engine)
+                    .iter()
+                    .take_while(|&&kind| kind != ResourceKind::Column)
+                    .count();
+                let id = RID::new(vec!["object"; depth]);
+                let mut f = DtFilter::from_config(&config, engine).unwrap();
+                f.add_include(&id).unwrap();
+                assert!(!f.filter_event(&id, &RowType::Insert).unwrap());
+                assert!(f.filter_event(&id, &RowType::Update).unwrap());
+                assert!(f.filter_event(&id, &RowType::Delete).unwrap());
+                assert!(!f.filter_ddl(&id, &DdlType::CreateTable).unwrap());
+                assert!(f.filter_ddl(&id, &DdlType::DropTable).unwrap());
+                assert!(!f.filter_dcl(&DclType::Grant));
+                assert!(f.filter_dcl(&DclType::Revoke));
+                assert!(!f.filter_structure(&StructureType::Table));
+                assert!(f.filter_structure(&StructureType::Index));
+                assert!(!f.filter_cmd("GET"));
+                assert!(f.filter_cmd("SET"));
+                assert!(!f.filter(&id).unwrap());
+            }
+        }
     }
 
     #[test]
-    fn common_defaults_empty_rules_and_literal_excludes_are_distinct() {
-        let defaults = filter("");
-        let constructed = DtFilter::new(DbType::Mysql);
-        for (kind, value, excluded) in [
-            (CommonFilterKind::Event, "insert", false),
-            (CommonFilterKind::Ddl, "create_table", true),
-            (CommonFilterKind::Dcl, "grant", true),
-            (CommonFilterKind::Structure, "table", false),
-            (CommonFilterKind::Cmd, "GET", false),
+    fn source_sections_keep_common_filter_defaults_and_empty_values() {
+        for selection in [
+            "",
+            "do_events=\ndo_ddls=\ndo_dcls=\ndo_structures=\nignore_cmds=",
         ] {
-            let absent = filter(&format!("[source.{}]", kind.as_ref()));
-            let empty = filter(&format!("[source.{}]\ninclude=", kind.as_ref()));
-            let with_excludes =
-                filter(&format!("[source.{}]\ninclude=*\nexclude=*", kind.as_ref()));
-            assert_eq!(defaults.filter_common(kind, value), excluded);
-            assert_eq!(constructed.filter_common(kind, value), excluded);
-            assert_eq!(absent.filter_common(kind, value), excluded);
-            assert!(empty.filter_common(kind, value));
-            assert!(!with_excludes.filter_common(kind, value));
-            assert!(with_excludes.filter_common(kind, "*"));
-            let mixed = filter(&format!("[source.{}]\ninclude=*,{value}", kind.as_ref()));
-            assert!(!mixed.filter_common(kind, value));
-            assert!(mixed.filter_common(kind, "other"));
-            let all = filter(&format!("[source.{}]\ninclude=*,*", kind.as_ref()));
-            assert!(!all.filter_common(kind, "other"));
+            for source in ["", "[source.table]", "[source.table]\ninclude=db.t"] {
+                let f = filter(&format!("[filter]\n{selection}\n{source}"));
+                for (kind, value, excluded) in [
+                    (CommonFilterKind::Event, "insert", false),
+                    (CommonFilterKind::Ddl, "create_table", true),
+                    (CommonFilterKind::Dcl, "grant", true),
+                    (CommonFilterKind::Structure, "table", false),
+                    (CommonFilterKind::Cmd, "GET", false),
+                ] {
+                    assert_eq!(
+                        f.filter_common(kind, value),
+                        excluded,
+                        "{selection}: {source}"
+                    );
+                }
+            }
         }
-        let legacy = filter("[filter]\nignore_cmds=*,SET");
-        assert!(!legacy.filter_cmd("GET"));
-        assert!(legacy.filter_cmd("SET"));
-        assert!(legacy.filter_cmd("*"));
+    }
+
+    #[test]
+    fn source_sections_still_validate_common_filters() {
+        for key in [
+            "do_events",
+            "do_ddls",
+            "do_dcls",
+            "do_structures",
+            "ignore_cmds",
+        ] {
+            assert!(
+                load_filter(
+                    &ini(&format!(
+                        "[filter]\n{key}=r#[#\n[source.table]\ninclude=db.t"
+                    )),
+                    DbType::Mysql
+                )
+                .is_err(),
+                "{key}"
+            );
+        }
     }
 
     #[test]

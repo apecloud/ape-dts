@@ -2,15 +2,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
-use strum::IntoEnumIterator;
 
-use super::{CommonFilter, CommonFilterKind, DtFilter, ExpressionFilter, ResourceFilter};
+use super::{DtFilter, ExpressionFilter, ResourceFilter};
 use crate::{
     config::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         filter_config::LegacyFilterConfig,
     },
-    resource::{ResourceConfigParser, ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID, WILDCARD},
+    resource::{ResourceConfigParser, ResourceKind, REGEX_PREFIX, REGEX_SUFFIX, RID},
 };
 
 const FILTER_DELIMITERS: &[char] = &['.', ','];
@@ -34,11 +33,7 @@ impl DtFilter {
     pub fn from_legacy_config(options: &LegacyFilterConfig, db_type: DbType) -> Result<Self> {
         let mut filter = Self::new(db_type.clone());
         filter.load_legacy_resource_filters(options, &db_type)?;
-        for kind in CommonFilterKind::iter() {
-            if let Some(common) = CommonFilter::from_legacy_config(kind, options, &db_type)? {
-                filter.set_common_filter(kind, common);
-            }
-        }
+        filter.load_common_filters(&options.common_rules, &db_type)?;
         if ResourceKind::Table.depth(&db_type).is_some()
             && !options.where_conditions.trim().is_empty()
         {
@@ -117,57 +112,6 @@ impl DtFilter {
     }
 }
 
-impl CommonFilter {
-    fn from_legacy_config(
-        kind: CommonFilterKind,
-        options: &LegacyFilterConfig,
-        db_type: &DbType,
-    ) -> Result<Option<Self>> {
-        let (key, value) = match kind {
-            CommonFilterKind::Event => ("do_events", options.do_events.as_str()),
-            CommonFilterKind::Ddl => ("do_ddls", options.do_ddls.as_str()),
-            CommonFilterKind::Dcl => ("do_dcls", options.do_dcls.as_str()),
-            CommonFilterKind::Structure => ("do_structures", options.do_structures.as_str()),
-            CommonFilterKind::Cmd => ("ignore_cmds", WILDCARD),
-        };
-        let value = if value.trim().is_empty() {
-            kind.default_include()
-        } else {
-            value
-        };
-        let exclude_set = if kind == CommonFilterKind::Cmd {
-            Self::parse_legacy_values(&options.ignore_cmds, db_type)
-                .context("[filter].ignore_cmds")?
-        } else {
-            HashSet::new()
-        };
-        if value == kind.default_include() && exclude_set.is_empty() {
-            return Ok(None);
-        }
-        let include_set =
-            Self::parse_legacy_values(value, db_type).with_context(|| format!("[filter].{key}"))?;
-        Ok(Some(Self::new(include_set, exclude_set)))
-    }
-
-    fn parse_legacy_values(value: &str, db_type: &DbType) -> Result<HashSet<String>> {
-        let pairs = ResourceConfigParser::escape_pairs(&[]);
-        ConfigTokenParser::parse_config(value, db_type, FILTER_DELIMITERS, Some(&pairs))?
-            .into_iter()
-            .map(|token| {
-                // Legacy parsing validates regex syntax even though common values match literally.
-                if let Some(pattern) = token
-                    .strip_prefix(REGEX_PREFIX)
-                    .and_then(|inner| inner.strip_suffix(REGEX_SUFFIX))
-                {
-                    regex::Regex::new(pattern)
-                        .with_context(|| format!("invalid filter regex {token}"))?;
-                }
-                Ok(token)
-            })
-            .collect()
-    }
-}
-
 impl ExpressionFilter {
     fn parse_legacy_where_conditions(value: &str, db_type: &DbType) -> Result<Self> {
         let mut conditions = HashMap::new();
@@ -233,7 +177,7 @@ mod tests {
     use super::*;
     use crate::{
         config::filter_config::FilterConfig,
-        filter::DtFilter,
+        filter::{CommonFilterKind, DtFilter},
         meta::{
             dcl_meta::dcl_type::DclType, ddl_meta::ddl_type::DdlType, row_type::RowType,
             struct_meta::structure::structure_type::StructureType,

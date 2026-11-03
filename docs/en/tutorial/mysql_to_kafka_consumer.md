@@ -75,11 +75,11 @@ with_field_defs=true
 [source.db]
 include=test_db
 
-[source.event]
-include=insert
-
 [source.table]
 to_topic=*.*:test
+
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -110,12 +110,6 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.db]
 include=test_db,test_db_2
 
-[source.event]
-include=insert,update,delete
-
-[source.ddl]
-include=*
-
 [source.table]
 to_topic=*.*:test
 
@@ -124,6 +118,10 @@ db_type=kafka
 sink_type=write
 url=127.0.0.1:9093
 with_field_defs=true
+
+[filter]
+do_events=insert,update,delete
+do_ddls=*
 
 [parallelizer]
 parallel_type=serial

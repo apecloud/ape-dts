@@ -122,14 +122,14 @@ url=redis://:123456@127.0.0.1:6380
 [source.db]
 include=*
 
-[source.cmd]
-exclude=flushall,flushdb
-
 [sinker]
 db_type=redis
 sink_type=write
 method=restore
 url=redis://:123456@127.0.0.1:6390
+
+[filter]
+ignore_cmds=flushall,flushdb
 
 [pipeline]
 buffer_size=16000

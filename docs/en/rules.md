@@ -30,8 +30,8 @@ route=inventory.orders:archive.order_history
 exclude=inventory.orders.secret*
 route=inventory.orders.id:archive.order_history.order_id
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -149,40 +149,25 @@ WHERE conditions apply to snapshot migration and snapshot data checking, not to 
 
 ## Events, DDL, DCL and structure types
 
-These sections accept exact type names in `include` / `exclude`. A standalone `include=*` selects all types; `include=` selects none. Do not mix `*` with individual type names. `exclude=*` does not exclude every type.
+Type selection retains the existing `[filter]` keys and remains active alongside `[source.*]` object settings. Missing or empty `do_events` and `do_structures` select all types; `do_ddls` and `do_dcls` default to none, and `ignore_cmds` excludes no commands by default. Type names match exactly. A standalone `*` in a `do_*` field selects all types; enumerate the retained types to omit a particular DDL or DCL operation.
 
-| Section | Default when `include` is absent | Common values |
+| `[filter]` key | Default | Common values |
 | --- | --- | --- |
-| `[source.event]` | All | `insert,update,delete` |
-| `[source.ddl]` | None | `create_database,drop_database,alter_database,create_schema,drop_schema,alter_schema,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index` |
-| `[source.dcl]` | None | `create_user,alter_user,create_role,drop_user,drop_role,grant,revoke,set_role` |
-| `[source.structure]` | All | `database,table,constraint,sequence,comment,index,udf,udt,rbac,collection,shardkey` |
-| `[source.cmd]` | All | Lowercase Redis command names, such as `set,del,flushall,flushdb` |
+| `do_events` | All | `insert,update,delete` |
+| `do_ddls` | None | `create_table,alter_table,truncate_table` |
+| `do_dcls` | None | `create_user,grant,revoke` |
+| `do_structures` | All | `database,table,constraint,index,collection,shardkey` |
+| `ignore_cmds` | Exclude none | `flushall,flushdb` |
 
 ```ini
+[filter]
 ; Copy inserts and updates, excluding deletes.
-[source.event]
-include=*
-exclude=delete
-
+do_events=insert,update
 ; Create and alter tables, excluding truncation.
-[source.ddl]
-include=create_table,alter_table,truncate_table
-exclude=truncate_table
-
-; Create users and grant permissions, excluding user deletion.
-[source.dcl]
-include=create_user,grant,drop_user
-exclude=drop_user
-
-; Migrate databases, tables and constraints, excluding ordinary standalone indexes.
-[source.structure]
-include=database,table,constraint,index
-exclude=index
-
-; Skip these commands in Redis CDC.
-[source.cmd]
-exclude=flushall,flushdb
+do_ddls=create_table,alter_table
+do_dcls=create_user,grant
+do_structures=database,table,constraint
+ignore_cmds=flushall,flushdb
 ```
 
 Configure the sections needed by your task. DDL/DCL availability depends on the source, destination and task type. PostgreSQL CDC DDL also requires `ddl_meta_tb` and a capture trigger; see the [PostgreSQL template](../templates/pg_to_pg.md).

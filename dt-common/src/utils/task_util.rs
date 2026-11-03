@@ -75,11 +75,7 @@ mod tests {
             do_tbs: "db4.tb1,db5.*".to_string(),
             ignore_tbs: "".to_string(),
             ignore_cols: "".to_string(),
-            do_events: "".to_string(),
-            do_structures: "".to_string(),
-            do_ddls: "".to_string(),
-            do_dcls: "".to_string(),
-            ignore_cmds: "".to_string(),
+            common_rules: Default::default(),
             where_conditions: "".to_string(),
         });
         let router_config = RouterConfig::Legacy(LegacyRouterConfig {

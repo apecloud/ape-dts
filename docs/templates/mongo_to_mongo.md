@@ -44,8 +44,8 @@ conflict_policy=interrupt
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.structure]
-include=collection
+[filter]
+do_structures=collection
 
 [parallelizer]
 parallel_type=serial
@@ -61,11 +61,11 @@ log4rs_file=./log4rs.yaml
 log_dir=./logs
 ```
 
-- [source.structure]
+- [filter]
 
 | Config        | Description                                                                                                   | Example                   | Default             |
 | :------------ | :------------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------ |
-| do | one or multiple in [collection,shardkey]. `shardkey` is only meaningful when the source collection is sharded | collection,shardkey | \*, which means all |
+| do_structures | one or multiple in [collection,shardkey]. `shardkey` is only meaningful when the source collection is sharded | collection,shardkey | \*, which means all |
 
 Mongo struct migration currently supports databases implicitly through collection creation. It does
 not use a separate Mongo `database` structure type. `collection` creates Mongo collections and
@@ -94,8 +94,8 @@ batch_size=200
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -124,14 +124,14 @@ start_timestamp=1728525445
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mongo
 sink_type=write
 batch_size=200
 url=mongodb://ape_dts:123456@127.0.0.1:27018
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=mongo
@@ -184,14 +184,14 @@ source=change_stream
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mongo
 sink_type=write
 batch_size=200
 url=mongodb://ape_dts:123456@127.0.0.1:27018
+
+[filter]
+do_events=insert,update,delete
 
 [pipeline]
 buffer_size=16000
@@ -232,8 +232,8 @@ batch_size=100
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=mongo
@@ -271,8 +271,8 @@ batch_size=200
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -316,8 +316,8 @@ batch_size=200
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=mongo
@@ -360,8 +360,8 @@ batch_size=100
 [source.collection]
 include=test_db_1.*,test_db_2.*
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=mongo

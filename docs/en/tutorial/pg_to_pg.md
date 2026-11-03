@@ -131,8 +131,8 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -203,8 +203,8 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -256,8 +256,8 @@ db_type=pg
 sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -316,8 +316,8 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -370,14 +370,14 @@ slot_name=ape_test
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=pg
 sink_type=write
 batch_size=200
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -535,17 +535,15 @@ ddl_meta_tb=public.ape_dts_ddl_command
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
-[source.ddl]
-include=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
-
 [sinker]
 db_type=pg
 sink_type=write
 batch_size=200
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
+
+[filter]
+do_events=insert,update,delete
+do_ddls=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 [parallelizer]
 parallel_type=rdb_merge

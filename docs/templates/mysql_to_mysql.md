@@ -38,11 +38,11 @@ buffer_size=100
 | :-------------- | :----------------- | :-------- | :-------- |
 | conflict_policy | interrupt / ignore | interrupt | interrupt |
 
-- [source.structure]
+- [filter]
 
 | Config        | Description                                                           | Example        | Default             |
 | :------------ | :-------------------------------------------------------------------- | :------------- | :------------------ |
-| do | one or multiple in [database,table,constraint,sequence,comment,index] | database,table | \*, which means all |
+| do_structures | one or multiple in [database,table,constraint,sequence,comment,index] | database,table | \*, which means all |
 
 # Snapshot
 
@@ -63,8 +63,8 @@ replace=true
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -94,15 +94,15 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 replace=true
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -140,15 +140,15 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 replace=true
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -176,16 +176,16 @@ log4rs_file=./log4rs.yaml
 - The differences with CDC task config:
 
 ```
-[source.ddl]
-include=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+[filter]
+do_ddls=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 ```
 
-- [source.ddl]
+- [filter]
 
 | Config  | Description                                                                                                                                                                                                                 | Example                             | Default                            |
 | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :--------------------------------- |
-| do | the ddl types to capture and sync to target, it should be one or more among "create_database, drop_database, alter_database, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
+| do_ddls | the ddl types to capture and sync to target, it should be one or more among "create_database, drop_database, alter_database, create_table, alter_table, drop_table, create_index, drop_index, truncate_table, rename_table" | create_table,alter_table,drop_table | empty, which means ignore all ddls |
 
 # Struct check
 
@@ -241,8 +241,8 @@ batch_size=100
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -282,8 +282,8 @@ batch_size=200
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -319,9 +319,6 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=write
@@ -338,6 +335,9 @@ is_enabled=true
 [resumer]
 resume_type=from_target
 table_full_name=apecloud_metadata.apedts_task_position
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -374,8 +374,8 @@ sink_type=write
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=200
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -415,8 +415,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 batch_size=100
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -448,12 +448,12 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.db]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=sql
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial
@@ -484,13 +484,13 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.db]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=sql
 reverse=true
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial

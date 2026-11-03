@@ -4,9 +4,9 @@
 
 ## 未发布：资源规则配置
 
-新增 `[source.<kind>]`，统一配置 `include`、`exclude`、`where_conditions`、`route` 和分发映射 `to_<kind>`。公共过滤项移入 `[source.event]`、`[source.ddl]`、`[source.dcl]`、`[source.structure]`、`[source.cmd]`。
+新增 `[source.<kind>]`，统一配置 `include`、`exclude`、`where_conditions`、`route` 和分发映射 `to_<kind>`。事件、DDL、DCL、结构和命令过滤继续使用 `[filter]` 的原字段。
 
-没有 `[source.*]` 时兼容旧配置；一旦出现任意 source section，整个旧 `[filter]` / `[router]` 不再参与配置。所有适用层级的 exclude 优先于 include，包含和排除规则分别取并集。详见[配置用例](rules.md)和 [Legacy config 迁移说明](legacy_config.md)。
+没有 `[source.*]` 时兼容旧配置；出现任意 source section 后，对象过滤、WHERE 条件和路由使用 source 定义，忽略旧对象字段和 `[router]`；`[filter]` 中的类型和命令过滤仍生效。所有适用层级的 exclude 优先于 include，包含和排除规则分别取并集。详见[配置用例](rules.md)和 [Legacy config 迁移说明](legacy_config.md)。
 
 ## 2.0.26 对比 2.0.25
 

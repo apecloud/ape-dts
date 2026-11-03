@@ -28,12 +28,12 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 [source.table]
 include=test_db.*
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mysql
 sink_type=sql
+[filter]
+do_events=insert,update,delete
+
 ```
 
 execute sqls in source:

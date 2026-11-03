@@ -32,7 +32,7 @@ docker run -d --name dst-mongo \
 # Migrate structures
 
 Mongo structure migration creates selected collections, collection options, and indexes. For
-sharded source collections, set `include=collection,shardkey` in `[source.structure]` and connect the target
+sharded source collections, set `do_structures=collection,shardkey` in `[filter]` and connect the target
 through `mongos` when you want to create the same shard key on the target.
 
 ## Prepare structures
@@ -66,8 +66,8 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [source.db]
 include=test_db
 
-[source.structure]
-include=*
+[filter]
+do_structures=*
 
 [parallelizer]
 parallel_type=serial
@@ -141,8 +141,8 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [source.db]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -215,8 +215,8 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [source.db]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=mongo
@@ -268,8 +268,8 @@ db_type=mongo
 sink_type=write
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=mongo
@@ -328,8 +328,8 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [checker]
 
 
-[source.event]
-include=*
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=mongo
@@ -371,13 +371,13 @@ source=op_log
 [source.db]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=mongo
 sink_type=write
 url=mongodb://ape_dts:123456@127.0.0.1:27018
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=mongo

@@ -107,8 +107,8 @@ batch_size=5000
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -164,14 +164,14 @@ slot_name=ape_test
 [source.schema]
 include=test_db
 
-[source.event]
-include=insert,update,delete
-
 [sinker]
 db_type=clickhouse
 sink_type=write
 url=http://admin:123456@127.0.0.1:8123
 batch_size=5000
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=table

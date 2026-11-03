@@ -237,7 +237,11 @@ mod tests {
     fn common_rules_are_added_on_demand_and_merge_without_duplicate_kinds() {
         let defaults = filter("");
         assert!(defaults.common_filters.is_empty());
-        let mut f = filter("[source.event]\ninclude=insert\nexclude=delete");
+        let mut f = filter("[filter]\ndo_events=insert");
+        f.set_common_filter(
+            CommonFilterKind::Event,
+            CommonFilter::new(HashSet::new(), HashSet::from(["delete".into()])),
+        );
         assert_eq!(f.common_filters.len(), 1);
         assert!(f.filter_common(CommonFilterKind::Event, "update"));
         let additional = CommonFilter::new(
@@ -269,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn command_rules_are_literal_in_both_config_and_rule_api() {
+    fn command_rules_are_literal_in_rule_api() {
         let names = [
             "GET",
             "SET*",
@@ -280,9 +284,19 @@ mod tests {
             "`GET`",
             "FT.SEARCH",
         ];
-        let rules = names.iter().map(|name| (*name).to_owned()).collect();
-        let included = filter(&format!("[source.cmd]\ninclude={}", names.join(",")));
-        let with_excludes = filter(&format!("[source.cmd]\nexclude={},*", names.join(",")));
+        let rules: HashSet<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        let mut included = DtFilter::new(DbType::Mysql);
+        included.set_common_filter(
+            CommonFilterKind::Cmd,
+            CommonFilter::new(rules.clone(), HashSet::new()),
+        );
+        let mut excludes = rules.clone();
+        excludes.insert("*".into());
+        let mut with_excludes = DtFilter::new(DbType::Mysql);
+        with_excludes.set_common_filter(
+            CommonFilterKind::Cmd,
+            CommonFilter::new(HashSet::from(["*".into()]), excludes),
+        );
         let mut direct = DtFilter::new(DbType::Mysql);
         direct.set_common_filter(
             CommonFilterKind::Cmd,
@@ -435,7 +449,7 @@ mod tests {
 
     #[test]
     fn runtime_filtering_does_not_reject_resource_depths_or_kinds() {
-        let f = filter("[source.table]\ninclude=db.orders\n[source.ddl]\ninclude=*");
+        let f = filter("[source.table]\ninclude=db.orders\n[filter]\ndo_ddls=*");
         for (id, excluded) in [
             (rid!(""), false),
             (rid!("db"), false),

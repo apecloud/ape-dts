@@ -2,7 +2,7 @@
 
 Use this reference to maintain existing `[filter]` / `[router]` files. For task configuration, see the [configuration reference](config.md) and [filtering and routing](rules.md).
 
-These sections are read only when the file contains **no `[source.*]` section**. Adding any `[source.*]` section, including an empty one, disables both `[filter]` and `[router]` in full. Migrate resource selection, event types, WHERE conditions and routing together.
+The `[filter]` keys `do_events`, `do_ddls`, `do_dcls`, `do_structures` and `ignore_cmds` always remain active. Without `[source.*]`, legacy object filters, WHERE conditions and `[router]` are used. Any `[source.*]` section, including an empty one, replaces those object settings with source definitions; missing source fields do not fall back to legacy object settings.
 
 ## [filter]
 
@@ -101,9 +101,9 @@ Use the same identifier quoting as `[filter]`.
 | filter do_dbs / ignore_dbs | `include / exclude` in the top-level resource section (`source.db` for MySQL, `source.schema` for PG) |
 | do_tbs / ignore_tbs | `source.table` include / exclude |
 | ignore_cols JSON | `source.column` exclude with full column paths |
-| do_events / do_ddls / do_dcls / do_structures / ignore_cmds | common section include / exclude |
+| do_events / do_ddls / do_dcls / do_structures / ignore_cmds | Keep in `[filter]`, with unchanged fields and defaults |
 | where_conditions JSON | `source.table` where_conditions with quoted SQL strings |
 | router db_map / tb_map / col_map | corresponding resource route |
 | router topic_map | `to_topic` in `[source.table]`, the topic case of general `to_<kind>` dispatch mappings |
 
-Include the schema when migrating MSSQL's old two-segment table names. Do not keep legacy filter settings while adding only new routing sections: the entire configuration mode changes.
+Include the schema when migrating MSSQL's old two-segment table names. Do not keep legacy object filters while adding only new routing sections: any source section switches object configuration. Type and command filters remain in `[filter]`.

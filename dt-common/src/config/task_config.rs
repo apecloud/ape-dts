@@ -1522,7 +1522,7 @@ parallel_type={parallel_type}
 
     #[test]
     fn redis_snapshot_and_cdc_uses_cdc_task_type() {
-        let config = load_temp_task_config(
+        let config = load_task_config(
             r#"[extractor]
 db_type=redis
 extract_type=snapshot_and_cdc
@@ -1690,17 +1690,25 @@ parallel_type=rdb_merge
         use crate::rid;
         for section in ["db", "database"] {
             let config = load_task_config(&basic_snapshot_config(&format!(
-                "[source.{section}]\ninclude=inventory\nroute=inventory:archive\n[source.column]\nexclude=inventory.*.secret"
+                "[filter]\ndo_dbs=legacy\ndo_events=insert\ndo_ddls=create_table\ndo_dcls=grant\ndo_structures=table\nignore_cmds=SET\n[source.{section}]\ninclude=inventory\nroute=inventory:archive\n[source.column]\nexclude=inventory.*.secret"
             ))).unwrap();
             let filter = config.build_filter().unwrap();
             let router = config.build_router().unwrap().unwrap();
             let source = rid!("inventory", "orders");
+            assert!(filter.filter(rid!("legacy")).unwrap());
             assert!(!filter.filter(&source).unwrap());
             assert!(filter.filter(rid!("other", "orders")).unwrap());
             assert!(filter
                 .filter(rid!("inventory", "orders", "secret"))
                 .unwrap());
             let target = router.forward::<RID>(&source).unwrap();
+            assert!(filter
+                .filter_event(&source, &crate::meta::row_type::RowType::Update)
+                .unwrap());
+            assert!(!filter.filter_common(crate::filter::CommonFilterKind::Ddl, "create_table"));
+            assert!(!filter.filter_common(crate::filter::CommonFilterKind::Dcl, "grant"));
+            assert!(filter.filter_common(crate::filter::CommonFilterKind::Structure, "index"));
+            assert!(filter.filter_cmd("SET"));
             assert_eq!(target, rid!("archive", "orders"));
             assert_eq!(router.reverse::<RID>(&target).unwrap(), source);
         }
