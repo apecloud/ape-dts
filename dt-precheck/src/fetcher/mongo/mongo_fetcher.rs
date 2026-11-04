@@ -7,8 +7,8 @@ use dt_common::{
         config_enums::DbType, connection_auth_config::ConnectionAuthConfig, task_config::APE_DTS,
     },
     error::DtError,
+    filter::DtFilter,
     meta::mongo::mongo_version::get_server_version,
-    rdb_filter::RdbFilter,
 };
 use dt_task::task_util::TaskUtil;
 use mongodb::{
@@ -27,7 +27,7 @@ pub struct MongoFetcher {
     pub connection_auth: ConnectionAuthConfig,
     pub is_direct_connection: Option<bool>,
     pub is_source: bool,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
 }
 
 #[async_trait]

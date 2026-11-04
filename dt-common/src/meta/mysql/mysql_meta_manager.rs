@@ -7,7 +7,7 @@ use super::{
     mysql_tb_meta::MysqlTbMeta,
 };
 use crate::meta::{mysql::mysql_col_type::MysqlColType, row_data::RowData};
-use crate::{config::config_enums::DbType, meta::ddl_meta::ddl_data::DdlData};
+use crate::{config::config_enums::DbType, meta::ddl_meta::ddl_data::DdlData, resource::RID};
 
 #[derive(Clone)]
 pub struct MysqlMetaManager {
@@ -69,7 +69,7 @@ impl MysqlMetaManager {
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
-        let (schema, tb) = ddl_data.get_schema_tb();
+        let [schema, tb] = ddl_data.get_id::<RID>().into_left();
         self.invalidate_cache(&schema, &tb);
     }
 

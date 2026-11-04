@@ -242,17 +242,17 @@ impl MssqlTestEndpoint {
         db: &str,
         schema: &str,
         tb: &str,
-        ignore_cols: Option<&HashSet<String>>,
+        excluded_columns: Option<&HashSet<String>>,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
         let pool = self.create_pool().await?;
         let mut meta_manager = Self::create_meta_manager(pool).await?;
         let tb_meta = meta_manager.get_tb_meta(db, schema, tb).await?.clone();
-        let mut compare_ignore_cols = tb_meta.non_comparable_cols();
-        if let Some(ignore_cols) = ignore_cols {
-            compare_ignore_cols.extend(ignore_cols.iter().cloned());
+        let mut comparison_excluded_columns = tb_meta.non_comparable_cols();
+        if let Some(excluded_columns) = excluded_columns {
+            comparison_excluded_columns.extend(excluded_columns.iter().cloned());
         }
-        let query_builder = MssqlTableSqlBuilder::new(&tb_meta, Some(&compare_ignore_cols));
+        let query_builder = MssqlTableSqlBuilder::new(&tb_meta, Some(&comparison_excluded_columns));
         let cols = query_builder.build_extract_cols_str()?;
         if cols.is_empty() {
             bail!("MSSQL compare has no comparable columns for {db}.{schema}.{tb}");
@@ -262,7 +262,7 @@ impl MssqlTestEndpoint {
             .order_cols
             .iter()
             .chain(tb_meta.basic.cols.iter())
-            .find(|col| !compare_ignore_cols.contains(*col))
+            .find(|col| !comparison_excluded_columns.contains(*col))
             .context("MSSQL compare has no column available for ordering")?;
         let sql = format!(
             "SELECT {cols} FROM {} {where_sql} ORDER BY {} ASC",
@@ -273,7 +273,9 @@ impl MssqlTestEndpoint {
         let mut client = self.connect().await?;
         let rows = client.simple_query(sql).await?.into_first_result().await?;
         rows.iter()
-            .map(|row| RowData::from_mssql_row(row, &tb_meta, &Some(&compare_ignore_cols), None))
+            .map(|row| {
+                RowData::from_mssql_row(row, &tb_meta, &Some(&comparison_excluded_columns), None)
+            })
             .collect()
     }
 

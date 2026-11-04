@@ -164,4 +164,16 @@ mod test {
     async fn check_recheck_struct_recover_test() {
         TestBase::run_recheck_test("mysql_to_mysql/check/recheck_struct_recover").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_rules_filter_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/rules_filter_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_rules_router_test() {
+        TestBase::run_check_test("mysql_to_mysql/check/rules_router_test").await;
+    }
 }

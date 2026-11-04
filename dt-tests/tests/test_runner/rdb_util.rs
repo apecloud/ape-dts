@@ -1,32 +1,30 @@
 use std::collections::HashSet;
 
-use dt_common::config::config_enums::DbType;
 use dt_common::meta::{
     mysql::{mysql_meta_manager::MysqlMetaManager, mysql_tb_meta::MysqlTbMeta},
     pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
     row_data::RowData,
 };
+use dt_common::{config::config_enums::DbType, resource::RID, utils::sql_util::SqlUtil};
 use dt_connector::rdb_query_builder::RdbQueryBuilder;
 use futures::TryStreamExt;
 use sqlx::{MySql, Pool, Postgres};
 
 use super::mssql_test_endpoint::MssqlTestEndpoint;
 
-pub type DbSchemaTb = (String, String, String);
-
 pub struct RdbUtil {}
 
 impl RdbUtil {
     pub async fn fetch_data_mysql(
         conn_pool: &Pool<MySql>,
-        ignore_cols: Option<&HashSet<String>>,
-        db_schema_tb: &DbSchemaTb,
+        excluded_columns: Option<&HashSet<String>>,
+        table: &RID,
         condition: &str,
     ) -> anyhow::Result<Vec<RowData>> {
         Self::fetch_data_mysql_compatible(
             conn_pool,
-            ignore_cols,
-            db_schema_tb,
+            excluded_columns,
+            table,
             &DbType::Mysql,
             condition,
         )
@@ -35,17 +33,21 @@ impl RdbUtil {
 
     pub async fn fetch_data_mysql_compatible(
         conn_pool: &Pool<MySql>,
-        ignore_cols: Option<&HashSet<String>>,
-        db_schema_tb: &DbSchemaTb,
+        excluded_columns: Option<&HashSet<String>>,
+        table: &RID,
         db_type: &DbType,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        let tb_meta = Self::get_tb_meta_mysql_compatible(conn_pool, db_schema_tb, db_type).await?;
-        let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, ignore_cols);
+        let tb_meta = Self::get_tb_meta_mysql_compatible(conn_pool, table, db_type).await?;
+        let query_builder = RdbQueryBuilder::new_for_mysql(&tb_meta, excluded_columns);
         let cols_str = query_builder.build_extract_cols_str().unwrap();
         let sql = format!(
-            "SELECT {} FROM `{}`.`{}` {} ORDER BY `{}` ASC",
-            cols_str, &db_schema_tb.1, &db_schema_tb.2, where_sql, &tb_meta.basic.cols[0],
+            "SELECT {} FROM {}.{} {} ORDER BY {} ASC",
+            cols_str,
+            SqlUtil::escape_by_db_type(table.segment(0), db_type),
+            SqlUtil::escape_by_db_type(table.segment(1), db_type),
+            where_sql,
+            SqlUtil::escape_by_db_type(&tb_meta.basic.cols[0], db_type),
         );
 
         let mut rows = if matches!(db_type, DbType::Mysql | DbType::Tidb) {
@@ -65,18 +67,21 @@ impl RdbUtil {
 
     pub async fn fetch_data_pg(
         conn_pool: &Pool<Postgres>,
-        ignore_cols: Option<&HashSet<String>>,
-        db_schema_tb: &DbSchemaTb,
+        excluded_columns: Option<&HashSet<String>>,
+        table: &RID,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
-        let tb_meta = Self::get_tb_meta_pg(conn_pool, db_schema_tb).await?;
-        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, ignore_cols);
+        let tb_meta = Self::get_tb_meta_pg(conn_pool, table).await?;
+        let query_builder = RdbQueryBuilder::new_for_pg(&tb_meta, excluded_columns);
 
-        let tb_meta = Self::get_tb_meta_pg(conn_pool, db_schema_tb).await?;
         let cols_str = query_builder.build_extract_cols_str().unwrap();
         let sql = format!(
-            r#"SELECT {} FROM "{}"."{}" {} ORDER BY "{}" ASC"#,
-            cols_str, &db_schema_tb.1, &db_schema_tb.2, where_sql, &tb_meta.basic.cols[0],
+            "SELECT {} FROM {}.{} {} ORDER BY {} ASC",
+            cols_str,
+            SqlUtil::escape_by_db_type(table.segment(0), &DbType::Pg),
+            SqlUtil::escape_by_db_type(table.segment(1), &DbType::Pg),
+            where_sql,
+            SqlUtil::escape_by_db_type(&tb_meta.basic.cols[0], &DbType::Pg),
         );
         let query = sqlx::query(&sql);
         let mut rows = query.fetch(conn_pool);
@@ -92,16 +97,16 @@ impl RdbUtil {
 
     pub async fn fetch_data_mssql(
         endpoint: &MssqlTestEndpoint,
-        ignore_cols: Option<&HashSet<String>>,
-        db_schema_tb: &DbSchemaTb,
+        excluded_columns: Option<&HashSet<String>>,
+        table: &RID,
         where_sql: &str,
     ) -> anyhow::Result<Vec<RowData>> {
         endpoint
             .fetch_table(
-                &db_schema_tb.0,
-                &db_schema_tb.1,
-                &db_schema_tb.2,
-                ignore_cols,
+                table.segment(0),
+                table.segment(1),
+                table.segment(2),
+                excluded_columns,
                 where_sql,
             )
             .await
@@ -109,41 +114,41 @@ impl RdbUtil {
 
     pub async fn get_tb_cols_mssql(
         endpoint: &MssqlTestEndpoint,
-        db_schema_tb: &DbSchemaTb,
+        table: &RID,
     ) -> anyhow::Result<Vec<String>> {
         endpoint
-            .get_table_columns(&db_schema_tb.0, &db_schema_tb.1, &db_schema_tb.2)
+            .get_table_columns(table.segment(0), table.segment(1), table.segment(2))
             .await
     }
 
     pub async fn get_tb_meta_mysql(
         conn_pool: &Pool<MySql>,
-        db_schema_tb: &DbSchemaTb,
+        table: &RID,
     ) -> anyhow::Result<MysqlTbMeta> {
-        Self::get_tb_meta_mysql_compatible(conn_pool, db_schema_tb, &DbType::Mysql).await
+        Self::get_tb_meta_mysql_compatible(conn_pool, table, &DbType::Mysql).await
     }
 
     pub async fn get_tb_meta_mysql_compatible(
         conn_pool: &Pool<MySql>,
-        db_schema_tb: &DbSchemaTb,
+        table: &RID,
         db_type: &DbType,
     ) -> anyhow::Result<MysqlTbMeta> {
         let mut meta_manager =
             MysqlMetaManager::new_mysql_compatible(conn_pool.to_owned(), db_type.to_owned())
                 .await?;
         Ok(meta_manager
-            .get_tb_meta(&db_schema_tb.1, &db_schema_tb.2)
+            .get_tb_meta(table.segment(0), table.segment(1))
             .await?
             .to_owned())
     }
 
     pub async fn get_tb_meta_pg(
         conn_pool: &Pool<Postgres>,
-        db_schema_tb: &DbSchemaTb,
+        table: &RID,
     ) -> anyhow::Result<PgTbMeta> {
         let mut meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
         Ok(meta_manager
-            .get_tb_meta(&db_schema_tb.1, &db_schema_tb.2)
+            .get_tb_meta(table.segment(0), table.segment(1))
             .await?
             .to_owned())
     }

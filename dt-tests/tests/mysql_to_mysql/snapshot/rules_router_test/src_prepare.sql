@@ -1,0 +1,13 @@
+DROP DATABASE IF EXISTS `rules_inventory`;
+CREATE DATABASE `rules_inventory`;
+DROP DATABASE IF EXISTS `rules_archive`;
+CREATE DATABASE `rules_archive`;
+DROP DATABASE IF EXISTS `rules_plain`;
+CREATE DATABASE `rules_plain`;
+CREATE TABLE `rules_inventory`.`orders` (`id` INT PRIMARY KEY, `note` VARCHAR(80), `secret` VARCHAR(80));
+CREATE TABLE `rules_inventory`.`audit` (`id` INT PRIMARY KEY, `note` VARCHAR(80), `secret` VARCHAR(80));
+CREATE TABLE `rules_archive`.`unchained` (`id` INT PRIMARY KEY, `note` VARCHAR(80), `secret` VARCHAR(80));
+CREATE TABLE `rules_plain`.`identity` (`id` INT PRIMARY KEY, `note` VARCHAR(80), `secret` VARCHAR(80));
+CREATE TABLE `rules_inventory`.`order,log:1` (`id` INT PRIMARY KEY, `note` VARCHAR(80), `secret` VARCHAR(80));
+CREATE TABLE `rules_inventory`.`literal*` (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
+CREATE TABLE `rules_inventory`.`literal_other` (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));

@@ -15,6 +15,7 @@ use crate::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, DtOptionExt, DtResultExt, ErrorObject},
     meta::{ddl_meta::ddl_data::DdlData, rdb_meta_manager::RDB_PRIMARY_KEY},
+    resource::RID,
 };
 
 #[derive(Clone)]
@@ -161,7 +162,7 @@ impl PgMetaManager {
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
-        let (schema, tb) = ddl_data.get_schema_tb();
+        let [schema, tb] = ddl_data.get_id::<RID>().into_left();
         self.invalidate_cache(&schema, &tb);
     }
 
@@ -331,8 +332,8 @@ impl PgMetaManager {
     }
 
     async fn get_oid(conn_pool: &Pool<Postgres>, schema: &str, tb: &str) -> anyhow::Result<i32> {
-        let sql = format!(r#"SELECT '"{}"."{}"'::regclass::oid;"#, schema, tb);
-        let mut rows = sqlx::query(&sql).fetch(conn_pool);
+        let sql = "SELECT format('%I.%I', $1::text, $2::text)::regclass::oid AS oid";
+        let mut rows = sqlx::query(sql).bind(schema).bind(tb).fetch(conn_pool);
         if let Some(row) = rows.try_next().await? {
             let oid: i32 = row.try_get_unchecked("oid")?;
             return Ok(oid);

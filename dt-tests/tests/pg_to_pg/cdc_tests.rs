@@ -76,6 +76,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_column_scope_filter_test() {
+        TestBase::run_cdc_test("pg_to_pg/cdc/column_scope_filter_test", 3000, 4000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_route_test() {
         TestBase::run_cdc_test("pg_to_pg/cdc/route_test", 3000, 4000).await;
     }
@@ -193,5 +199,17 @@ mod test {
     #[serial]
     async fn cdc_to_reverse_sql_test() {
         TestBase::run_cdc_to_sql_test("pg_to_pg/cdc/to_sql_test", true, 3000, 4000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_rules_filter_test() {
+        TestBase::run_cdc_test("pg_to_pg/cdc/rules_filter_test", 3000, 5000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_rules_router_test() {
+        TestBase::run_cdc_test("pg_to_pg/cdc/rules_router_test", 3000, 5000).await;
     }
 }

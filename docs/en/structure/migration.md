@@ -53,6 +53,7 @@ Thus, we offer 2 types of filtering:
 ```
 [filter]
 do_structures=database,table
+
 ```
 
 ## Migrate indexes and constraints
@@ -60,6 +61,7 @@ do_structures=database,table
 ```
 [filter]
 do_structures=constraint,index
+
 ```
 
 ## MongoDB structure types
@@ -67,6 +69,7 @@ do_structures=constraint,index
 ```
 [filter]
 do_structures=collection,shardkey
+
 ```
 
 MongoDB does not use a separate `database` structure type. `collection` creates selected

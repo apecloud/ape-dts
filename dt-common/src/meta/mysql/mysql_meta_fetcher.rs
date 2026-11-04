@@ -18,6 +18,7 @@ use crate::{
         rdb_tb_meta::{RdbTbMeta, SortDirection},
         row_data::RowData,
     },
+    resource::RID,
     utils::sql_util::SqlUtil,
 };
 
@@ -72,7 +73,7 @@ impl MysqlMetaFetcher {
     }
 
     pub fn invalidate_cache_by_ddl_data(&mut self, ddl_data: &DdlData) {
-        let (schema, tb) = ddl_data.get_schema_tb();
+        let [schema, tb] = ddl_data.get_id::<RID>().into_left();
         self.invalidate_cache(&schema, &tb);
     }
 

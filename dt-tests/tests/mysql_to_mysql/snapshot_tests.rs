@@ -213,4 +213,16 @@ mod test {
     async fn snapshot_big_packet_test() {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/big_packet_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_filter_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/rules_filter_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_router_test() {
+        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/rules_router_test").await;
+    }
 }

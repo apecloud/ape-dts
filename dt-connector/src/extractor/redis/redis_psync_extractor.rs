@@ -8,12 +8,14 @@ use std::{
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::{
     config::{
         config_enums::{DbType, ExtractType},
         config_token_parser::{ConfigTokenParser, TokenEscapePair},
     },
     error::DtError,
+    filter::DtFilter,
     log_debug, log_error, log_info, log_position, log_warn,
     meta::{
         dt_data::DtData,
@@ -21,7 +23,6 @@ use dt_common::{
         redis::{redis_entry::RedisEntry, redis_object::RedisCmd},
         syncer::Syncer,
     },
-    rdb_filter::RdbFilter,
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
 use tokio::{sync::Mutex, time::Instant};
@@ -52,7 +53,7 @@ pub struct RedisPsyncExtractor {
     pub heartbeat_interval_secs: u64,
     pub heartbeat_key: String,
     pub syncer: Arc<Mutex<Syncer>>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub extract_type: ExtractType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
     pub cluster_node: Option<RedisPsyncNode>,
@@ -623,13 +624,13 @@ impl RedisPsyncExtractor {
     pub async fn push_to_buf(
         base_extractor: &BaseExtractor,
         extract_state: &mut ExtractState,
-        filter: &mut RdbFilter,
+        filter: &mut DtFilter,
         mut entry: RedisEntry,
         position: Position,
     ) -> anyhow::Result<()> {
         // currently only support db filter
         entry.data_size = entry.get_data_malloc_size();
-        if filter.filter_schema(&entry.db_id.to_string()) {
+        if filter.filter(rid!(entry.db_id.to_string()))? {
             extract_state.record_extracted_metrics(1, entry.data_size as u64);
             base_extractor
                 .push_dt_data(extract_state, DtData::Heartbeat {}, position)

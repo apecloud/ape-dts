@@ -1,4 +1,6 @@
 use anyhow::bail;
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::{
         config_enums::DbType,
@@ -8,14 +10,13 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::{DtError, DtErrorContextExt, Stage},
-    rdb_filter::RdbFilter,
+    filter::DtFilter,
     utils::{
         redis_util::RedisUtil,
         sql_util::{CharEscapePair, InnerEscapeMode, SqlUtil},
         time_util::TimeUtil,
     },
 };
-use dt_connector::rdb_router::RdbRouter;
 use redis::Value;
 
 use super::{
@@ -29,8 +30,8 @@ pub struct RedisTestRunner {
     src_conn: RedisClusterConnection,
     dst_conn: RedisClusterConnection,
     redis_util: RedisTestUtil,
-    filter: RdbFilter,
-    router: Option<RdbRouter>,
+    filter: DtFilter,
+    router: Option<DtRouter>,
 }
 
 impl RedisTestRunner {
@@ -74,6 +75,8 @@ impl RedisTestRunner {
         }
 
         let config = TaskConfig::new(&base.task_config_file).unwrap();
+        let router = config.build_router()?;
+
         let src_conn = match config.extractor {
             ExtractorConfig::RedisSnapshot {
                 url,
@@ -117,8 +120,7 @@ impl RedisTestRunner {
         };
 
         let redis_util = RedisTestUtil::new(escape_pairs);
-        let filter = RdbFilter::from_config(&config.filter, &DbType::Redis)?;
-        let router = RdbRouter::from_config(&config.router, &DbType::Redis)?;
+        let filter = DtFilter::from_config(&config.filter, DbType::Redis)?;
         Ok(Self {
             base,
             src_conn,
@@ -232,7 +234,8 @@ impl RedisTestRunner {
         let dst_db = self
             .router
             .as_ref()
-            .map(|router| router.get_schema_map(db).to_string())
+            .map(|router| router.forward::<String>(rid!(db)))
+            .transpose()?
             .unwrap_or_else(|| db.to_string());
         self.redis_util
             .execute_cmd_in_cluster(&mut self.src_conn, &format!("SELECT {}", db));
@@ -370,7 +373,7 @@ impl RedisTestRunner {
                 src_kvs, dst_kvs
             );
 
-            if self.filter.filter_schema(db) {
+            if self.filter.filter(rid!(db)).unwrap() {
                 println!("filtered, db: {}, key: {}", db, key);
                 assert_eq!(dst_kvs.len(), 0);
             } else {
@@ -500,7 +503,7 @@ impl RedisTestRunner {
             cmd, src_to_compare, dst_to_compare
         );
 
-        if self.filter.filter_schema(db) {
+        if self.filter.filter(rid!(db)).unwrap() {
             println!("filtered, db: {}, key: {}", db, key);
             match dst_to_compare {
                 Value::Array(v) | Value::Set(v) => assert_eq!(v, &[]),

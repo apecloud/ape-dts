@@ -16,18 +16,8 @@ db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 conflict_policy=interrupt
 
-[filter]
-do_dbs=test_db
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=
-do_structures=
-
-[router]
-db_map=
-tb_map=
-col_map=
+[source.db]
+include=test_db
 
 [runtime]
 log_level=info
@@ -42,13 +32,13 @@ checkpoint_interval_secs=10
 buffer_size=100
 ```
 
-- [filter]
+- [sinker]
 
 | Config          | Description        | Example   | Default   |
 | :-------------- | :----------------- | :-------- | :-------- |
 | conflict_policy | interrupt / ignore | interrupt | interrupt |
 
-- [sinker]
+- [filter]
 
 | Config        | Description                                                           | Example        | Default             |
 | :------------ | :-------------------------------------------------------------------- | :------------- | :------------------ |
@@ -70,17 +60,11 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=200
 replace=true
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert
+[source.table]
+include=test_db.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -107,12 +91,8 @@ binlog_filename=mysql-bin.000035
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert,update,delete
+[source.table]
+include=test_db.*
 
 [sinker]
 db_type=mysql
@@ -121,10 +101,8 @@ batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 replace=true
 
-[router]
-tb_map=
-col_map=
-db_map=
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -159,12 +137,8 @@ gtid_set=6d3960f6-4b36-11ef-8614-0242ac110002:1-10,787d08c4-4b36-11ef-8614-0242a
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert,update,delete
+[source.table]
+include=test_db.*
 
 [sinker]
 db_type=mysql
@@ -173,10 +147,8 @@ batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 replace=true
 
-[router]
-tb_map=
-col_map=
-db_map=
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -206,6 +178,7 @@ log4rs_file=./log4rs.yaml
 ```
 [filter]
 do_ddls=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+
 ```
 
 - [filter]
@@ -230,17 +203,8 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 
 
-[filter]
-do_dbs=test_db
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=
-
-[router]
-db_map=
-tb_map=
-col_map=
+[source.db]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -274,17 +238,11 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 batch_size=100
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert
+[source.table]
+include=test_db.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -321,17 +279,11 @@ replace=true
 [checker]
 batch_size=200
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert
+[source.table]
+include=test_db.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -364,12 +316,8 @@ heartbeat_interval_secs=1
 heartbeat_tb=heartbeat_db.ape_dts_heartbeat
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=test_db.*
-ignore_tbs=
-do_events=insert,update,delete
+[source.table]
+include=test_db.*
 
 [sinker]
 db_type=mysql
@@ -388,10 +336,8 @@ is_enabled=true
 resume_type=from_target
 table_full_name=apecloud_metadata.apedts_task_position
 
-[router]
-tb_map=
-col_map=
-db_map=
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -429,16 +375,7 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=200
 
 [filter]
-do_dbs=
-ignore_dbs=
-do_tbs=
-ignore_tbs=
 do_events=*
-
-[router]
-db_map=
-tb_map=
-col_map=
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -479,16 +416,7 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 batch_size=100
 
 [filter]
-do_dbs=
-ignore_dbs=
-do_tbs=
-ignore_tbs=
 do_events=*
-
-[router]
-db_map=
-tb_map=
-col_map=
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -517,16 +445,15 @@ binlog_filename=mysql-bin.000035
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=insert,update,delete
+[source.db]
+include=test_db
 
 [sinker]
 db_type=mysql
 sink_type=sql
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial
@@ -554,17 +481,16 @@ binlog_filename=mysql-bin.000035
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=insert,update,delete
+[source.db]
+include=test_db
 
 [sinker]
 db_type=mysql
 sink_type=sql
 reverse=true
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial

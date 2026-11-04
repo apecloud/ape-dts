@@ -4,6 +4,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
+    filter::DtFilter,
     log_error, log_info,
     meta::{
         mongo::mongo_shard::{list_shard_collections, MongoShardCollection},
@@ -17,7 +18,6 @@ use dt_common::{
             structure::structure_type::StructureType,
         },
     },
-    rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
 use mongodb::{bson::doc, Client};
@@ -29,7 +29,7 @@ use crate::{sinker::base_sinker::BaseSinker, Sinker};
 pub struct MongoStructSinker {
     pub mongo_client: Client,
     pub conflict_policy: ConflictPolicyEnum,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub base_sinker: BaseSinker,
     pub target_shard_collections: HashMap<String, MongoShardCollection>,
     pub is_target_mongos: bool,

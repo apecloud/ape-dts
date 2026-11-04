@@ -3,6 +3,7 @@ use std::sync::{
     Arc,
 };
 
+use dt_common::router::DtRouter;
 use dt_common::{
     config::{
         config_enums::DbType,
@@ -24,7 +25,7 @@ use dt_common::{
 };
 
 use super::extractor_monitor::ExtractorMonitor;
-use crate::{data_marker::DataMarker, rdb_router::RdbRouter};
+use crate::data_marker::DataMarker;
 
 pub struct ExtractState {
     pub monitor: ExtractorMonitor,
@@ -132,7 +133,7 @@ impl ExtractState {
 #[derive(Clone)]
 pub struct BaseExtractor {
     pub buffer: Arc<DtQueue>,
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub shut_down: Arc<AtomicBool>,
 }
 
@@ -173,7 +174,7 @@ impl BaseExtractor {
         position: Position,
     ) -> anyhow::Result<()> {
         let row_data = if let Some(router) = &self.router {
-            router.route_row(row_data)
+            router.route_row(row_data)?
         } else {
             row_data
         };
@@ -188,7 +189,7 @@ impl BaseExtractor {
         position: Position,
     ) -> anyhow::Result<()> {
         let ddl_data = if let Some(router) = &self.router {
-            router.route_ddl(ddl_data)
+            router.route_ddl(ddl_data)?
         } else {
             ddl_data
         };
@@ -220,7 +221,7 @@ impl BaseExtractor {
         struct_data: StructData,
     ) -> anyhow::Result<()> {
         let struct_data = if let Some(router) = &self.router {
-            router.route_struct(struct_data)
+            router.route_struct(struct_data)?
         } else {
             struct_data
         };

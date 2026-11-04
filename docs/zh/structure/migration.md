@@ -52,6 +52,7 @@ conflict_policy=interrupt
 ```
 [filter]
 do_structures=database,table
+
 ```
 
 ## 只迁移 索引 + 约束
@@ -59,6 +60,7 @@ do_structures=database,table
 ```
 [filter]
 do_structures=constraint,index
+
 ```
 
 ## MongoDB 结构类型
@@ -66,6 +68,7 @@ do_structures=constraint,index
 ```
 [filter]
 do_structures=collection,shardkey
+
 ```
 
 MongoDB 不使用独立的 `database` 结构类型。`collection` 会创建选中的 collection 并同步

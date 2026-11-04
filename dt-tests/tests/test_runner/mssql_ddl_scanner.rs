@@ -1,6 +1,6 @@
-pub(super) fn extract_created_tables(
-    batches: &[String],
-) -> anyhow::Result<Vec<(String, String, String)>> {
+use dt_common::resource::RID;
+
+pub fn extract_created_tables(batches: &[String]) -> anyhow::Result<Vec<RID>> {
     let mut db_schema_tbs = Vec::new();
     for batch in batches {
         let mut scanner = MssqlDdlScanner::new(batch);
@@ -32,11 +32,7 @@ pub(super) fn extract_created_tables(
                 "MSSQL test table must be explicitly qualified as database.schema.table: {}",
                 identifiers.join(".")
             );
-            db_schema_tbs.push((
-                identifiers.remove(0),
-                identifiers.remove(0),
-                identifiers.remove(0),
-            ));
+            db_schema_tbs.push(RID::new(identifiers));
         }
     }
     Ok(db_schema_tbs)
@@ -240,6 +236,8 @@ impl<'a> MssqlDdlScanner<'a> {
 mod tests {
     use std::{fs, path::Path};
 
+    use dt_common::rid;
+
     use super::extract_created_tables;
 
     fn collect_sql_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
@@ -282,31 +280,11 @@ mod tests {
         assert_eq!(
             db_tbs,
             vec![
-                (
-                    "database_name".to_string(),
-                    "dbo".to_string(),
-                    "orders".to_string()
-                ),
-                (
-                    "database.with.dot".to_string(),
-                    "schema.with.dot".to_string(),
-                    "table with space".to_string()
-                ),
-                (
-                    "escaped]database".to_string(),
-                    "escaped]schema".to_string(),
-                    "escaped]table".to_string()
-                ),
-                (
-                    "quoted\"database".to_string(),
-                    "quoted\"schema".to_string(),
-                    "quoted\"table".to_string()
-                ),
-                (
-                    "database_name".to_string(),
-                    "audit".to_string(),
-                    "events".to_string()
-                ),
+                rid!("database_name", "dbo", "orders"),
+                rid!("database.with.dot", "schema.with.dot", "table with space"),
+                rid!("escaped]database", "escaped]schema", "escaped]table"),
+                rid!("quoted\"database", "quoted\"schema", "quoted\"table"),
+                rid!("database_name", "audit", "events"),
             ]
         );
     }

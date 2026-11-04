@@ -1,6 +1,6 @@
+use crate::filter::DtFilter;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::{schema::Schema, structure_type::StructureType};
-use crate::rdb_filter::RdbFilter;
 
 #[derive(Debug, Clone)]
 pub struct PgCreateSchemaStatement {
@@ -12,7 +12,7 @@ impl PgCreateSchemaStatement {
         self.schema.name = dst_schema.to_string();
     }
 
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if filter.filter_structure(&StructureType::Database) {
             return Ok(sqls);

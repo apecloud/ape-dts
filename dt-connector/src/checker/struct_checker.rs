@@ -7,10 +7,14 @@ use std::{
 use anyhow::{bail, ensure, Context};
 use async_mutex::Mutex;
 use chrono::Local;
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, Stage},
+    filter::DtFilter,
     log_diff, log_info, log_miss, log_sql, log_summary,
+    meta::mysql::mysql_meta_manager::MysqlMetaManager,
     meta::struct_meta::{
         statement::struct_statement::StructKey, struct_data::StructData,
         structure::structure_type::StructureType,
@@ -19,7 +23,6 @@ use dt_common::{
         counter_type::CounterType, task_metrics::TaskMetricsType,
         task_monitor_handle::TaskMonitorHandle,
     },
-    rdb_filter::RdbFilter,
 };
 use sqlx::{MySql, Pool, Postgres};
 use tokio::time::sleep;
@@ -31,15 +34,14 @@ use crate::{
     meta_fetcher::{
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
-    rdb_router::RdbRouter,
 };
 
 pub struct StructCheckerHandle {
     db_type: DbType,
     conn_pool_mysql: Option<Pool<MySql>>,
     conn_pool_pg: Option<Pool<Postgres>>,
-    filter: RdbFilter,
-    router: Option<RdbRouter>,
+    filter: DtFilter,
+    router: Option<DtRouter>,
     output_revise_sql: bool,
     retry_interval_secs: u64,
     max_retries: u32,
@@ -104,8 +106,8 @@ impl StructCheckerHandle {
         db_type: DbType,
         conn_pool_mysql: Option<Pool<MySql>>,
         conn_pool_pg: Option<Pool<Postgres>>,
-        filter: RdbFilter,
-        router: Option<RdbRouter>,
+        filter: DtFilter,
+        router: Option<DtRouter>,
         output_revise_sql: bool,
         retry_interval_secs: u64,
         max_retries: u32,
@@ -136,7 +138,7 @@ impl StructCheckerHandle {
         let mut source_statement = struct_data.statement.clone();
         let source_sqls = source_statement.to_sqls(&self.filter)?;
         let routed = if let Some(router) = &self.router {
-            router.route_struct(struct_data)
+            router.route_struct(struct_data)?
         } else {
             struct_data
         };
@@ -179,24 +181,33 @@ impl StructCheckerHandle {
 
     fn source_key_from_target(
         target_key: &StructCheckKey,
-        router: Option<&RdbRouter>,
-    ) -> StructCheckKey {
+        router: Option<&DtRouter>,
+    ) -> anyhow::Result<StructCheckKey> {
         let Some(router) = router else {
-            return target_key.clone();
+            return Ok(target_key.clone());
         };
         if target_key.is_table_scoped() {
-            let (db, schema, tb) = router.reverse_get_tb_map_with_db(
-                &target_key.db,
-                &target_key.schema,
-                &target_key.tb,
-            );
-            return target_key.with_location(db, schema, tb);
+            let (db, schema, tb) = {
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(&target_key.db, &target_key.schema, &target_key.tb)
+                } else {
+                    rid!(&target_key.schema, &target_key.tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?;
+            return Ok(target_key.with_location(&db, &schema, &tb));
         }
         if !target_key.schema.is_empty() {
-            let schema = router.reverse_get_schema_map(&target_key.schema);
-            return target_key.with_location(&target_key.db, schema, &target_key.tb);
+            let schema: String = router.reverse(rid!(target_key.schema))?;
+            return Ok(target_key.with_location(&target_key.db, &schema, &target_key.tb));
         }
-        target_key.clone()
+        Ok(target_key.clone())
     }
 
     async fn build_dst_sql_map(
@@ -211,11 +222,7 @@ impl StructCheckerHandle {
                     .as_ref()
                     .context("mysql connection pool not found")?
                     .clone();
-                let meta_manager =
-                    dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(
-                        conn_pool.clone(),
-                    )
-                    .await?;
+                let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
                 let mut fetcher = MysqlStructFetcher {
                     conn_pool,
                     dbs: schemas.clone(),
@@ -280,24 +287,24 @@ impl StructCheckerHandle {
         log_enabled: bool,
     ) -> anyhow::Result<CheckSummaryLog> {
         let dst_map = self.build_dst_sql_map(schemas).await?;
-        Ok(Self::compare_sql_maps(
+        Self::compare_sql_maps(
             src_sql_map,
             dst_map,
             self.router.as_ref(),
             &self.start_time,
             log_enabled,
             self.output_revise_sql,
-        ))
+        )
     }
 
     fn compare_sql_maps(
         src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
         mut dst_map: BTreeMap<StructKey, String>,
-        router: Option<&RdbRouter>,
+        router: Option<&DtRouter>,
         start_time: &str,
         log_enabled: bool,
         output_revise_sql: bool,
-    ) -> CheckSummaryLog {
+    ) -> anyhow::Result<CheckSummaryLog> {
         let mut summary = CheckSummaryLog {
             start_time: start_time.to_string(),
             checked_count: src_sql_map.len(),
@@ -348,7 +355,7 @@ impl StructCheckerHandle {
         for (key, dst_sql) in dst_map {
             summary.diff_count += 1;
             let target_key = StructCheckKey::new("", key);
-            let source_key = Self::source_key_from_target(&target_key, router);
+            let source_key = Self::source_key_from_target(&target_key, router)?;
             if let Some(table) = struct_table_summary(&source_key, &target_key, 0, false, true) {
                 summary.merge_table(table);
             }
@@ -366,13 +373,10 @@ impl StructCheckerHandle {
         }
         summary.end_time = Local::now().to_rfc3339();
         summary.sort_tables();
-        summary
+        Ok(summary)
     }
 
-    pub async fn check_struct(
-        &mut self,
-        data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
-    ) -> anyhow::Result<()> {
+    pub async fn check_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
         for struct_data in data {
             self.add_src_sqls(struct_data).await?;
         }
@@ -466,7 +470,8 @@ mod tests {
             "start",
             false,
             false,
-        );
+        )
+        .unwrap();
 
         assert!(!summary.is_consistent);
         assert_eq!(summary.checked_count, 2);
@@ -507,7 +512,8 @@ mod tests {
             "start",
             false,
             false,
-        );
+        )
+        .unwrap();
 
         assert!(summary.is_consistent);
         assert_eq!(summary.checked_count, 2);

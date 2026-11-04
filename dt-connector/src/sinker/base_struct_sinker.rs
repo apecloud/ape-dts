@@ -2,9 +2,8 @@ use std::cmp;
 
 use anyhow::bail;
 use dt_common::{
-    config::config_enums::ConflictPolicyEnum, log_error, log_info,
-    meta::struct_meta::struct_data::StructData, rdb_filter::RdbFilter,
-    utils::limit_queue::LimitedQueue,
+    config::config_enums::ConflictPolicyEnum, filter::DtFilter, log_error, log_info,
+    meta::struct_meta::struct_data::StructData, utils::limit_queue::LimitedQueue,
 };
 use sqlx::{query, MySql, Pool, Postgres};
 use tokio::time::Instant;
@@ -23,7 +22,7 @@ impl BaseStructSinker {
         conn_pool: &DBConnPool,
         conflict_policy: &ConflictPolicyEnum,
         data: Vec<StructData>,
-        filter: &RdbFilter,
+        filter: &DtFilter,
         base_sinker: &BaseSinker,
     ) -> anyhow::Result<()> {
         let monitor_interval_secs = base_sinker.monitor_interval_secs();

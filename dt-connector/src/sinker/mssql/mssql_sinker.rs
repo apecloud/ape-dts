@@ -2,6 +2,9 @@ use std::{cmp, time::Instant};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use dt_common::config::config_enums::DbType;
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     log_error,
     meta::{
@@ -19,13 +22,13 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
-use crate::{rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{sinker::base_sinker::BaseSinker, Sinker};
 
 #[derive(Clone)]
 pub struct MssqlSinker {
     pub connection_pool: MssqlConnectionPool,
     pub meta_manager: MssqlMetaManager,
-    pub router: Option<RdbRouter>,
+    pub router: Option<DtRouter>,
     pub batch_size: usize,
     pub replace: bool,
     pub base_sinker: BaseSinker,
@@ -35,7 +38,7 @@ impl MssqlSinker {
     pub fn new(
         connection_pool: MssqlConnectionPool,
         meta_manager: MssqlMetaManager,
-        router: Option<RdbRouter>,
+        router: Option<DtRouter>,
         batch_size: usize,
         replace: bool,
         base_sinker: BaseSinker,
@@ -59,7 +62,9 @@ impl MssqlSinker {
         session: &mut MssqlTableSinkSession<'_, '_>,
     ) -> anyhow::Result<()> {
         let rows = &data[start_index..start_index + batch_size];
-        let task_id = self.base_sinker.source_task_id_for_rows(rows, &self.router);
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(rows, &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let data_size = rows.iter().map(|row| row.data_size).sum::<usize>();
         let use_bulk_insert = session.can_bulk_insert(rows);
@@ -112,7 +117,9 @@ impl MssqlSinker {
         tb_meta: &MssqlTbMeta,
         session: &mut MssqlTableSinkSession<'_, '_>,
     ) -> anyhow::Result<()> {
-        let task_id = self.base_sinker.source_task_id_for_rows(rows, &self.router);
+        let task_id = self
+            .base_sinker
+            .source_task_id_for_rows(rows, &self.router)?;
         self.base_sinker.ensure_monitor_for(&task_id);
         let query_builder = MssqlTableSqlBuilder::new(tb_meta, None);
         if let Err(begin_error) = session.begin().await {
@@ -246,11 +253,17 @@ impl Sinker for MssqlSinker {
         if let (DtData::Commit { .. }, Position::RdbSnapshotFinished { db, schema, tb, .. }) =
             (&item.dt_data, &item.position)
         {
-            let (routed_db, routed_schema, routed_tb) = if let Some(router) = &self.router {
-                router.get_tb_map_with_db(db, schema, tb)
-            } else {
-                (db.as_str(), schema.as_str(), tb.as_str())
-            };
+            let (ref routed_db, ref routed_schema, ref routed_tb) =
+                if let Some(router) = &self.router {
+                    let id = if router.src_db_type() == &DbType::Mssql {
+                        rid!(db, schema, tb)
+                    } else {
+                        rid!(schema, tb)
+                    };
+                    router.forward::<(String, String, String)>(id)?
+                } else {
+                    (db.clone(), schema.clone(), tb.clone())
+                };
             self.meta_manager
                 .invalidate_cache_for_table(routed_db, routed_schema, routed_tb);
         }

@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 
 use dt_common::meta::mongo::{mongo_constant::MongoConstants, mongo_shard::list_shard_collections};
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::{
         config_enums::DbType, extractor_config::ExtractorConfig, sinker_config::SinkerConfig,
@@ -9,7 +11,6 @@ use dt_common::{
     },
     utils::time_util::TimeUtil,
 };
-use dt_connector::rdb_router::RdbRouter;
 use dt_task::task_util::TaskUtil;
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, Document},
@@ -26,7 +27,7 @@ pub struct MongoTestRunner {
     pub base: BaseTestRunner,
     src_mongo_client: Option<Client>,
     dst_mongo_client: Option<Client>,
-    router: Option<RdbRouter>,
+    router: Option<DtRouter>,
 }
 
 pub const SRC: &str = "src";
@@ -156,7 +157,7 @@ impl MongoTestRunner {
             }
         }
 
-        let router = RdbRouter::from_config(&config.router, &DbType::Mongo).unwrap();
+        let router = config.build_router().unwrap();
         Ok(Self {
             base,
             src_mongo_client,
@@ -846,9 +847,9 @@ impl MongoTestRunner {
         println!("compare tb data, db: {}, tb: {}", db, tb);
         let src_data = self.fetch_data(db, tb, SRC).await;
 
-        let (dst_db, dst_tb) = match &self.router {
-            Some(router) => router.get_tb_map(db, tb),
-            None => (db, tb),
+        let (ref dst_db, ref dst_tb) = match &self.router {
+            Some(router) => router.forward::<(String, String)>(rid!(db, tb)).unwrap(),
+            None => (db.to_string(), tb.to_string()),
         };
         let dst_data = self.fetch_data(dst_db, dst_tb, DST).await;
 
@@ -1187,7 +1188,7 @@ impl MongoTestRunner {
         self.router
             .as_ref()
             .map(|router| {
-                let (dst_db, dst_tb) = router.get_tb_map(db, tb);
+                let (dst_db, dst_tb) = router.forward::<(String, String)>(rid!(db, tb)).unwrap();
                 (dst_db.to_string(), dst_tb.to_string())
             })
             .unwrap_or_else(|| (db.to_string(), tb.to_string()))

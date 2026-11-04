@@ -1,8 +1,8 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use dt_common::filter::DtFilter;
 use dt_common::log_info;
 use dt_common::meta::position::Position;
-use dt_common::rdb_filter::RdbFilter;
 use tokio::{fs::metadata, fs::File, io::AsyncReadExt};
 
 use super::StreamReader;
@@ -14,7 +14,7 @@ use crate::Extractor;
 
 pub struct RedisSnapshotFileExtractor {
     pub file_path: String,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub base_extractor: BaseExtractor,
     pub extract_state: ExtractState,
 }

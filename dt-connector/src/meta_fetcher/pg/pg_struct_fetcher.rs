@@ -23,11 +23,12 @@ use dt_common::meta::struct_meta::{
         user_defined::{PgUdf, PgUdt, PgUdtType},
     },
 };
+use dt_common::rid;
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
     error::{DtError, DtOptionExt},
+    filter::DtFilter,
     log_error, log_info, log_warn,
-    rdb_filter::RdbFilter,
     utils::sql_util::SqlUtil,
 };
 use futures::TryStreamExt;
@@ -38,7 +39,7 @@ use super::pg_struct_check_fetcher::PgStructCheckFetcher;
 pub struct PgStructFetcher {
     pub conn_pool: Pool<Postgres>,
     pub schemas: HashSet<String>,
-    pub filter: Option<RdbFilter>,
+    pub filter: Option<DtFilter>,
     pub allow_missing_schemas: bool,
 }
 
@@ -134,7 +135,7 @@ impl PgStructFetcher {
             let lanname = Self::get_str_with_null(&row, "lanname")?;
             let create_statement = Self::get_str_with_null(&row, "create_statement")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name)? {
                 continue;
             }
 
@@ -276,7 +277,7 @@ impl PgStructFetcher {
                 maximum_value: row.get("maximum_value"),
                 cycle_option: Self::get_str_with_null(&row, "cycle_option")?,
             };
-            self.push_to_results(&mut results, &sequence_schema, &table_name, sequence);
+            self.push_to_results(&mut results, &sequence_schema, &table_name, sequence)?;
         }
 
         Ok(results)
@@ -443,7 +444,7 @@ impl PgStructFetcher {
                 table_name: table_name.clone(),
                 column_name: Self::get_str_with_null(&row, "column_name")?,
             };
-            self.push_to_results(&mut results, &schema_name, &table_name, sequence_owner);
+            self.push_to_results(&mut results, &schema_name, &table_name, sequence_owner)?;
         }
 
         Ok(results)
@@ -502,7 +503,9 @@ impl PgStructFetcher {
                 Self::get_str_with_null(&row, "table_name")?,
             );
 
-            if !self.schemas.contains(&table_schema) || self.filter_tb(&table_schema, &table_name) {
+            if !self.schemas.contains(&table_schema)
+                || self.filter_tb(&table_schema, &table_name)?
+            {
                 continue;
             }
 
@@ -654,7 +657,7 @@ impl PgStructFetcher {
                 &constraint.schema_name.clone(),
                 &table_name,
                 constraint,
-            );
+            )?;
         }
 
         Ok(results)
@@ -712,7 +715,7 @@ impl PgStructFetcher {
                 definition,
                 ..Default::default()
             };
-            self.push_to_results(&mut results, &index.schema_name.clone(), &table_name, index);
+            self.push_to_results(&mut results, &index.schema_name.clone(), &table_name, index)?;
         }
 
         Ok(results)
@@ -769,7 +772,7 @@ impl PgStructFetcher {
                 column_name: String::new(),
                 comment: Self::get_str_with_null(&row, "description")?,
             };
-            self.push_to_results(&mut results, &schema_name, &table_name, comment);
+            self.push_to_results(&mut results, &schema_name, &table_name, comment)?;
         }
 
         Ok(results)
@@ -831,7 +834,7 @@ impl PgStructFetcher {
                 column_name,
                 comment: Self::get_str_with_null(&row, "comment")?,
             };
-            self.push_to_results(&mut results, &schema_name, &table_name, comment);
+            self.push_to_results(&mut results, &schema_name, &table_name, comment)?;
         }
 
         Ok(results)
@@ -956,7 +959,7 @@ impl PgStructFetcher {
             let schema_name = Self::get_str_with_null(&row, "schema_name")?;
             let grantee = Self::get_str_with_null(&row, "grantee")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_schema(schema_name.as_str()) {
+            if !self.schemas.contains(&schema_name) || self.filter_schema(schema_name.as_str())? {
                 continue;
             }
 
@@ -1000,7 +1003,7 @@ impl PgStructFetcher {
             let is_grantable = Self::get_str_with_null(&row, "is_grantable")?;
             let grant_command = Self::get_str_with_null(&row, "grant_command")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_tb(&schema_name, &table_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_tb(&schema_name, &table_name)? {
                 continue;
             }
 
@@ -1055,7 +1058,7 @@ impl PgStructFetcher {
             let schema_name = Self::get_str_with_null(&row, "table_schema")?;
             let table_name = Self::get_str_with_null(&row, "table_name")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_tb(&schema_name, &table_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_tb(&schema_name, &table_name)? {
                 continue;
             }
 
@@ -1235,7 +1238,7 @@ impl PgStructFetcher {
             let typ_name = Self::get_str_with_null(&row, "typname")?;
             let create_statement = Self::get_str_with_null(&row, "create_enum_sql")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name)? {
                 continue;
             }
 
@@ -1295,7 +1298,7 @@ impl PgStructFetcher {
             let typ_name = Self::get_str_with_null(&row, "typname")?;
             let create_statement = Self::get_str_with_null(&row, "create_composite_sql")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name)? {
                 continue;
             }
 
@@ -1356,7 +1359,7 @@ impl PgStructFetcher {
             let typ_name = Self::get_str_with_null(&row, "type_name")?;
             let create_statement = Self::get_str_with_null(&row, "create_statement")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name)? {
                 continue;
             }
 
@@ -1403,7 +1406,7 @@ impl PgStructFetcher {
             let typ_name = Self::get_str_with_null(&row, "typname")?;
             let create_statement = Self::get_str_with_null(&row, "create_domain_sql")?;
 
-            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name) {
+            if !self.schemas.contains(&schema_name) || self.filter_schema(&schema_name)? {
                 continue;
             }
 
@@ -1498,18 +1501,18 @@ impl PgStructFetcher {
         (String::new(), String::new())
     }
 
-    fn filter_tb(&mut self, schema: &str, tb: &str) -> bool {
+    fn filter_tb(&mut self, schema: &str, tb: &str) -> anyhow::Result<bool> {
         if let Some(filter) = &mut self.filter {
-            return filter.filter_tb(schema, tb);
+            return filter.filter(rid!(schema, tb));
         }
-        false
+        Ok(false)
     }
 
-    fn filter_schema(&mut self, schema: &str) -> bool {
+    fn filter_schema(&mut self, schema: &str) -> anyhow::Result<bool> {
         if let Some(filter) = &mut self.filter {
-            return filter.filter_schema(schema);
+            return filter.filter(rid!(schema));
         }
-        false
+        Ok(false)
     }
 
     fn push_to_results<T>(
@@ -1518,9 +1521,9 @@ impl PgStructFetcher {
         schema_name: &str,
         table_name: &str,
         item: T,
-    ) {
-        if !self.schemas.contains(schema_name) || self.filter_tb(schema_name, table_name) {
-            return;
+    ) -> anyhow::Result<()> {
+        if !self.schemas.contains(schema_name) || self.filter_tb(schema_name, table_name)? {
+            return Ok(());
         }
 
         let key = (schema_name.into(), table_name.into());
@@ -1529,6 +1532,7 @@ impl PgStructFetcher {
         } else {
             results.insert(key, vec![item]);
         }
+        Ok(())
     }
 
     fn get_result<T>(

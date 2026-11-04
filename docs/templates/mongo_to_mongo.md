@@ -41,20 +41,11 @@ sink_type=struct
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 conflict_policy=interrupt
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=
-// do_structures=*
-// do_structures=collection,shardkey
-do_structures=collection
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_structures=collection
 
 [parallelizer]
 parallel_type=serial
@@ -74,7 +65,7 @@ log_dir=./logs
 
 | Config        | Description                                                                                                   | Example                   | Default             |
 | :------------ | :------------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------ |
-| do_structures | one or multiple in [collection,shardkey]. `shardkey` is only meaningful when the source collection is sharded | collection,index,shardkey | \*, which means all |
+| do_structures | one or multiple in [collection,shardkey]. `shardkey` is only meaningful when the source collection is sharded | collection,shardkey | \*, which means all |
 
 Mongo struct migration currently supports databases implicitly through collection creation. It does
 not use a separate Mongo `database` structure type. `collection` creates Mongo collections and
@@ -100,17 +91,11 @@ sink_type=write
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=200
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=insert
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -136,12 +121,8 @@ url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 source=op_log
 start_timestamp=1728525445
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=insert,update,delete
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
 [sinker]
 db_type=mongo
@@ -149,10 +130,8 @@ sink_type=write
 batch_size=200
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
-[router]
-tb_map=
-col_map=
-db_map=
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=mongo
@@ -202,12 +181,8 @@ resume_token={"_data":"826707373B000000012B022C0100296E5A1004B4A9FD2BFD9C4460936
 url=mongodb://ape_dts:123456@mongo1:9042/?replicaSet=rs0
 source=change_stream
 
-[filter]
-ignore_dbs=
-do_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=insert,update,delete
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
 [sinker]
 db_type=mongo
@@ -215,10 +190,8 @@ sink_type=write
 batch_size=200
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 
-[router]
-tb_map=
-col_map=
-db_map=
+[filter]
+do_events=insert,update,delete
 
 [pipeline]
 buffer_size=16000
@@ -256,17 +229,11 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [checker]
 batch_size=100
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=insert
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=mongo
@@ -301,17 +268,11 @@ batch_size=200
 [checker]
 batch_size=200
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=insert
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -352,17 +313,11 @@ sink_type=write
 url=mongodb://ape_dts:123456@127.0.0.1:27018
 batch_size=200
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=mongo
@@ -402,17 +357,11 @@ url=mongodb://ape_dts:123456@127.0.0.1:27018
 [checker]
 batch_size=100
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_db_1.*,test_db_2.*
-ignore_tbs=
-do_events=*
+[source.collection]
+include=test_db_1.*,test_db_2.*
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=mongo
