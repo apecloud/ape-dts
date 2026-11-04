@@ -82,15 +82,33 @@ exclude=inventory.tmp*,other.orders_archive*
 
 This selects `inventory` and databases starting with `tenant_`, and additionally selects `other.orders*` through the table rule. Databases starting with `tenant_private` are excluded. The database exclusion also removes `tenant_private.public_orders`, despite its explicit table inclusion. Tables matching `inventory.tmp*` are excluded. `other.orders_archive` matches both table rules and is excluded.
 
-Exclusions across all levels form a union and take precedence; child includes cannot override a parent exclusion. Includes at the same level form a union within each matching parent path and constrain that parent's children. A parent without matching child includes retains its inherited selection. For example, database includes `inventory,archive` and a table include `inventory.orders` select only `orders` in `inventory`, but all tables in `archive`. An empty include adds no whitelist constraint.
+### Rule precedence
 
-When ancestor includes are absent, descendant includes keep their ancestors available for enumeration without selecting sibling resources. Configuring only `[source.column] include=inventory.orders.id` selects the database and table and copies only `id`. Missing an ancestor include does not veto an explicit descendant inclusion; only exclusions veto the entire path. For example, `[source.db] include=inventory` plus `[source.table] include=archive.orders` selects all tables in `inventory` and only `orders` in `archive`.
+1. **`exclude` always takes precedence.** An exclusion at any level cannot be overridden by a descendant `include`. Exclusions across levels form a union.
+2. **Includes at the same level and within the same parent path form a union.** For example, `d1.t1.col1,d1.t1.col2` selects these two columns in that table.
+3. **Applicable includes at a level narrow the corresponding parent's children; otherwise, selection is inherited.** For example, including database `d1` and column `d1.t1.col1` selects only `col1` in `d1.t1`, while `d1.t2` still inherits all columns. An empty include adds no whitelist constraint.
+4. **Descendant includes can also select additional paths.** Configuring only `d3.t3.col1` makes its database and table available and copies only that column, without selecting sibling tables or other columns. Missing an ancestor include does not veto an explicitly included descendant path.
+
+A rule is applicable when its parent path matches the parent resource. For example, the parent path of `d1.t1.col1` is `d1.t1`, and that of `*.shared` is `*`. Wildcard parent paths apply to every matching parent; exact parent paths have no additional precedence over wildcard paths.
+
+The following examples are independent and use MySQL `database.table.column` paths. Tables that are not selected are not copied.
+
+| Configuration | Copy behavior |
+| --- | --- |
+| `[source.db]`<br>`include=d1`<br>`exclude=d1`<br><br>`[source.column]`<br>`include=d1.t1.col1` | No tables in `d1` are copied, including the explicitly included `d1.t1.col1`. Other databases are not selected either. |
+| `[source.column]`<br>`include=d1.t1.col1,d1.t1.col2` | Only `col1` and `col2` in `d1.t1` are copied. Other columns in that table and all other tables are excluded. |
+| `[source.db]`<br>`include=d1,d2`<br><br>`[source.column]`<br>`include=d1.t1.col1` | Only `col1` is copied in `d1.t1`. All other tables in `d1` and all tables in `d2` retain all columns. Other databases are excluded. |
+| `[source.db]`<br>`include=d1,d2`<br><br>`[source.table]`<br>`include=d1.t1` | Only `t1` is copied in `d1`; its other tables are excluded. All tables in `d2` are copied. Selected tables retain all columns. Other databases are excluded. |
+| `[source.db]`<br>`include=d1`<br><br>`[source.column]`<br>`include=d3.t3.col1` | All tables and columns in `d1` are copied, plus `col1` in `d3.t3`. Other tables in `d3`, other columns in `t3`, and other databases are excluded. |
+| `[source.db]`<br>`include=d1,d2`<br><br>`[source.table]`<br>`include=*.shared` | Tables named `shared` in every database, including `d1`, `d2` and other databases, are copied with all columns. All other tables are excluded. The `*` parent makes the table whitelist apply to every database, narrowing `d1` and `d2` as well. |
 
 A descendant exclusion whose remaining segments are all whole-segment `*` wildcards can exclude its ancestor early. For example, `[source.column] exclude=inventory.orders.*` skips the entire table. SQL-quoted literal `*` names are not wildcards. Separate column exclusions and regexes are not combined to infer full table exclusion during rule matching. Once actual columns are known, tables or row events with no selected columns are skipped.
 
-### Wildcards and regular expressions
+### Wildcards
 
-Use these patterns in resource `include` / `exclude` settings. Each level of the name is matched separately.
+Resource `include` / `exclude` settings support only two wildcards: `*` and `?`. Each name segment is matched separately; wildcards do not cross resource levels. `*` matches zero or more characters; `?` matches zero or one. Names without wildcards, explicit regexes or identifier quotes match exactly as written.
+
+Other characters in ordinary patterns, such as `+`, `()`, `[]`, `{}`, `^`, `$` and `|`, match literally, including when combined with wildcards. For example, `inventory.order[0-9]+` matches only the literal table name `order[0-9]+`; `inventory.order[0-9]*` matches table names starting with the literal text `order[0-9]`.
 
 | Pattern | Matches | Does not match |
 | --- | --- | --- |
@@ -102,9 +120,19 @@ Use these patterns in resource `include` / `exclude` settings. Each level of the
 | `tenant_*.orders` | `tenant_.orders`, `tenant_eu.orders` | `other.orders` |
 | `*.*` | Tables in all databases/schemas | — |
 | `inventory.order?` | `inventory.order`, `inventory.order1` | `inventory.order12` |
-| `inventory.r#order[0-9]+#` | `inventory.order1`, `inventory.order12` | `inventory.order`, `inventory.order1_backup` |
 
-`*` matches zero or more characters; `?` matches zero or one. Outside `r#...#`, other characters such as `+`, `()`, `[]`, `{}`, `^`, `$`, and `|` match literally, including in patterns that contain wildcards. Put regular expressions between `r#` and `#`. For alternatives, use a group such as `inventory.r#(?:orders|events)[0-9]+#`.
+### Regular expressions
+
+For regex matching, wrap an entire name segment between `r#` and a closing `#`, such as `inventory.r#order[0-9]+#`. Segments are matched independently, so other segments can use exact names or wildcards.
+
+```ini
+[source.table]
+include=inventory.r#order[0-9]+#,tenant_*.r#(?:orders|events)#
+```
+
+The first rule matches `inventory.order1` and `inventory.order12`, but not `inventory.order` or `inventory.order1_backup`. The second matches tables named `orders` or `events` in databases starting with `tenant_`.
+
+The matcher adds `^` and `$` around the regex; for example, `r#order[0-9]+#` is matched as `^order[0-9]+$`. Group the entire expression when using `|`: use `r#(?:orders|events)#` to avoid the partial matches produced by `r#orders|events#`, which becomes `^orders|events$`. User-supplied `^` and `$` are retained; `r#^orders$#` still matches exactly `orders`.
 
 ### Names containing special characters
 

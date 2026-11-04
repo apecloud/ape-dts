@@ -82,15 +82,33 @@ exclude=inventory.tmp*,other.orders_archive*
 
 这会选择 `inventory` 和 `tenant_` 开头的库，并通过表级规则额外选中 `other.orders*`；`tenant_private` 开头的库被排除。即使表级 include 显式选择了 `tenant_private.public_orders`，它仍被库级 exclude 排除；`inventory.tmp*` 不会同步。`other.orders_archive` 同时符合表级 `include` 和 `exclude`，会被排除。
 
-所有层级的 `exclude` 取并集且优先，父级排除不能被子级 `include` 救回。同一父路径下的本层 `include` 取并集并限定子资源；该父路径下没有本层 `include` 时，继承父级的选择。例如库级选中 `inventory,archive`、表级只配置 `inventory.orders`，则 `inventory` 只选中 `orders`，`archive` 仍选中全部表。空 `include` 不形成白名单约束。
+### 规则优先级
 
-缺少上级 `include` 时，下级规则会放行对应父级以便枚举，不会把父级加入白名单或选中兄弟资源。因此只配置 `[source.column] include=inventory.orders.id` 就会选中对应库表并只同步 `id`。未命中上级 `include` 不会直接否决更深层显式包含的路径；只有 `exclude` 能否决整条路径。例如 `[source.db] include=inventory` 与 `[source.table] include=archive.orders` 会选择 `inventory` 的全部表，以及 `archive.orders`，不会选中 `archive` 的其他表。
+1. **`exclude` 始终优先。** 任一层级命中排除，子级 `include` 不能救回；不同层级的排除规则取并集。
+2. **同层、同父路径的 `include` 取并集。** 例如 `d1.t1.col1,d1.t1.col2` 表示该表同步这两列。
+3. **本层存在适用的 `include`，就收窄对应父资源的子资源范围；没有则继承。** 例如库级选中 `d1`，列级只配置 `d1.t1.col1`，则 `d1.t1` 只同步 `col1`，`d1.t2` 仍继承全部列。空 `include` 不形成白名单约束。
+4. **下级 `include` 也可以额外选入路径。** 只配置 `d3.t3.col1`，也能放行对应库表，并且只同步这一列；不会额外选中兄弟表或其他列。未命中上级 `include` 不会否决下级显式选中的路径。
+
+“适用”指规则的父路径匹配当前父资源，例如 `d1.t1.col1` 的父路径是 `d1.t1`，`*.shared` 的父路径是 `*`。通配符父路径对所有匹配的父资源生效，没有“精确父路径优先于通配符”的额外优先级。
+
+以下示例相互独立，使用 MySQL 的“库.表.列”路径；未选中的表不同步。
+
+| 配置 | 同步行为 |
+| --- | --- |
+| `[source.db]`<br>`include=d1`<br>`exclude=d1`<br><br>`[source.column]`<br>`include=d1.t1.col1` | `d1` 下所有表均不同步，包括显式包含的 `d1.t1.col1`；其他库也未被选中。 |
+| `[source.column]`<br>`include=d1.t1.col1,d1.t1.col2` | 仅同步 `d1.t1` 的 `col1`、`col2`；该表其他列、其他表均不同步。 |
+| `[source.db]`<br>`include=d1,d2`<br><br>`[source.column]`<br>`include=d1.t1.col1` | `d1.t1` 只同步 `col1`；`d1` 下其他表和 `d2` 下所有表均同步全部列；其他库不同步。 |
+| `[source.db]`<br>`include=d1,d2`<br><br>`[source.table]`<br>`include=d1.t1` | `d1` 仅同步 `t1`，其他表不同步；`d2` 同步所有表；选中的表均同步全部列。其他库不同步。 |
+| `[source.db]`<br>`include=d1`<br><br>`[source.column]`<br>`include=d3.t3.col1` | `d1` 同步所有表、全部列；额外同步 `d3.t3` 的 `col1`；`d3` 下其他表、`t3` 的其他列及其他库不同步。 |
+| `[source.db]`<br>`include=d1,d2`<br><br>`[source.table]`<br>`include=*.shared` | 所有库中名为 `shared` 的表均同步全部列，包括 `d1`、`d2` 和其他库；其他表均不同步。`*` 使表级白名单对所有库生效，`d1`、`d2` 也会被收窄。 |
 
 下级排除规则的剩余各段均为整段 `*` 时，可以提前排除父级，例如 `[source.column] exclude=inventory.orders.*` 会跳过整张 `orders` 表。带数据库引号的字面 `*` 不表示通配。逐个列名排除或正则匹配不会在规则匹配阶段做整表覆盖推导；读取真实元数据后，若没有可输出列，则跳过该表的数据读取或对应行事件。
 
-### 通配符与正则
+### 通配符
 
-以下写法适用于资源 `include` / `exclude`，每一段分别匹配：
+资源 `include` / `exclude` 仅支持 `*` 和 `?` 两种通配符，每一段分别匹配，不跨越资源层级。`*` 匹配零个或多个字符；`?` 匹配零个或一个字符。未使用通配符、显式正则或标识符引号时，名称按字面值精确匹配。
+
+普通模式中的其他字符（如 `+`、`()`、`[]`、`{}`、`^`、`$`、`|`）均按字面值匹配，与通配符混用时也如此。例如 `inventory.order[0-9]+` 只匹配字面表名 `order[0-9]+`；`inventory.order[0-9]*` 匹配以字面文本 `order[0-9]` 开头的表名。
 
 | 规则 | 匹配示例 | 不匹配示例 |
 | --- | --- | --- |
@@ -102,9 +120,19 @@ exclude=inventory.tmp*,other.orders_archive*
 | `tenant_*.orders` | `tenant_.orders`、`tenant_eu.orders` | `other.orders` |
 | `*.*` | 所有库/schema 下的表 | — |
 | `inventory.order?` | `inventory.order`、`inventory.order1` | `inventory.order12` |
-| `inventory.r#order[0-9]+#` | `inventory.order1`、`inventory.order12` | `inventory.order`、`inventory.order1_backup` |
 
-`*` 匹配零个或多个字符；`?` 匹配零个或一个字符。`r#...#` 外的其他字符（如 `+`、`()`、`[]`、`{}`、`^`、`$`、`|`）均按字面值匹配，与通配符混用时也如此。正则表达式放在 `r#` 和 `#` 之间。需要匹配多个备选名称时，例如写成 `inventory.r#(?:orders|events)[0-9]+#`。
+### 正则表达式
+
+需要正则匹配时，用 `r#` 和结尾的 `#` 包裹完整的名称段，例如 `inventory.r#order[0-9]+#`。各段分别匹配，可以与其他段的精确名称或通配符组合。
+
+```ini
+[source.table]
+include=inventory.r#order[0-9]+#,tenant_*.r#(?:orders|events)#
+```
+
+第一条匹配 `inventory.order1`、`inventory.order12`，不匹配 `inventory.order` 或 `inventory.order1_backup`；第二条匹配 `tenant_` 开头的库中名为 `orders` 或 `events` 的表。
+
+匹配器会在正则两侧添加 `^`、`$`，例如 `r#order[0-9]+#` 按 `^order[0-9]+$` 匹配。含 `|` 分支时，应将完整表达式分组，使用 `r#(?:orders|events)#`，避免 `r#orders|events#` 形成 `^orders|events$` 而出现部分匹配。用户自行添加的 `^`、`$` 会保留，例如 `r#^orders$#` 仍精确匹配 `orders`。
 
 ### 名称中有特殊字符
 

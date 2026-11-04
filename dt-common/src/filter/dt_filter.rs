@@ -567,6 +567,31 @@ mod tests {
     }
 
     #[test]
+    fn wildcard_parent_includes_constrain_the_matching_parent_scopes() {
+        let mut f = filter("[source.db]\ninclude=inventory,scope_*\n[source.table]\ninclude=*.rules_shared\n[source.column]\ninclude=inventory.orders.id");
+        for (id, excluded) in [
+            (rid!("inventory", "fallback"), true),
+            (rid!("inventory", "rules_shared"), false),
+            (rid!("inventory", "orders", "id"), false),
+            (rid!("inventory", "orders", "amount"), true),
+            (rid!("scope_eu", "orders"), true),
+            (rid!("scope_eu", "rules_shared"), false),
+            (rid!("other", "rules_shared"), false),
+            (rid!("other", "fallback"), true),
+        ] {
+            assert_eq!(f.filter(&id).unwrap(), excluded, "{id}");
+        }
+        f.add_include(rid!("inventory", "fallback")).unwrap();
+        f.add_include(rid!("scope_*", "orders")).unwrap();
+        assert!(!f.filter(rid!("inventory", "fallback")).unwrap());
+        assert!(!f.filter(rid!("inventory", "fallback", "amount")).unwrap());
+        assert!(!f.filter(rid!("scope_eu", "orders")).unwrap());
+        f.add_exclude(rid!("inventory")).unwrap();
+        assert!(f.filter(rid!("inventory", "fallback")).unwrap());
+        assert!(f.filter(rid!("inventory", "orders", "id")).unwrap());
+    }
+
+    #[test]
     fn wildcard_parent_scopes_and_log_selected_parents_keep_local_rules() {
         let f = filter("[source.db]\ninclude=db\n[source.column]\ninclude=db.tb*.id,db.r#event[0-9]+#.name,db.`literal*`.id");
         for (table, column, excluded) in [
