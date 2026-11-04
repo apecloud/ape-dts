@@ -101,6 +101,26 @@ impl DtFilter {
         ResourceKind::from_rid(&self.db_type, &parent)
             .and_then(|kind| kind.child(&self.db_type))
             .with_context(|| format!("resource has no registered children: {parent}"))?;
+        let has_descendant_rules = ResourceKind::levels(&self.db_type)
+            .iter()
+            .skip(parent.len())
+            .any(|kind| {
+                self.resource_filters.get(kind).is_some_and(|rules| {
+                    !rules.include_set.is_empty() || !rules.exclude_set.is_empty()
+                })
+            });
+        if !has_descendant_rules {
+            let filtered = if selected_parent {
+                self.matches_exclude(&parent)
+            } else {
+                self.filter(&parent)?
+            };
+            return Ok(if filtered {
+                children.into_iter().cloned().collect()
+            } else {
+                HashSet::new()
+            });
+        }
         let mut excluded = HashSet::new();
         for child in children {
             let id = parent.child(child.clone());
@@ -476,6 +496,86 @@ mod tests {
             assert_eq!(
                 f.excluded_children(table, &columns).unwrap(),
                 expected.into_iter().map(String::from).collect()
+            );
+        }
+    }
+
+    #[test]
+    fn children_without_descendant_rules_inherit_selection_without_iteration() {
+        let columns = ["id".into(), "name".into()];
+        for config in [
+            "[source.db]\ninclude=db",
+            "[source.table]\ninclude=db.tb\n[source.column]\ninclude=\nexclude=",
+            "[filter]\ndo_dbs=db\ndo_tbs=db.tb",
+        ] {
+            let f = filter(config);
+            let visited = std::cell::Cell::new(0);
+            let children = columns.iter().inspect(|_| visited.set(visited.get() + 1));
+            assert!(f
+                .excluded_children(rid!("db", "tb"), children)
+                .unwrap()
+                .is_empty());
+            assert_eq!(visited.get(), 0, "{config}");
+        }
+
+        let f = filter("[source.table]\ninclude=db.selected");
+        let parent = rid!("db", "logged");
+        assert!(f.filter(&parent).unwrap());
+        let visited = std::cell::Cell::new(0);
+        let children = columns.iter().inspect(|_| visited.set(visited.get() + 1));
+        assert!(f
+            .excluded_children_in_scope(&parent, children)
+            .unwrap()
+            .is_empty());
+        assert_eq!(visited.get(), 0);
+        assert!(f.filter(&parent).unwrap());
+    }
+
+    #[test]
+    fn inherited_children_preserve_exclusions_and_deeper_rules() {
+        let children = ["keep".into(), "drop".into()];
+        for (config, parent, scoped, expected) in [
+            (
+                "[source.table]\ninclude=db.other",
+                rid!("db", "tb"),
+                false,
+                vec!["keep", "drop"],
+            ),
+            (
+                "[source.db]\ninclude=db\nexclude=db",
+                rid!("db", "tb"),
+                false,
+                vec!["keep", "drop"],
+            ),
+            (
+                "[source.table]\ninclude=db.other\nexclude=db.tb",
+                rid!("db", "tb"),
+                true,
+                vec!["keep", "drop"],
+            ),
+            (
+                "[source.column]\ninclude=db.keep.id",
+                rid!("db"),
+                false,
+                vec!["drop"],
+            ),
+            (
+                "[source.db]\ninclude=db\n[source.column]\nexclude=db.drop.*",
+                rid!("db"),
+                false,
+                vec!["drop"],
+            ),
+        ] {
+            let f = filter(config);
+            let actual = if scoped {
+                f.excluded_children_in_scope(parent, &children)
+            } else {
+                f.excluded_children(parent, &children)
+            };
+            assert_eq!(
+                actual.unwrap(),
+                expected.into_iter().map(String::from).collect(),
+                "{config}"
             );
         }
     }

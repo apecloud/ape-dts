@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - add time-window pipeline sink utilization and duration metrics, cumulative operation counts, and Snapshot chunk partitioner duration metrics ([#591](https://github.com/apecloud/ape-dts/issues/591))
 
+### Changed
+
+#### General and Platform
+
+- skip per-child filter matching when no descendant resource rules are configured, inheriting the parent selection without adding column caches
+
 ### Fixed
 
 #### General and Platform
