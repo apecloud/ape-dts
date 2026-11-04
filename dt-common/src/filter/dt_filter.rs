@@ -26,7 +26,6 @@ pub struct DtFilter {
 }
 
 impl DtFilter {
-    /// Empty resource rules select no objects.
     pub fn new(db_type: DbType) -> Self {
         let escape_pairs = SqlUtil::get_escape_pairs(&db_type);
         Self {

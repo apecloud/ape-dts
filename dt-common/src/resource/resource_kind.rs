@@ -85,7 +85,6 @@ impl ResourceKind {
         Ok(Some(kind))
     }
 
-    /// Zero-based index in the engine's resource hierarchy.
     pub fn depth(self, db_type: &DbType) -> Option<usize> {
         Self::levels(db_type)
             .iter()
