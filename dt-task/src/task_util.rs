@@ -163,16 +163,16 @@ impl TaskUtil {
         }
         match transaction_isolation {
             RdbTransactionIsolation::ReadUncommitted => {
-                settings.push("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+                settings.push("SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
             }
             RdbTransactionIsolation::ReadCommitted => {
-                settings.push("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                settings.push("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
             }
             RdbTransactionIsolation::RepeatableRead => {
-                settings.push("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                settings.push("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             }
             RdbTransactionIsolation::Serializable => {
-                settings.push("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                settings.push("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             }
             _ => {}
         }
