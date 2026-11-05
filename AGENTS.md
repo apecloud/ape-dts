@@ -102,6 +102,15 @@ extractor, parallelizer, pipeline, and sinker when changing data flow.
   [dt-tests/README.md](dt-tests/README.md) and the closest existing suite. Reuse
   its runner, helpers, fixture layout, SQL loading strategy, and isolation rules;
   do not build a parallel integration harness or ad hoc database setup.
+- Existing `dt-tests` integration cases are correctness baselines, not inputs to
+  adjust until an implementation passes. Adding new cases and their test
+  registrations is allowed and preferred for new coverage. Change an existing
+  case only when necessary for the requested task and explicitly authorized by
+  the user. This covers INI configuration, preparation/test SQL, test bodies,
+  assertions, and expected results, including temporary edits for local runs.
+  Without that authorization, preserve existing cases and add a focused new case
+  or report the existing failure. Never weaken comparisons, remove coverage, or
+  change the shared runner to bypass this constraint.
 - Keep comments concise and in English, matching nearby code. Prefer a short
   function-level comment for purpose, non-obvious contracts, or tradeoffs. Add
   inline comments only where the logic needs local explanation; do not narrate
@@ -154,8 +163,12 @@ compilation alone.
   implementing it.
 - Preserve checkpoint and serialized-format compatibility unless a change is
   intentional; document migration/recovery implications.
-- For user-visible changes, update relevant docs/examples and the changelog
-  according to `CONTRIBUTING.md`.
+- For user-visible changes, update relevant docs/examples. Update `CHANGELOG.md`
+  for feature (`feat`) PRs. For fixes (`fix`) and other non-feature PRs, do not
+  update the changelog by default unless the user explicitly requests it;
+  describe the problem, cause, solution, and validation clearly in the commit
+  message and PR description instead. This overrides the general changelog
+  update requirement in `CONTRIBUTING.md` for non-feature PRs.
 
 ## Pull Request Titles and Writing
 
