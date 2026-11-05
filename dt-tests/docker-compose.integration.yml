@@ -2082,7 +2082,7 @@ services:
     stdin_open: true
     tty: true
 
-  mssql-src:
+  mssql-src: &mssql-src
     image: mcr.microsoft.com/mssql/server:2022-CU26-ubuntu-22.04
     container_name: mssql-src-it
     environment:
@@ -2106,7 +2106,7 @@ services:
       start_period: 30s
       interval: 5s
 
-  mssql-dst:
+  mssql-dst: &mssql-dst
     image: mcr.microsoft.com/mssql/server:2022-CU26-ubuntu-22.04
     container_name: mssql-dst-it
     environment:
@@ -2129,6 +2129,26 @@ services:
       retries: 24
       start_period: 30s
       interval: 5s
+
+  mssql-src-2019:
+    <<: *mssql-src
+    image: mcr.microsoft.com/mssql/server:2019-CU32-ubuntu-20.04
+    container_name: mssql-src-2019-it
+
+  mssql-dst-2019:
+    <<: *mssql-dst
+    image: mcr.microsoft.com/mssql/server:2019-CU32-ubuntu-20.04
+    container_name: mssql-dst-2019-it
+
+  mssql-src-2025:
+    <<: *mssql-src
+    image: mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-22.04
+    container_name: mssql-src-2025-it
+
+  mssql-dst-2025:
+    <<: *mssql-dst
+    image: mcr.microsoft.com/mssql/server:2025-CU9-ubuntu-22.04
+    container_name: mssql-dst-2025-it
 
 networks:
   default:
