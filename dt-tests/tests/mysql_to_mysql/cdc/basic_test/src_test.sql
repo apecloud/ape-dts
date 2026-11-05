@@ -131,3 +131,7 @@ DELETE FROM Upper_Case_DB.Upper_Case_TB;
 INSERT INTO test_db_1.fk_tb_1 VALUES(1,1,1,1),(2,2,2,2);
 UPDATE test_db_1.fk_tb_1 SET f_1 = 3, f_2 = 3, f_3 = 3 WHERE f_0 = 1;
 -- DELETE FROM test_db_1.fk_tb_1;
+
+INSERT INTO test_db_1.expression_uk_rows VALUES (2, NULL, 'inserted');
+UPDATE test_db_1.expression_uk_rows SET val='after_update' WHERE id=1 AND code='code1';
+DELETE FROM test_db_1.expression_uk_rows WHERE id=1 AND code IS NULL;

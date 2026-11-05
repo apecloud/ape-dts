@@ -65,6 +65,20 @@ server setup require a CA certificate.
 - MongoDB snapshot extractors currently support only `table`; `chunk` is not supported.
 - Deprecated compatibility: `[runtime] tb_parallel_size` is kept only as a legacy fallback when `[extractor] parallel_size` is not set.
 
+For MySQL/PostgreSQL tables without a primary key that have an expression unique
+index, ApeDTS treats the table as unkeyed, even if ordinary unique keys also exist.
+Snapshot uses range splitting or streaming rather than unique-key pagination.
+`rdb_merge` preserves the original DML sequence; UPDATE/DELETE match the full before
+image and affect at most one row. CDC therefore requires complete before images
+(PostgreSQL `REPLICA IDENTITY FULL`; MySQL `binlog_row_image=FULL`). This fallback
+can reduce throughput. Tables with a primary key retain the primary-key path.
+
+For PostgreSQL, `sinker.replace=true` ignores INSERT conflicts on these unkeyed
+tables (`ON CONFLICT DO NOTHING`); it does not update an existing row by an
+expression's input columns. It does not repair target rows with different values.
+Restart affected snapshots from the beginning if their old checkpoints were
+generated using an incomplete expression-index key.
+
 ## Redis source cluster mode
 
 - `[extractor].url` can point to any reachable node in the source cluster. DTS discovers all source master nodes through `CLUSTER NODES` and starts one PSYNC extractor for each master.

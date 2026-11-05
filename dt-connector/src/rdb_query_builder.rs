@@ -301,7 +301,7 @@ impl RdbQueryBuilder<'_> {
                 .flatten()
                 .collect::<HashSet<&String>>();
 
-            if row_data.is_not_origin {
+            if row_data.is_not_origin && !self.rdb_tb_meta.expr_uk_no_pk {
                 return self.get_pg_replace_query(row_data, placeholder, &key_cols);
             }
 
@@ -1015,6 +1015,7 @@ mod tests {
                 foreign_keys: vec![],
                 ref_by_foreign_keys: vec![],
                 nullable_cols: HashSet::new(),
+                expr_uk_no_pk: false,
             },
             col_type_map,
         }
@@ -1043,6 +1044,7 @@ mod tests {
                 foreign_keys: vec![],
                 ref_by_foreign_keys: vec![],
                 nullable_cols: HashSet::new(),
+                expr_uk_no_pk: false,
             },
             oid: 1,
             col_type_map,
@@ -1071,6 +1073,7 @@ mod tests {
                 foreign_keys: vec![],
                 ref_by_foreign_keys: vec![],
                 nullable_cols: HashSet::new(),
+                expr_uk_no_pk: false,
             },
             oid: 1,
             col_type_map,
@@ -1102,6 +1105,7 @@ mod tests {
                 foreign_keys: vec![],
                 ref_by_foreign_keys: vec![],
                 nullable_cols: HashSet::new(),
+                expr_uk_no_pk: false,
             },
             oid: 1,
             col_type_map,
@@ -1125,6 +1129,7 @@ mod tests {
                 foreign_keys: vec![],
                 ref_by_foreign_keys: vec![],
                 nullable_cols: HashSet::new(),
+                expr_uk_no_pk: false,
             },
             oid: 2,
             col_type_map,
@@ -1424,6 +1429,59 @@ mod tests {
             query_info.sql,
             r#"INSERT INTO "public"."t1"("id","code","name") VALUES($1::int4,$2::text,$3::text) ON CONFLICT DO NOTHING"#
         );
+    }
+
+    #[test]
+    fn test_pg_expression_uk_without_pk_replace_ignores_conflicts() {
+        let mut tb_meta = build_pg_tb_meta_without_keys();
+        tb_meta.basic.expr_uk_no_pk = true;
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        for is_not_origin in [false, true] {
+            let row_data = build_insert_row_data(is_not_origin);
+            let query_info = builder.get_query_info(&row_data, true).unwrap();
+            assert_eq!(
+                query_info.sql,
+                r#"INSERT INTO "public"."t1"("id","code","name") VALUES($1::int4,$2::text,$3::text) ON CONFLICT DO NOTHING"#
+            );
+            builder.create_pg_query(&query_info).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_pg_expression_uk_without_pk_matches_full_before_row() {
+        let mut tb_meta = build_pg_tb_meta_without_keys();
+        tb_meta.basic.expr_uk_no_pk = true;
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+        let mut update = build_plain_update_row_data();
+        update
+            .before
+            .as_mut()
+            .unwrap()
+            .insert("code".into(), ColValue::None);
+        let query_info = builder.get_query_info(&update, true).unwrap();
+        assert_eq!(
+            query_info.sql,
+            r#"UPDATE "public"."t1" SET "id"=$1::int4,"code"=$2::text,"name"=$3::text WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE "id" = $4::int4 AND "code" IS NULL AND "name" = $5::text LIMIT 1)"#
+        );
+        assert_eq!(query_info.binds.len(), 5);
+        builder.create_pg_query(&query_info).unwrap();
+
+        let delete = RowData::new(
+            update.schema,
+            update.tb,
+            0,
+            RowType::Delete,
+            update.before,
+            None,
+        );
+        let query_info = builder.get_query_info(&delete, true).unwrap();
+        assert_eq!(
+            query_info.sql,
+            r#"DELETE FROM "public"."t1" WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE "id" = $1::int4 AND "code" IS NULL AND "name" = $2::text LIMIT 1)"#
+        );
+        assert_eq!(query_info.binds.len(), 2);
+        builder.create_pg_query(&query_info).unwrap();
     }
 
     #[test]

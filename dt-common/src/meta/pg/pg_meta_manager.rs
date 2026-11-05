@@ -83,10 +83,17 @@ impl PgMetaManager {
                 Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
             let mut key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
             // unique indexes (e.g. CREATE UNIQUE INDEX) are not in table_constraints;
-            let unique_index_keys =
+            let (unique_index_keys, has_expression_unique_index) =
                 Self::parse_unique_index_keys(&self.conn_pool, schema, tb).await?;
             for (k, v) in unique_index_keys {
                 key_map.entry(k).or_insert(v);
+            }
+            let expr_uk_no_pk =
+                has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY_FLAG);
+            // In cases where there is no PK but a UK with an expression exists,
+            // the subsequent logic should be handled as if neither a PK nor a UK were present.
+            if expr_uk_no_pk {
+                key_map.clear();
             }
             let (order_cols, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)
@@ -103,6 +110,7 @@ impl PgMetaManager {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
+                expr_uk_no_pk,
                 order_cols,
                 partition_col,
                 id_cols,
@@ -260,12 +268,13 @@ impl PgMetaManager {
         conn_pool: &Pool<Postgres>,
         schema: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
+    ) -> anyhow::Result<(HashMap<String, Vec<String>>, bool)> {
         let sql = format!(
             r#"
             SELECT
                 i.relname AS index_name,
                 a.attname AS col_name,
+                ix.indexprs IS NOT NULL AS has_expression,
                 k.ord AS ord
             FROM pg_class t
             JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -275,7 +284,7 @@ impl PgMetaManager {
                    ON c.conindid = ix.indexrelid
                   AND c.contype IN ('p','u')
             CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
-            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+            LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
                 AND a.attnum > 0 AND NOT a.attisdropped
             WHERE n.nspname = '{}' AND t.relname = '{}'
               AND ix.indisunique
@@ -285,12 +294,19 @@ impl PgMetaManager {
         );
         let mut rows = sqlx::query(&sql).fetch(conn_pool);
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut has_expression_unique_index = false;
         while let Some(row) = rows.try_next().await? {
+            // Skip the entire index, including its ordinary columns. LEFT JOIN keeps
+            // expression-only indexes visible even though their indkey entries are zero.
+            if row.try_get::<bool, _>("has_expression")? {
+                has_expression_unique_index = true;
+                continue;
+            }
             let index_name: String = row.try_get("index_name")?;
             let col_name: String = row.try_get("col_name")?;
             key_map.entry(index_name).or_default().push(col_name);
         }
-        Ok(key_map)
+        Ok((key_map, has_expression_unique_index))
     }
 
     async fn get_oid(conn_pool: &Pool<Postgres>, schema: &str, tb: &str) -> anyhow::Result<i32> {

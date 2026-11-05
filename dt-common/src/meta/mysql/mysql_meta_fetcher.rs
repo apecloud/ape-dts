@@ -86,7 +86,15 @@ impl MysqlMetaFetcher {
         if !self.cache.contains_key(&full_name) {
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
-            let key_map = Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let (mut key_map, has_expression_unique_index) =
+                Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let expr_uk_no_pk =
+                has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY_FLAG);
+            // In cases where there is no PK but a UK with an expression exists,
+            // the subsequent logic should be handled as if neither a PK nor a UK were present.
+            if expr_uk_no_pk {
+                key_map.clear();
+            }
             let (order_cols, partition_col, id_cols) =
                 RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols).with_context(
                     || format!("database: {}, table: {} parse cols error.", schema, tb),
@@ -104,6 +112,7 @@ impl MysqlMetaFetcher {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
+                expr_uk_no_pk,
                 order_cols,
                 partition_col,
                 id_cols,
@@ -332,8 +341,9 @@ impl MysqlMetaFetcher {
         conn_pool: &Pool<MySql>,
         schema: &str,
         tb: &str,
-    ) -> anyhow::Result<HashMap<String, Vec<String>>> {
+    ) -> anyhow::Result<(HashMap<String, Vec<String>>, bool)> {
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut expression_indexes = HashSet::new();
         // let mut prefixed_keys = HashSet::new();
         let sql = format!("SHOW INDEXES FROM `{}`.`{}`", schema, tb);
         let mut rows = sqlx::raw_sql(&sql).fetch(conn_pool);
@@ -348,25 +358,33 @@ impl MysqlMetaFetcher {
             //      primary key some_pk_name(id, value),
             //      unique key some_uk_name(value));
             // mysql> SHOW INDEXES FROM test_db_1.a;
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            // | Table | Non_unique | Key_name     | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment |
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            // | a     |          0 | PRIMARY      |            1 | id          | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
+            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------+---------------------+
+            // | Table | Non_unique | Key_name     | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Visible(8.0.0+) | Expression(8.0.13+) |
+            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------+---------------------+
+            // | a     |          0 | PRIMARY      |            1 | id          | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 |
+            // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 |
+            // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 |
+            // | a     |          0 | some_uk_name |            2 |             | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 | coalesce(`code`,_utf8mb4\'\')
+            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------+---------------------+
             let mut key_name = SqlUtil::try_get_mysql_string(&row, "Key_name")?;
             if key_name == "PRIMARY" {
                 key_name = RDB_PRIMARY_KEY_FLAG.to_string();
             }
-            let col_name = SqlUtil::try_get_mysql_string(&row, "Column_name")?;
+            let Some(col_name) = SqlUtil::try_get_mysql_optional_string(&row, "Column_name")?
+            else {
+                expression_indexes.insert(key_name);
+                continue;
+            };
             if let Some(key_cols) = key_map.get_mut(&key_name) {
                 key_cols.push(col_name);
             } else {
                 key_map.insert(key_name, vec![col_name]);
             }
         }
-        Ok(key_map)
+        for index_name in &expression_indexes {
+            key_map.remove(index_name);
+        }
+        Ok((key_map, !expression_indexes.is_empty()))
     }
 
     #[allow(dead_code)]

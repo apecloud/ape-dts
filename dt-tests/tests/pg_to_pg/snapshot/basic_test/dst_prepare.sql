@@ -159,3 +159,9 @@ INSERT INTO test_db_1.tbl_1 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3
 INSERT INTO test_db_1.tbl_2 VALUES('code1', 'name1'),('code1', 'name2'),('code3', 'name3');
 INSERT INTO test_db_1.tbl_3 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
 INSERT INTO test_db_1.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+
+CREATE TABLE test_db_1.expression_uk_as_unkeyed (id INT NOT NULL, code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX expression_uk_as_unkeyed_idx ON test_db_1.expression_uk_as_unkeyed (id, COALESCE(code, ''));
+
+CREATE TABLE test_db_1.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX expression_uk_rows_idx ON test_db_1.expression_uk_rows (id, COALESCE(code, ''));

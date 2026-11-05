@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Treat MySQL/PostgreSQL tables without a primary key and with expression unique indexes as unkeyed for CDC row matching and snapshot pagination, including when ordinary unique keys coexist. Retain primary-key behavior for tables with a primary key, and avoid invalid PostgreSQL replace conflict targets for derived inserts on unkeyed expression-index tables.
+
 ## [2.0.26.1] - 2026-09-29
 
 This release builds on 2.0.26 with fixes and features we believe needed to be delivered promptly.
