@@ -165,3 +165,6 @@ CREATE INDEX nonunique_expression_idx ON tb_meta_test.primary_and_nonunique_expr
 
 CREATE TABLE tb_meta_test.ordinary_unique_key (id INT NOT NULL, code VARCHAR(30));
 CREATE UNIQUE INDEX ordinary_unique_key_idx ON tb_meta_test.ordinary_unique_key (id);
+
+CREATE TABLE tb_meta_test.ordinary_and_expression_key (id INT NOT NULL UNIQUE, code VARCHAR(30));
+CREATE UNIQUE INDEX ordinary_and_expression_key_idx ON tb_meta_test.ordinary_and_expression_key (COALESCE(code, ''));

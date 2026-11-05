@@ -86,13 +86,16 @@ impl MysqlMetaFetcher {
         if !self.cache.contains_key(&full_name) {
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
-            let (key_map, has_expression_unique_index) =
+            let (mut key_map, has_expression_unique_index) =
                 Self::parse_keys(&self.conn_pool, schema, tb).await?;
-            let (mut order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
-            if has_expression_unique_index {
-                order_cols.clear();
+            let expr_uk_no_pk =
+                has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY_FLAG);
+            // Without a primary key, use the existing unkeyed-table path throughout.
+            if expr_uk_no_pk {
+                key_map.clear();
             }
+            let (order_cols, partition_col, id_cols) =
+                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
             // disable get_foreign_keys since we don't support foreign key check,
             // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
@@ -106,7 +109,7 @@ impl MysqlMetaFetcher {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
-                has_expression_unique_index,
+                expr_uk_no_pk,
                 order_cols,
                 partition_col,
                 id_cols,

@@ -18,6 +18,59 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_expression_unique_key_replace_test() {
+        let runner = RdbTestRunner::new("pg_to_pg/cdc/expression_uk_replace_test")
+            .await
+            .unwrap();
+        runner.execute_prepare_sqls().await.unwrap();
+        let task = runner.spawn_cdc_task(3000, 5000).await.unwrap();
+        runner
+            .execute_src_sqls(&runner.base.src_test_sqls)
+            .await
+            .unwrap();
+        task.await.unwrap();
+
+        // Target-only conflicts and a changed before image intentionally differ from source.
+        let target = runner.dst_conn_pool_pg.as_ref().unwrap();
+        for (table, expected) in [
+            (
+                "mixed_rows",
+                vec![
+                    (1, None, "keep_null"),
+                    (1, Some("code1"), "after_update"),
+                    (2, Some("replay"), "target_value"),
+                    (3, Some(""), "target_value"),
+                ],
+            ),
+            (
+                "ordinary_rows",
+                vec![
+                    (1, Some("B"), "after_update"),
+                    (2, Some("drifted"), "before_update"),
+                ],
+            ),
+            (
+                "primary_rows",
+                vec![
+                    (1, Some("A"), "after_update"),
+                    (2, Some("B"), "source_value"),
+                ],
+            ),
+        ] {
+            let actual: Vec<(i32, Option<String>, String)> = sqlx::query_as(&format!(
+                "SELECT id, code, val FROM expression_uk_replace.{table} ORDER BY id, code NULLS FIRST"
+            )).fetch_all(target).await.unwrap();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|(id, code, val)| (id, code.map(str::to_string), val.to_string()))
+                .collect();
+            assert_eq!(actual, expected, "{table}");
+        }
+        runner.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cdc_expression_unique_key_conflict_test() {
         let runner = RdbTestRunner::new("pg_to_pg/cdc/basic_test/expression_uk_conflict")
             .await

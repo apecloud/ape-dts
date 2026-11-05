@@ -88,11 +88,14 @@ impl PgMetaManager {
             for (k, v) in unique_index_keys {
                 key_map.entry(k).or_insert(v);
             }
-            let (mut order_cols, partition_col, id_cols) =
-                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
-            if has_expression_unique_index {
-                order_cols.clear();
+            let expr_uk_no_pk =
+                has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY_FLAG);
+            // Without a primary key, use the existing unkeyed-table path throughout.
+            if expr_uk_no_pk {
+                key_map.clear();
             }
+            let (order_cols, partition_col, id_cols) =
+                RdbMetaManager::parse_rdb_cols(&key_map, &cols, &nullable_cols)?;
             // disable get_foreign_keys since we don't support foreign key check
             let (foreign_keys, ref_by_foreign_keys) = (vec![], vec![]);
             // let (foreign_keys, ref_by_foreign_keys) =
@@ -105,7 +108,7 @@ impl PgMetaManager {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
-                has_expression_unique_index,
+                expr_uk_no_pk,
                 order_cols,
                 partition_col,
                 id_cols,

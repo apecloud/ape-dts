@@ -174,3 +174,7 @@ INSERT INTO test_db_1.negative_time_composite_uk_table VALUES
 ('-00:00:00.000001', 1970, 6),
 ('00:00:00.000000', 1989, 7),
 ('838:59:59.000000', 2155, 8);
+
+INSERT INTO test_db_1.expression_uk_rows VALUES (1, NULL, 'null_code'), (1, 'code1', 'first'), (1, 'code2', 'second'), (2, NULL, 'next_id');
+INSERT INTO test_db_1.primary_and_expression_uk VALUES (1, 'code1', 'first'), (2, 'code2', 'second');
+INSERT INTO test_db_1.ordinary_and_expression_uk VALUES (1, 'code1', 'first'), (2, 'code2', 'second');

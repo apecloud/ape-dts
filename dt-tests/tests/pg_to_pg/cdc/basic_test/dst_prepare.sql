@@ -160,3 +160,8 @@ INSERT INTO pkuk.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'na
 CREATE TABLE pkuk.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val TEXT);
 CREATE UNIQUE INDEX expression_uk_rows_idx ON pkuk.expression_uk_rows (id, COALESCE(code, ''));
 INSERT INTO pkuk.expression_uk_rows VALUES (1, NULL, 'keep_null'), (1, 'code1', 'before_update');
+
+-- The target may also be published by other CDC tests.
+ALTER TABLE pkuk.tbl_2 REPLICA IDENTITY FULL;
+ALTER TABLE pkuk.tbl_4 REPLICA IDENTITY FULL;
+ALTER TABLE pkuk.expression_uk_rows REPLICA IDENTITY FULL;

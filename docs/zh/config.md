@@ -64,6 +64,16 @@ url=mysql://user1:abc%25%24%23%3F%40@127.0.0.1:3307?ssl-mode=disabled
 - MongoDB 的 snapshot extractor 当前只支持 `table`，不支持 `chunk`。
 - 废弃兼容说明：`[runtime] tb_parallel_size` 仅作为旧配置兼容 fallback 保留，只有在未设置 `[extractor] parallel_size` 时才会生效。
 
+MySQL/PostgreSQL 表在无主键且存在表达式唯一索引时，按无键表处理，即使同时存在普通唯一键。
+snapshot 使用范围分片或流式读取，不使用唯一键分页；`rdb_merge` 保留原始 DML 顺序，
+UPDATE/DELETE 匹配完整 before image，最多影响一行。因此 CDC 需要完整旧行数据
+（PostgreSQL 设置 `REPLICA IDENTITY FULL`，MySQL 设置 `binlog_row_image=FULL`）。
+该降级可能降低吞吐量；有主键的表仍沿用主键路径。
+
+这类无键表在 PostgreSQL 设置 `sinker.replace=true` 时，INSERT 冲突直接忽略
+（`ON CONFLICT DO NOTHING`），不会按表达式输入列更新已有行，也不会修复目标端值不同的行。
+如果受影响表的旧 snapshot 断点使用了残缺的表达式索引键，需要从头重新 snapshot。
+
 ## Redis 源端集群模式
 
 - `[extractor].url` 可以指向源端集群中任意可访问的节点。DTS 会通过 `CLUSTER NODES` 发现所有源端 master 节点，并为每个 master 启动一个 PSYNC extractor。

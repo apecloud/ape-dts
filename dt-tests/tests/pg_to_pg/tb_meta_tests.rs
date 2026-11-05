@@ -142,9 +142,13 @@ mod test {
         let mut manager = PgMetaManager::new(runner.src_conn_pool_pg.as_ref().unwrap().clone())
             .await
             .unwrap();
-        for table in ["mixed_expression_key", "expression_only_key"] {
+        for table in [
+            "mixed_expression_key",
+            "expression_only_key",
+            "ordinary_and_expression_key",
+        ] {
             let meta = manager.get_tb_meta("tb_meta_test", table).await.unwrap();
-            assert!(meta.basic.has_expression_unique_index, "{table}");
+            assert!(meta.basic.expr_uk_no_pk, "{table}");
             assert!(meta.basic.key_map.is_empty(), "{table}");
             assert!(meta.basic.order_cols.is_empty(), "{table}");
             assert_eq!(meta.basic.id_cols, meta.basic.cols, "{table}");
@@ -153,15 +157,15 @@ mod test {
             .get_tb_meta("tb_meta_test", "primary_and_expression_key")
             .await
             .unwrap();
-        assert!(meta.basic.has_expression_unique_index);
+        assert!(!meta.basic.expr_uk_no_pk);
         assert_eq!(meta.basic.key_map.len(), 1);
         assert_eq!(meta.basic.key_map["primary"], vec!["id"]);
         assert_eq!(meta.basic.id_cols, vec!["id"]);
-        assert!(meta.basic.order_cols.is_empty());
+        assert_eq!(meta.basic.order_cols, vec!["id"]);
 
         for table in ["primary_and_nonunique_expression", "ordinary_unique_key"] {
             let meta = manager.get_tb_meta("tb_meta_test", table).await.unwrap();
-            assert!(!meta.basic.has_expression_unique_index, "{table}");
+            assert!(!meta.basic.expr_uk_no_pk, "{table}");
             assert_eq!(meta.basic.key_map.len(), 1, "{table}");
             assert_eq!(meta.basic.id_cols, vec!["id"], "{table}");
             assert_eq!(meta.basic.order_cols, vec!["id"], "{table}");

@@ -75,7 +75,7 @@ impl RdbMerger {
             Err(error) => return Err(error),
         };
 
-        if tb_meta.has_expression_unique_index || row_data.contains_unchanged_toast() {
+        if tb_meta.expr_uk_no_pk || row_data.contains_unchanged_toast() {
             merged.unmerged_rows.push(row_data);
             return Ok(());
         }
@@ -326,9 +326,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expression_unique_index_preserves_all_events_even_with_primary_key() {
+    async fn expression_unique_index_without_primary_key_preserves_all_events() {
         let mut tb_meta = build_tb_meta();
-        tb_meta.has_expression_unique_index = true;
+        tb_meta.expr_uk_no_pk = true;
+        tb_meta.key_map.clear();
+        tb_meta.id_cols = tb_meta.cols.clone();
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://localhost/test")
             .unwrap();
