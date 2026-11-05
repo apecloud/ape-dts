@@ -77,4 +77,10 @@ mod test {
         runner.base.execute_clean_sqls().await.unwrap();
         runner.close().await.unwrap();
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_expression_index_test() {
+        TestBase::run_mysql_struct_test("mysql_to_mysql/struct/expression_index_test").await;
+    }
 }

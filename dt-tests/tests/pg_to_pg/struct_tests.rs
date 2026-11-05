@@ -99,4 +99,10 @@ mod test {
     async fn struct_ssl_test() {
         TestBase::run_pg_struct_test("pg_to_pg/struct/ssl_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_expression_index_test() {
+        TestBase::run_pg_struct_test("pg_to_pg/struct/expression_index_test").await;
+    }
 }
