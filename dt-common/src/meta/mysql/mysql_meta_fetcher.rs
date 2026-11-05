@@ -90,7 +90,8 @@ impl MysqlMetaFetcher {
                 Self::parse_keys(&self.conn_pool, schema, tb).await?;
             let expr_uk_no_pk =
                 has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY_FLAG);
-            // Without a primary key, use the existing unkeyed-table path throughout.
+            // In cases where there is no PK but a UK with an expression exists,
+            // the subsequent logic should be handled as if neither a PK nor a UK were present.
             if expr_uk_no_pk {
                 key_map.clear();
             }
@@ -355,13 +356,14 @@ impl MysqlMetaFetcher {
             //      primary key some_pk_name(id, value),
             //      unique key some_uk_name(value));
             // mysql> SHOW INDEXES FROM test_db_1.a;
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            // | Table | Non_unique | Key_name     | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment |
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
-            // | a     |          0 | PRIMARY      |            1 | id          | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |
-            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+
+            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------+---------------------+
+            // | Table | Non_unique | Key_name     | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Visible(8.0.0+) | Expression(8.0.13+) |
+            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------+---------------------+
+            // | a     |          0 | PRIMARY      |            1 | id          | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 |
+            // | a     |          0 | PRIMARY      |            2 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 |
+            // | a     |          0 | some_uk_name |            1 | value       | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 |
+            // | a     |          0 | some_uk_name |            2 |             | A         |           0 |     NULL | NULL   |      | BTREE      |         |               |                 | coalesce(`code`,_utf8mb4\'\')
+            // +-------+------------+--------------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------+---------------------+
             let mut key_name = SqlUtil::try_get_mysql_string(&row, "Key_name")?;
             if key_name == "PRIMARY" {
                 key_name = RDB_PRIMARY_KEY_FLAG.to_string();

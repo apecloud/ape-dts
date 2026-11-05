@@ -90,7 +90,8 @@ impl PgMetaManager {
             }
             let expr_uk_no_pk =
                 has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY_FLAG);
-            // Without a primary key, use the existing unkeyed-table path throughout.
+            // In cases where there is no PK but a UK with an expression exists,
+            // the subsequent logic should be handled as if neither a PK nor a UK were present.
             if expr_uk_no_pk {
                 key_map.clear();
             }
