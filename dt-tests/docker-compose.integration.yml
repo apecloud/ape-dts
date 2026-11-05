@@ -81,7 +81,7 @@ services:
     ports: ["11434:1433"]
 
   mysql-src:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: mysql-src-it
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -114,7 +114,7 @@ services:
       interval: 5s
 
   mysql-dst:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: mysql-dst-it
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -147,7 +147,7 @@ services:
       interval: 5s
 
   mysql-meta:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: mysql-meta-it
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -180,7 +180,7 @@ services:
       interval: 5s
 
   mysql-src-8-0:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: mysql-src-8-0-it
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -210,7 +210,7 @@ services:
       interval: 5s
 
   mysql-src-tidb:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: mysql-src-tidb-it
     environment:
       MYSQL_ROOT_PASSWORD: 123456
@@ -243,7 +243,7 @@ services:
       interval: 5s
 
   mysql-dst-8-0:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: mysql-dst-8-0-it
     environment:
       MYSQL_ROOT_PASSWORD: 123456

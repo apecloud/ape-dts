@@ -82,4 +82,10 @@ mod test {
     async fn struct_rules_router_test() {
         TestBase::run_mysql_struct_test("mysql_to_mysql/struct/rules_router_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn struct_expression_index_test() {
+        TestBase::run_mysql_struct_test("mysql_to_mysql/struct/expression_index_test").await;
+    }
 }

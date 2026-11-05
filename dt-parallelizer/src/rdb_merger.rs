@@ -84,7 +84,7 @@ impl RdbMerger {
             Err(error) => return Err(error),
         };
 
-        if row_data.contains_unchanged_toast() {
+        if tb_meta.expr_uk_no_pk || row_data.contains_unchanged_toast() {
             merged.unmerged_rows.push(row_data);
             return Ok(());
         }
@@ -241,7 +241,10 @@ mod tests {
     use std::collections::HashMap;
 
     use dt_common::meta::{
-        col_value::ColValue, rdb_meta_manager::RDB_PRIMARY_KEY, row_type::RowType,
+        col_value::ColValue,
+        pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta, type_registry::TypeRegistry},
+        rdb_meta_manager::RDB_PRIMARY_KEY,
+        row_type::RowType,
     };
 
     use super::*;
@@ -332,5 +335,62 @@ mod tests {
         assert_eq!(merged.insert_rows.len(), 1);
         assert!(merged.delete_rows.values().all(|row| row.is_not_origin));
         assert!(merged.insert_rows.values().all(|row| row.is_not_origin));
+    }
+
+    #[tokio::test]
+    async fn expression_unique_index_without_primary_key_preserves_all_events() {
+        let mut tb_meta = build_tb_meta();
+        tb_meta.expr_uk_no_pk = true;
+        tb_meta.key_map.clear();
+        tb_meta.id_cols = tb_meta.cols.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/test")
+            .unwrap();
+        let meta_manager = PgMetaManager {
+            conn_pool: pool.clone(),
+            type_registry: TypeRegistry::new(pool),
+            name_to_tb_meta: HashMap::from([(
+                r#""test_db"."test_tb""#.to_string(),
+                PgTbMeta {
+                    basic: tb_meta,
+                    ..Default::default()
+                },
+            )]),
+            oid_to_tb_meta: HashMap::new(),
+        };
+        let mut merger = RdbMerger {
+            rdb_meta_manager: RdbMetaManager::from_pg(meta_manager),
+            allow_missing_meta: false,
+        };
+        let update = build_update_row("value");
+        let insert = RowData::new(
+            update.db.clone(),
+            update.schema.clone(),
+            update.tb.clone(),
+            0,
+            RowType::Insert,
+            None,
+            update.before.clone(),
+        );
+        let delete = RowData::new(
+            update.db.clone(),
+            update.schema.clone(),
+            update.tb.clone(),
+            0,
+            RowType::Delete,
+            update.after.clone(),
+            None,
+        );
+        let result = merger.merge(vec![insert, update, delete]).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].delete_rows.is_empty());
+        assert!(result[0].insert_rows.is_empty());
+        let rows = &result[0].unmerged_rows;
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].row_type, RowType::Insert);
+        assert_eq!(rows[1].row_type, RowType::Update);
+        assert_eq!(rows[2].row_type, RowType::Delete);
+        assert!(rows.iter().all(|row| !row.is_not_origin));
+        assert!(rows[1].before.is_some() && rows[1].after.is_some());
     }
 }

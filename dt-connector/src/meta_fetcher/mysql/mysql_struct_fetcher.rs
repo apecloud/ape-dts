@@ -338,16 +338,9 @@ impl MysqlStructFetcher {
             return Ok(results);
         };
 
+        // SELECT * includes EXPRESSION where supported without referencing it on MySQL 5.7.
         let sql = format!(
-            "SELECT TABLE_SCHEMA,
-                TABLE_NAME,
-                NON_UNIQUE,
-                INDEX_NAME,
-                SEQ_IN_INDEX,
-                COLUMN_NAME,
-                SUB_PART,
-                INDEX_TYPE,
-                COMMENT
+            "SELECT *
             FROM information_schema.statistics
             WHERE INDEX_NAME != '{}' AND {}
             ORDER BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX",
@@ -377,6 +370,14 @@ impl MysqlStructFetcher {
             };
             let column = IndexColumn {
                 column_name: Self::get_str_with_null(&row, "COLUMN_NAME")?,
+                expression: match row.try_column("EXPRESSION") {
+                    Ok(_) => match SqlUtil::try_get_mysql_optional_string(&row, "EXPRESSION")? {
+                        Some(expression) => Some(self.unescape(expression).await?),
+                        None => None,
+                    },
+                    Err(sqlx::Error::ColumnNotFound(_)) => None,
+                    Err(error) => return Err(error.into()),
+                },
                 seq_in_index,
                 prefix_length: sub_part,
             };

@@ -115,3 +115,10 @@ CREATE TABLE test_db_1.negative_time_composite_uk_table (
     val int,
     UNIQUE KEY uk_time_year(time_col, year_col)
 );
+
+CREATE TABLE test_db_1.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val VARCHAR(30));
+/*!80013 CREATE UNIQUE INDEX expression_uk_rows_idx ON test_db_1.expression_uk_rows (id, (COALESCE(code, ''))) */;
+CREATE TABLE test_db_1.primary_and_expression_uk (id INT PRIMARY KEY, code VARCHAR(30), val VARCHAR(30));
+/*!80013 CREATE UNIQUE INDEX primary_and_expression_uk_idx ON test_db_1.primary_and_expression_uk ((COALESCE(code, ''))) */;
+CREATE TABLE test_db_1.ordinary_and_expression_uk (id INT NOT NULL UNIQUE, code VARCHAR(30), val VARCHAR(30));
+/*!80013 CREATE UNIQUE INDEX ordinary_and_expression_uk_idx ON test_db_1.ordinary_and_expression_uk ((COALESCE(code, ''))) */;
