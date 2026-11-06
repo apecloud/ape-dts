@@ -512,6 +512,51 @@ mod tests {
     }
 
     #[test]
+    fn pg_rename_routes_within_the_table_schema_and_keeps_new_name_unqualified() {
+        let router = DtRouter::new(
+            DbType::Pg,
+            DbType::Pg,
+            [
+                (rid!("inventory"), rid!("archive")),
+                (rid!("inventory", "events"), rid!("archive", "new_events")),
+            ],
+        )
+        .unwrap();
+        for (query, default_schema, expected) in [
+            (
+                "ALTER TABLE inventory.orders RENAME TO events",
+                "public",
+                "ALTER TABLE \"archive\".\"orders\" RENAME TO \"new_events\"",
+            ),
+            (
+                "ALTER TABLE orders RENAME TO events",
+                "inventory",
+                "ALTER TABLE \"archive\".\"orders\" RENAME TO \"new_events\"",
+            ),
+            (
+                "ALTER TABLE ONLY inventory.orders RENAME TO \"event\"\"log\"",
+                "public",
+                "ALTER TABLE ONLY \"archive\".\"orders\" RENAME TO \"event\"\"log\"",
+            ),
+        ] {
+            let mut ddl = DdlParser::new(DbType::Pg).parse(query).unwrap().unwrap();
+            ddl.default_schema = default_schema.into();
+            assert_eq!(ddl.get_rename_id::<RID>().segment(0), "inventory");
+            let routed = router.route_ddl(ddl).unwrap();
+            assert_eq!(routed.to_sql(), expected);
+            assert_eq!(routed.get_rename_id::<RID>().segment(0), "archive");
+
+            let decoded: DdlData =
+                serde_json::from_str(&serde_json::to_string(&routed).unwrap()).unwrap();
+            assert_eq!(decoded.to_sql(), expected);
+            assert_eq!(
+                decoded.get_rename_id::<RID>(),
+                routed.get_rename_id::<RID>()
+            );
+        }
+    }
+
+    #[test]
     fn ddl_and_structure_adapters_route_namespaces_and_both_rename_sides() {
         for (engine, query) in [
             (

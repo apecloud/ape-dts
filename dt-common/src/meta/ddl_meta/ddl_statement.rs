@@ -192,7 +192,12 @@ impl DdlStatement {
                 (String::new(), s.new_db.clone(), s.new_tb.clone())
             }
             DdlStatement::PgAlterTableRename(s) => {
-                (String::new(), s.new_schema.clone(), s.new_tb.clone())
+                let schema = if s.new_schema.is_empty() {
+                    &s.schema
+                } else {
+                    &s.new_schema
+                };
+                (String::new(), schema.clone(), s.new_tb.clone())
             }
             DdlStatement::MongoCommand(s) => {
                 (String::new(), s.new_schema.clone(), s.new_tb.clone())
@@ -268,7 +273,10 @@ impl DdlStatement {
 
             DdlStatement::PgAlterTableRename(s) => {
                 s.schema = dst_schema;
-                s.new_schema = dst_new_schema;
+                // PostgreSQL RENAME TO takes an unqualified table name.
+                if !s.new_schema.is_empty() {
+                    s.new_schema = dst_new_schema;
+                }
                 s.tb = dst_tb;
                 s.new_tb = dst_new_tb;
             }
