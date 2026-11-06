@@ -13,10 +13,10 @@ For configuration changes between releases, see [Config changelog](/docs/en/conf
 | url                  | database URL; credentials may be included in the URL or configured separately                                          | `mysql://127.0.0.1:3307`                                                                             | empty                                                                                                            |
 | username             | database connection username                                                                                           | root                                                                                                 | empty                                                                                                            |
 | password             | database connection password                                                                                           | password                                                                                             | empty                                                                                                            |
-| ssl_mode             | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS mode: `disable`, `require`, `verify_ca`, `verify_full`. | verify_ca                                                                                            | not set                                                                                                          |
-| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS verification                                                     | /etc/ssl/certs/ca.pem                                                                                | empty                                                                                                            |
-| ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
-| ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
+| ssl_mode             | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS mode: `disable`, `require`, `verify_ca`, `verify_full`.                       | verify_ca                                                                                            | not set                                                                                                          |
+| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS verification                                      | /etc/ssl/certs/ca.pem                                                                                | empty                                                                                                            |
+| ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL                      | /etc/ssl/client.crt                                                                                  | empty                                                                                                            |
+| ssl_client_key_path  | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file   | /etc/ssl/client.key                                                                                  | empty                                                                                                            |
 | max_connections      | maximum source connection pool size                                                                                    | 10                                                                                                   | 10                                                                                                               |
 | batch_size           | number of rows extracted per batch; if using chunk splitting, this is also the target chunk size for the source        | 10000                                                                                                | `[pipeline].buffer_size / effective snapshot parallel_size`. If set to 0, uses `[pipeline].buffer_size` directly |
 | max_rps              | optional source-side rate limit in records per second; `0` disables the limit                                          | 1000                                                                                                 | 0                                                                                                                |
@@ -78,14 +78,14 @@ task SSL settings override URL, ADO.NET and JDBC encryption/trust settings.
 This matrix describes the five engines covered by these TLS settings on this branch.
 The driver-specific limits for `verify_ca` are described above.
 
-| Engine | ssl_mode | struct | snapshot | CDC | checker |
-| --- | --- | --- | --- | --- | --- |
-| MySQL | `disable`, `require` | Yes | Yes | Yes | Yes |
-| MySQL | `verify_ca`, `verify_full` | Yes | Yes | No (binlog driver limitation) | Yes |
-| PostgreSQL | `disable`, `require`, `verify_ca`, `verify_full` | Yes | Yes | Yes | Yes |
-| MSSQL | `disable`, `require`, `verify_ca`, `verify_full` | No | Yes | No | No |
-| Redis | `disable`, `require`, `verify_ca`, `verify_full` | No | Yes | Yes (including snapshot-and-CDC) | No |
-| MongoDB | `disable`, `require`, `verify_ca`, `verify_full` | Yes | Yes | Yes | Yes |
+| Engine     | ssl_mode                                         | struct | snapshot | CDC                              | checker |
+| ---------- | ------------------------------------------------ | ------ | -------- | -------------------------------- | ------- |
+| MySQL      | `disable`, `require`                             | Yes    | Yes      | Yes                              | Yes     |
+| MySQL      | `verify_ca`, `verify_full`                       | Yes    | Yes      | No (binlog driver limitation)    | Yes     |
+| PostgreSQL | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes     |
+| MSSQL      | `disable`, `require`, `verify_ca`, `verify_full` | No     | Yes      | No                               | No      |
+| Redis      | `disable`, `require`, `verify_ca`, `verify_full` | No     | Yes      | Yes (including snapshot-and-CDC) | No      |
+| MongoDB    | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes     |
 
 TLS tests and fixtures share `dt-tests/tests/tls/`, with sibling engine/topology/version
 directories (for example, `mongo_shard` and `redis_cluster_6_2`). Each directory groups
@@ -127,20 +127,6 @@ MSSQL does not support TLS client certificates.
 - MongoDB snapshot extractors currently support only `table`; `chunk` is not supported.
 - Deprecated compatibility: `[runtime] tb_parallel_size` is kept only as a legacy fallback when `[extractor] parallel_size` is not set.
 
-For MySQL/PostgreSQL tables without a primary key that have an expression unique
-index, ApeDTS treats the table as unkeyed, even if ordinary unique keys also exist.
-Snapshot uses range splitting or streaming rather than unique-key pagination.
-`rdb_merge` preserves the original DML sequence; UPDATE/DELETE match the full before
-image and affect at most one row. CDC therefore requires complete before images
-(PostgreSQL `REPLICA IDENTITY FULL`; MySQL `binlog_row_image=FULL`). This fallback
-can reduce throughput. Tables with a primary key retain the primary-key path.
-
-For PostgreSQL, `sinker.replace=true` ignores INSERT conflicts on these unkeyed
-tables (`ON CONFLICT DO NOTHING`); it does not update an existing row by an
-expression's input columns. It does not repair target rows with different values.
-Restart affected snapshots from the beginning if their old checkpoints were
-generated using an incomplete expression-index key.
-
 ## Redis source cluster mode
 
 - `[extractor].url` can point to any reachable node in the source cluster. DTS discovers all source master nodes through `CLUSTER NODES` and starts one PSYNC extractor for each master.
@@ -165,10 +151,10 @@ generated using an incomplete expression-index key.
 | url                            | database URL; credentials may be included in the URL or configured separately                                                  | `mysql://127.0.0.1:3307` | empty                                                                   |
 | username                       | database connection username                                                                                                   | root                     | empty                                                                   |
 | password                       | database connection password                                                                                                   | password                 | empty                                                                   |
-| ssl_mode                       | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS mode: `disable`, `require`, `verify_ca`, `verify_full`. | verify_ca                | not set                                                                 |
-| ssl_ca_path                    | CA certificate path used by MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS verification                                                            | /etc/ssl/certs/ca.pem    | empty                                                                   |
-| ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
-| ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
+| ssl_mode                       | MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS mode: `disable`, `require`, `verify_ca`, `verify_full`.                               | verify_ca                | not set                                                                 |
+| ssl_ca_path                    | CA certificate path used by MySQL/PostgreSQL/MSSQL/Redis/MongoDB TLS verification                                              | /etc/ssl/certs/ca.pem    | empty                                                                   |
+| ssl_client_cert_path           | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL                              | /etc/ssl/client.crt      | empty                                                                   |
+| ssl_client_key_path            | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file           | /etc/ssl/client.key      | empty                                                                   |
 | max_connections                | maximum target connection pool size                                                                                            | 10                       | 10                                                                      |
 | batch_size                     | records written per batch; must be greater than `0`                                                                            | 200                      | 200                                                                     |
 | max_rps                        | optional target-side rate limit in records per second; `0` disables the limit                                                  | 1000                     | 0                                                                       |
@@ -215,14 +201,14 @@ Common row/structure comparison settings. The section is used in these modes:
   `[checker_cdc].is_enabled=true`. Checking runs asynchronously after sink through the CDC
   checker queue.
 
-| Config                | Description                                      | Example | Default                        |
-| --------------------- | ------------------------------------------------ | ------- | ------------------------------ |
-| batch_size            | maximum rows processed by one checker query      | 200     | 200                            |
-| sample_percent        | percentage sampled for snapshot/CDC checks       | 25      | empty (check every row/change) |
-| recheck_count         | number of retries for a temporary inconsistency  | 4       | 0                              |
-| recheck_interval_secs | interval between retries, in seconds             | 5       | 0                              |
-| recheck_queue_size    | maximum pending rows in the retry buffer         | 10000   | 10000                          |
-| recheck_queue_memory_mb | retry-buffer memory limit in MiB               | 256     | 256                            |
+| Config                  | Description                                     | Example | Default                        |
+| ----------------------- | ----------------------------------------------- | ------- | ------------------------------ |
+| batch_size              | maximum rows processed by one checker query     | 200     | 200                            |
+| sample_percent          | percentage sampled for snapshot/CDC checks      | 25      | empty (check every row/change) |
+| recheck_count           | number of retries for a temporary inconsistency | 4       | 0                              |
+| recheck_interval_secs   | interval between retries, in seconds            | 5       | 0                              |
+| recheck_queue_size      | maximum pending rows in the retry buffer        | 10000   | 10000                          |
+| recheck_queue_memory_mb | retry-buffer memory limit in MiB                | 256     | 256                            |
 
 Notes:
 
@@ -267,23 +253,23 @@ recheck_queue_memory_mb=256
 Check-result output configuration. If this section is omitted, results are written as local logs
 under `runtime.log_dir/check`.
 
-| Config               | Description                                                         | Example       | Default |
-| -------------------- | ------------------------------------------------------------------- | ------------- | ------- |
-| output_type          | result destination: `logs` or `s3`                              | logs          | logs    |
-| output_full_row      | include complete source/target rows in difference logs              | false         | false   |
-| output_revise_sql    | generate repair statements in `sql.log`                           | true          | false   |
-| revise_match_full_row| use the complete row in generated repair predicates                 | false         | false   |
-| check_log_dir        | local check-log directory                                           | /tmp/check    | empty (use `runtime.log_dir/check`) |
-| check_log_file_size  | per-file size limit for `diff.log`, `miss.log`, and `sql.log` | 100mb         | 100mb   |
-| check_log_max_rows   | maximum rows in `diff.log`/`miss.log`                            | 1000          | 1000    |
-| s3_bucket            | S3 bucket; required for `output_type=s3`                           | my-bucket     | -       |
-| s3_access_key_id     | S3 access key                                                       | AKIA...       | empty   |
-| s3_secret_access_key | S3 secret key                                                       | ****          | empty   |
-| s3_region            | S3 region                                                           | us-east-1     | empty   |
-| s3_endpoint          | custom S3 endpoint                                                   | https://...   | empty   |
-| s3_root_dir          | local/mounted root used by the S3 helper                            | /tmp/check    | empty   |
-| s3_root_url          | root URL used by the S3 helper                                      | s3://bucket   | empty   |
-| s3_key_prefix        | key prefix for uploaded check logs                                  | task1/check   | empty   |
+| Config                | Description                                                   | Example     | Default                             |
+| --------------------- | ------------------------------------------------------------- | ----------- | ----------------------------------- |
+| output_type           | result destination: `logs` or `s3`                            | logs        | logs                                |
+| output_full_row       | include complete source/target rows in difference logs        | false       | false                               |
+| output_revise_sql     | generate repair statements in `sql.log`                       | true        | false                               |
+| revise_match_full_row | use the complete row in generated repair predicates           | false       | false                               |
+| check_log_dir         | local check-log directory                                     | /tmp/check  | empty (use `runtime.log_dir/check`) |
+| check_log_file_size   | per-file size limit for `diff.log`, `miss.log`, and `sql.log` | 100mb       | 100mb                               |
+| check_log_max_rows    | maximum rows in `diff.log`/`miss.log`                         | 1000        | 1000                                |
+| s3_bucket             | S3 bucket; required for `output_type=s3`                      | my-bucket   | -                                   |
+| s3_access_key_id      | S3 access key                                                 | AKIA...     | empty                               |
+| s3_secret_access_key  | S3 secret key                                                 | \*\*\*\*    | empty                               |
+| s3_region             | S3 region                                                     | us-east-1   | empty                               |
+| s3_endpoint           | custom S3 endpoint                                            | https://... | empty                               |
+| s3_root_dir           | local/mounted root used by the S3 helper                      | /tmp/check  | empty                               |
+| s3_root_url           | root URL used by the S3 helper                                | s3://bucket | empty                               |
+| s3_key_prefix         | key prefix for uploaded check logs                            | task1/check | empty                               |
 
 `output_type=s3` is supported for standalone snapshot check and inline CDC check. S3 output still
 uses the configured local rolling-log directory and limits before upload. Structure check, check-log
@@ -314,16 +300,16 @@ without failing the main CDC write path. Snapshot and structure checks do not us
 
 Use these sections to select data, exclude objects, and map database, table, column or Kafka topic names.
 
-| Section | Purpose |
-| --- | --- |
-| `[source.db]` | MySQL-style databases, MongoDB databases or Redis database numbers |
-| `[source.schema]` | PostgreSQL schemas; `database.schema` for SQL Server |
-| `[source.table]` / `[source.collection]` | Tables or MongoDB collections |
-| `[source.column]` | Column selection, exclusion and name mapping |
-| `[filter].do_events` | insert, update and delete events |
-| `[filter].do_ddls` / `[filter].do_dcls` | DDL / DCL types |
-| `[filter].do_structures` | Object types for structure migration |
-| `[filter].ignore_cmds` | Redis commands |
+| Section                                  | Purpose                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| `[source.db]`                            | MySQL-style databases, MongoDB databases or Redis database numbers |
+| `[source.schema]`                        | PostgreSQL schemas; `database.schema` for SQL Server               |
+| `[source.table]` / `[source.collection]` | Tables or MongoDB collections                                      |
+| `[source.column]`                        | Column selection, exclusion and name mapping                       |
+| `[filter].do_events`                     | insert, update and delete events                                   |
+| `[filter].do_ddls` / `[filter].do_dcls`  | DDL / DCL types                                                    |
+| `[filter].do_structures`                 | Object types for structure migration                               |
+| `[filter].ignore_cmds`                   | Redis commands                                                     |
 
 ```ini
 [source.db]
@@ -370,13 +356,13 @@ See [filtering and routing](rules.md) for fields, precedence and database exampl
 
 ## parallel_type
 
-| Type      | Strategy                                                                                                                                                                                                                                                                      | Usage                               | Advantages | Disadvantages        |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------- | -------------------- |
-| snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                                                                                                              | snapshot tasks for mysql/pg/mongo   | fast       |                      |
-| serial    | Single thread, one by one.                                                                                                                                                                                                                                                    | all                                 |            | slow                 |
+| Type      | Strategy                                                                                                                                                                                                    | Usage                               | Advantages | Disadvantages        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------- | -------------------- |
+| snapshot  | Records in cache are divided into [parallel_size] partitions, and each partition will be synced in batches in a separate thread.                                                                            | snapshot tasks for mysql/pg/mongo   | fast       |                      |
+| serial    | Single thread, one by one.                                                                                                                                                                                  | all                                 |            | slow                 |
 | rdb_merge | Merge row changes in cache into write-friendly insert + delete batches, then divide them into [parallel_size] partitions for parallel syncing. It is used by MySQL/PG CDC, check, review, and revise flows. | mysql/pg CDC, check, review, revise | fast       | eventual consistency |
-| mongo     | Mongo version of merge parallelization, also used by standalone MongoDB check and review flows.                                                                                                           | mongo CDC, check, review            |            |                      |
-| redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                                                                                                        | snapshot/CDC tasks for redis        |            |                      |
+| mongo     | Mongo version of merge parallelization, also used by standalone MongoDB check and review flows.                                                                                                             | mongo CDC, check, review            |            |                      |
+| redis     | Single thread, batch/serial writing(determined by [sinker] batch_size)                                                                                                                                      | snapshot/CDC tasks for redis        |            |                      |
 
 ## snapshot chunk rebalance
 
@@ -417,22 +403,22 @@ In some scenarios, task_id is used to distinguish task uniqueness, such as when 
 
 # [resumer]
 
-| Config               | Description                                                            | Example                                | Default                |
-| -------------------- | ---------------------------------------------------------------------- | -------------------------------------- | ---------------------- |
-| resume_type          | `dummy`, `from_log`, `from_target`, or `from_db`                       | from_target                            | dummy                  |
-| log_dir              | log directory used by `from_log`                                       | ./logs                                 | `[runtime].log_dir`    |
-| config_file          | optional resume config file used by `from_log`                         | ./resume.config                        | empty                  |
-| url                  | database URL used by `from_db`                                         | `mysql://127.0.0.1:3306`               | required for `from_db` |
-| db_type              | database type used by `from_db`                                        | mysql                                  | required for `from_db` |
-| username             | database username used by `from_db`                                    | root                                   | empty                  |
-| password             | database password used by `from_db`                                    | password                               | empty                  |
-| ssl_mode             | MySQL/PostgreSQL/Redis/MongoDB TLS mode used by `from_db`: `disable`, `require`, `verify_ca`, `verify_full`. | verify_ca                              | not set                |
-| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/Redis/MongoDB `from_db` TLS verification | /etc/ssl/certs/ca.pem                  | empty                  |
-| ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
-| ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
-| is_direct_connection | MongoDB driver `directConnection` option used by `from_db`             | true                                   | not set                |
-| table_full_name      | target table used to store resume state for `from_db` or `from_target` | apecloud_metadata.apedts_task_position | empty                  |
-| max_connections      | maximum resumer connection pool size                                   | 5                                      | 5                      |
+| Config               | Description                                                                                                          | Example                                | Default                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------- |
+| resume_type          | `dummy`, `from_log`, `from_target`, or `from_db`                                                                     | from_target                            | dummy                  |
+| log_dir              | log directory used by `from_log`                                                                                     | ./logs                                 | `[runtime].log_dir`    |
+| config_file          | optional resume config file used by `from_log`                                                                       | ./resume.config                        | empty                  |
+| url                  | database URL used by `from_db`                                                                                       | `mysql://127.0.0.1:3306`               | required for `from_db` |
+| db_type              | database type used by `from_db`                                                                                      | mysql                                  | required for `from_db` |
+| username             | database username used by `from_db`                                                                                  | root                                   | empty                  |
+| password             | database password used by `from_db`                                                                                  | password                               | empty                  |
+| ssl_mode             | MySQL/PostgreSQL/Redis/MongoDB TLS mode used by `from_db`: `disable`, `require`, `verify_ca`, `verify_full`.         | verify_ca                              | not set                |
+| ssl_ca_path          | CA certificate path used by MySQL/PostgreSQL/Redis/MongoDB `from_db` TLS verification                                | /etc/ssl/certs/ca.pem                  | empty                  |
+| ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL                    | /etc/ssl/client.crt                    | empty                  |
+| ssl_client_key_path  | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key                    | empty                  |
+| is_direct_connection | MongoDB driver `directConnection` option used by `from_db`                                                           | true                                   | not set                |
+| table_full_name      | target table used to store resume state for `from_db` or `from_target`                                               | apecloud_metadata.apedts_task_position | empty                  |
+| max_connections      | maximum resumer connection pool size                                                                                 | 5                                      | 5                      |
 
 For details, please refer to the resumer documentation: [resuming at breakpoint](/docs/en/snapshot/resume.md).
 
@@ -460,17 +446,17 @@ marker summaries and Prometheus counters remain cumulative.
 
 This optional section is used by the MySQL `dbengine` metadata-center mode.
 
-| Config              | Description                                               | Example                  | Default   |
-| ------------------- | --------------------------------------------------------- | ------------------------ | --------- |
-| type                | metadata-center type: `basic` or `dbengine`               | dbengine                 | basic     |
-| url                 | metadata database URL; required for MySQL `dbengine` mode | `mysql://127.0.0.1:3306` | required  |
-| username            | metadata database username                                | root                     | empty     |
-| password            | metadata database password                                | password                 | empty     |
-| ssl_mode            | MySQL TLS mode: `disable`, `require`, `verify_ca`, `verify_full`. | verify_full              | not set   |
-| ssl_ca_path         | CA certificate path                                       | /etc/ssl/certs/ca.pem    | empty     |
-| ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL | /etc/ssl/client.crt | empty |
-| ssl_client_key_path | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key | empty |
-| ddl_conflict_policy | DDL conflict policy: `interrupt` or `ignore`              | interrupt                | interrupt |
+| Config               | Description                                                                                                          | Example                  | Default   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------- |
+| type                 | metadata-center type: `basic` or `dbengine`                                                                          | dbengine                 | basic     |
+| url                  | metadata database URL; required for MySQL `dbengine` mode                                                            | `mysql://127.0.0.1:3306` | required  |
+| username             | metadata database username                                                                                           | root                     | empty     |
+| password             | metadata database password                                                                                           | password                 | empty     |
+| ssl_mode             | MySQL TLS mode: `disable`, `require`, `verify_ca`, `verify_full`.                                                    | verify_full              | not set   |
+| ssl_ca_path          | CA certificate path                                                                                                  | /etc/ssl/certs/ca.pem    | empty     |
+| ssl_client_cert_path | Client certificate PEM path (MongoDB: combined certificate/private key PEM); unsupported by MSSQL                    | /etc/ssl/client.crt      | empty     |
+| ssl_client_key_path  | Client private key PEM path; empty uses `ssl_client_cert_path` as a combined PEM; MongoDB requires the combined file | /etc/ssl/client.key      | empty     |
+| ddl_conflict_policy  | DDL conflict policy: `interrupt` or `ignore`                                                                         | interrupt                | interrupt |
 
 The metadata-center URL must differ from both the extractor URL and the effective destination URL.
 
