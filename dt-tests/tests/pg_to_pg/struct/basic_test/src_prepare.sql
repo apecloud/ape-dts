@@ -193,3 +193,12 @@ CREATE TABLE struct_it_pg2pg_1.match (
 CREATE INDEX idx_index_on_index ON struct_it_pg2pg_1.match("offset");
 CREATE INDEX idx_key_col ON struct_it_pg2pg_1.match("match");
 CREATE UNIQUE INDEX uniq_unique_col ON struct_it_pg2pg_1.match(unique_col);
+
+-- Expression indexes with mixed key parts and escaped literals.
+CREATE TABLE struct_it_pg2pg_1.expression_rows (id INT NOT NULL, code VARCHAR(30), val VARCHAR(30));
+CREATE UNIQUE INDEX ordinary_uk ON struct_it_pg2pg_1.expression_rows (id, code);
+CREATE UNIQUE INDEX mixed_uk ON struct_it_pg2pg_1.expression_rows (id, (COALESCE(code, '')));
+CREATE UNIQUE INDEX expression_uk ON struct_it_pg2pg_1.expression_rows ((LOWER(code)));
+CREATE UNIQUE INDEX multi_expression_uk ON struct_it_pg2pg_1.expression_rows ((LOWER(code)), id, (COALESCE(val, '')));
+CREATE INDEX expression_idx ON struct_it_pg2pg_1.expression_rows ((LENGTH(val)));
+CREATE UNIQUE INDEX escaped_uk ON struct_it_pg2pg_1.expression_rows ((COALESCE(val, 'it''s')));

@@ -184,3 +184,16 @@ CREATE TABLE `match` (
   KEY `idx_index_on_index` (`offset`),
   KEY `idx_key_col` (`match`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
+
+struct_it_mysql2mysql_1.expression_rows
+CREATE TABLE `expression_rows` (
+  `id` int NOT NULL,
+  `code` varchar(30) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,
+  `val` varchar(30) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,
+  UNIQUE KEY `escaped_uk` ((coalesce(`val`,_latin1'it\'s\\ok'))),
+  UNIQUE KEY `ordinary_uk` (`id`,`code`(5)),
+  UNIQUE KEY `mixed_uk` (`id`,(coalesce(`code`,_latin1''))),
+  UNIQUE KEY `expression_uk` ((lower(`code`))),
+  UNIQUE KEY `multi_expression_uk` ((lower(`code`)),`id`,(coalesce(`val`,_latin1''))),
+  KEY `expression_idx` ((length(`val`)))
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_bin

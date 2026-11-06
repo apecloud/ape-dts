@@ -142,7 +142,7 @@ impl RdbStructTestRunner {
                 println!("src_table: {:?}\n", src_table);
                 println!("dst_table: {:?}\n", dst_table);
                 assert_eq!(src_table, dst_table);
-                return Ok(());
+                continue;
             }
 
             assert_eq!(src_table.columns, dst_table.columns);
