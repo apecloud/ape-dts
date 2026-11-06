@@ -1140,28 +1140,21 @@ impl DdlParser {
             ))(i);
         }
 
-        if self.db_type == DbType::Pg {
-            return alt((
-                preceded(
-                    not(peek(|input| self.check_keywords(input, forbidden_keywords))),
-                    take_while1(is_sql_identifier),
-                ),
-                // keep tag("\""), input: "Abc", return: "Abc"
-                recognize(tuple((
-                    tag("\""),
-                    take_while1(is_escaped_sql_identifier_2),
-                    tag("\""),
-                ))),
-            ))(i);
-        }
-
+        let (quote, doubled): (&[u8], &[u8]) = if self.db_type == DbType::Pg {
+            (b"\"", b"\"\"")
+        } else {
+            (b"`", b"``")
+        };
         alt((
             preceded(
                 not(peek(|input| self.check_keywords(input, forbidden_keywords))),
                 take_while1(is_sql_identifier),
             ),
-            // remove tag("`"), input: `Abc``, return: Abc
-            delimited(tag("`"), take_while1(is_escaped_sql_identifier_1), tag("`")),
+            recognize(tuple((
+                tag(quote),
+                many1(alt((tag(doubled), take_while1(|c| c != quote[0])))),
+                tag(quote),
+            ))),
         ))(i)
     }
 
@@ -1220,21 +1213,15 @@ impl DdlParser {
 
     fn identifier_to_string(&self, i: &[u8]) -> String {
         let identifier = to_string(i);
-        if self.db_type == DbType::Pg {
-            // In PostgreSQL, Identifiers (including column names) that are not double-quoted are folded to lower case.
-            // Identifiers created with double quotes retain upper case letters
-            let escape_pair = SqlUtil::get_escape_pairs(&self.db_type)[0];
-            if SqlUtil::is_escaped(&identifier, &escape_pair) {
-                SqlUtil::unescape(&identifier, &escape_pair)
-            } else {
-                identifier.to_lowercase()
-            }
-        } else if self.db_type == DbType::Mssql {
-            if identifier.starts_with('"') && identifier.ends_with('"') {
-                identifier[1..identifier.len() - 1].replace("\"\"", "\"")
-            } else {
-                SqlUtil::unescape_by_db_type(&identifier, &self.db_type)
-            }
+        if self.db_type == DbType::Mssql && identifier.starts_with('"') && identifier.ends_with('"')
+        {
+            return identifier[1..identifier.len() - 1].replace("\"\"", "\"");
+        }
+        let escape_pair = SqlUtil::get_escape_pairs(&self.db_type)[0];
+        if SqlUtil::is_escaped(&identifier, &escape_pair) {
+            SqlUtil::unescape(&identifier, &escape_pair)
+        } else if self.db_type == DbType::Pg {
+            identifier.to_lowercase()
         } else {
             identifier
         }
@@ -1279,16 +1266,6 @@ fn recognize_doubled_delimited_identifier(i: &[u8], open: u8, close: u8) -> IRes
         i,
         nom::error::ErrorKind::Escaped,
     )))
-}
-
-#[inline]
-fn is_escaped_sql_identifier_1(chr: u8) -> bool {
-    chr != b'`'
-}
-
-#[inline]
-fn is_escaped_sql_identifier_2(chr: u8) -> bool {
-    chr != b'"'
 }
 
 fn if_not_exists(i: &[u8]) -> IResult<&[u8], ()> {
@@ -2493,6 +2470,29 @@ mod test_common {
         for sql in sqls {
             assert!(!DdlParser::ddl_simple_judgment(sql));
             assert!(parser.parse(sql).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn doubled_quotes_in_identifiers_round_trip() {
+        for (engine, sql, schema, table) in [
+            (
+                DbType::Mysql,
+                "CREATE TABLE `d``b`.`t``b` (id int)",
+                "d`b",
+                "t`b",
+            ),
+            (
+                DbType::Pg,
+                r#"CREATE TABLE "d""b"."t""b" (id int)"#,
+                "d\"b",
+                "t\"b",
+            ),
+        ] {
+            let ddl = DdlParser::new(engine).parse(sql).unwrap().unwrap();
+            let id: (String, String) = ddl.get_id();
+            assert_eq!(id, (schema.into(), table.into()));
+            assert_eq!(ddl.to_sql(), sql);
         }
     }
 }

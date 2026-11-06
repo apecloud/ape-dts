@@ -1,9 +1,10 @@
 # Migrate structures
 
-- Database: MySQL, PG, MongoDB.
+- Database: MySQL, PG, MongoDB, SQL Server.
 - Migrated Objects:
   - MySQL/PostgreSQL: database(mysql), schema(pg), table, comment, index, sequence(pg), constraints.
   - MongoDB: collection, index, shardkey.
+  - SQL Server: database, schema, table, primary/unique keys, default/check constraints, index, sequence, and `MS_Description` comments. Foreign keys and other schema objects are not migrated.
 
 # Example: MySQL -> MySQL / Mongo -> Mongo
 
@@ -53,6 +54,7 @@ Thus, we offer 2 types of filtering:
 ```
 [filter]
 do_structures=database,table
+
 ```
 
 ## Migrate indexes and constraints
@@ -60,6 +62,7 @@ do_structures=database,table
 ```
 [filter]
 do_structures=constraint,index
+
 ```
 
 ## MongoDB structure types
@@ -67,6 +70,7 @@ do_structures=constraint,index
 ```
 [filter]
 do_structures=collection,shardkey
+
 ```
 
 MongoDB does not use a separate `database` structure type. `collection` creates selected
@@ -74,3 +78,11 @@ collections and copies collection options, `shardkey` copies source
 sharding definitions. For sharded targets, connect through `mongos`; DTS runs `enableSharding`
 before `shardCollection` when needed. If the target is not `mongos`, shard key statements are
 ignored.
+
+## SQL Server structure tasks
+
+Use `db_type=mssql` on both sides, `extract_type=struct`, and `sink_type=struct`.
+Select tables with three-part `database.schema.table` names. The `database` structure
+filter includes schema creation. Use `sink_type=check` for a standalone structure check.
+See the [migration configuration](../../../dt-tests/tests/mssql_to_mssql/struct/basic_test/task_config.ini)
+and [structure check configuration](../../../dt-tests/tests/mssql_to_mssql/struct/filter_test_1/check/task_config.ini).

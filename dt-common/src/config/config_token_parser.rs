@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{bail, ensure, Context, Result};
 
 use super::config_enums::DbType;
 use crate::{
@@ -27,45 +27,6 @@ impl From<(String, String)> for TokenEscapePair {
 impl TokenEscapePair {
     pub fn from_char_pairs(char_pairs: Vec<CharEscapePair>) -> Vec<Self> {
         char_pairs.into_iter().map(Self::from).collect()
-    }
-
-    pub fn match_escape_left(&self, chars: &[char], start_index: usize) -> bool {
-        self.match_escape_side(chars, start_index, true)
-    }
-
-    pub fn match_escape_right(&self, chars: &[char], start_index: usize) -> bool {
-        self.match_escape_side(chars, start_index, false)
-    }
-
-    fn match_escape_side(&self, chars: &[char], start_index: usize, is_left: bool) -> bool {
-        match self {
-            TokenEscapePair::Char(escape_pair) => {
-                let escape = if is_left {
-                    escape_pair.left
-                } else {
-                    escape_pair.right
-                };
-                if start_index >= chars.len() {
-                    return false;
-                }
-                if chars[start_index] != escape {
-                    return false;
-                }
-                true
-            }
-            TokenEscapePair::String((escape_left, escape_right)) => {
-                let escape = if is_left { escape_left } else { escape_right };
-                if start_index + escape.len() > chars.len() {
-                    return false;
-                }
-                for (i, char_to_match) in escape.chars().enumerate() {
-                    if chars[start_index + i] != char_to_match {
-                        return false;
-                    }
-                }
-                true
-            }
-        }
     }
 }
 
@@ -133,125 +94,109 @@ impl ConfigTokenParser {
             .collect()
     }
 
+    pub fn tokens(
+        config: &str,
+        delimiters: &[char],
+        escape_pairs: &[TokenEscapePair],
+    ) -> Result<Vec<String>> {
+        if config.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut tokens = Vec::new();
+        let mut remaining = config;
+        loop {
+            let (token, rest) = Self::token(remaining, delimiters, escape_pairs)?;
+            tokens.push(token.to_owned());
+            let Some(delimiter) = rest.chars().next() else {
+                break;
+            };
+            ensure!(
+                delimiters.contains(&delimiter),
+                "expected delimiter in {config}"
+            );
+            tokens.push(delimiter.to_string());
+            remaining = &rest[delimiter.len_utf8()..];
+        }
+        Ok(tokens)
+    }
+
+    pub fn token<'a>(
+        input: &'a str,
+        delimiters: &[char],
+        escape_pairs: &[TokenEscapePair],
+    ) -> Result<(&'a str, &'a str)> {
+        let whitespace = |c: char| c.is_whitespace() && !delimiters.contains(&c);
+        let input = input.trim_start_matches(whitespace);
+        let end = Self::token_end(input, delimiters, escape_pairs)
+            .context("unclosed configuration token")?;
+        let token = input[..end].trim();
+        ensure!(!token.is_empty(), "empty configuration token");
+        Ok((token, input[end..].trim_start_matches(whitespace)))
+    }
+
     fn parse_with_delimiters(
         config: &str,
         delimiters: &[char],
         escape_pairs: &[TokenEscapePair],
     ) -> Vec<String> {
-        let chars: Vec<char> = config.chars().collect();
-        let mut start_index = 0;
+        if config.is_empty() {
+            return Vec::new();
+        }
         let mut tokens = Vec::new();
-
-        if chars.is_empty() {
-            return tokens;
-        }
-
+        let mut remaining = config;
         loop {
-            let (token, next_index) =
-                Self::read_token(&chars, start_index, delimiters, escape_pairs);
-            // trim white spaces
-            tokens.push(token.trim().to_string());
-            // reach the end of chars
-            if next_index >= chars.len() {
+            let input = remaining
+                .trim_start_matches(|c: char| c.is_whitespace() && !delimiters.contains(&c));
+            // Legacy callers handle incomplete tokens.
+            let end = Self::token_end(input, delimiters, escape_pairs).unwrap_or(input.len());
+            tokens.push(input[..end].trim().to_owned());
+            let rest = input[end..]
+                .trim_start_matches(|c: char| c.is_whitespace() && !delimiters.contains(&c));
+            let Some(delimiter) = rest.chars().next() else {
                 break;
-            }
-            tokens.push(chars[next_index].to_string());
-            start_index = next_index + 1;
+            };
+            tokens.push(delimiter.to_string());
+            remaining = &rest[delimiter.len_utf8()..];
         }
-
         tokens
     }
 
-    fn read_token(
-        chars: &[char],
-        start_index: usize,
+    fn token_end(
+        input: &str,
         delimiters: &[char],
         escape_pairs: &[TokenEscapePair],
-    ) -> (String, usize) {
-        // read token surrounded by escapes: `db.2`
-        for e in escape_pairs.iter() {
-            if e.match_escape_left(chars, start_index) {
-                return Self::read_token_with_escape(chars, start_index, e);
-            }
-        }
-        Self::read_token_to_delimiter(chars, start_index, delimiters)
-    }
-
-    fn read_token_to_delimiter(
-        chars: &[char],
-        start_index: usize,
-        delimiters: &[char],
-    ) -> (String, usize) {
-        let mut token = String::new();
-        let mut read_count = 0;
-        for c in chars.iter().skip(start_index) {
-            if delimiters.contains(c) {
-                break;
-            } else {
-                token.push(*c);
-                read_count += 1;
-            }
-        }
-
-        let next_index = start_index + read_count;
-        (token, next_index)
-    }
-
-    fn read_token_with_escape(
-        chars: &[char],
-        start_index: usize,
-        escape_pair: &TokenEscapePair,
-    ) -> (String, usize) {
-        let mut token = String::new();
-        let mut read_count = 0;
-        match escape_pair {
-            TokenEscapePair::Char(escape_pair) => {
-                let mut start = false;
-                let mut index = start_index;
-                while index < chars.len() {
-                    let c = chars[index];
-                    if start && c == escape_pair.right {
-                        token.push(c);
-                        read_count += 1;
-                        if escape_pair.inner_escape_mode == InnerEscapeMode::DoubleRight
-                            && chars.get(index + 1) == Some(&escape_pair.right)
-                        {
-                            token.push(escape_pair.right);
-                            read_count += 1;
-                            index += 2;
-                            continue;
+    ) -> Option<usize> {
+        for pair in escape_pairs {
+            match pair {
+                TokenEscapePair::Char(pair) if input.starts_with(pair.left) => {
+                    let mut chars = input.char_indices().peekable();
+                    chars.next();
+                    while let Some((index, ch)) = chars.next() {
+                        if ch == pair.right {
+                            if pair.inner_escape_mode == InnerEscapeMode::DoubleRight
+                                && chars.peek().is_some_and(|(_, next)| *next == pair.right)
+                            {
+                                chars.next();
+                            } else {
+                                return Some(index + ch.len_utf8());
+                            }
                         }
-                        break;
                     }
-                    if c == escape_pair.left {
-                        start = true;
-                    }
-                    if start {
-                        token.push(c);
-                        read_count += 1;
-                    }
-                    index += 1;
+                    return None;
                 }
-            }
-            TokenEscapePair::String((escape_left, _)) => {
-                let prefix_len = escape_left.len();
-                for c in chars.iter().skip(start_index) {
-                    token.push(*c);
-                    read_count += 1;
-                    if read_count > prefix_len
-                        && escape_pair.match_escape_right(chars, start_index + read_count - 1)
-                    {
-                        break;
-                    }
+                TokenEscapePair::String((left, right)) if input.starts_with(left) => {
+                    return input[left.len()..]
+                        .find(right.as_str())
+                        .map(|index| left.len() + index + right.len());
                 }
+                _ => {}
             }
         }
-
-        // when there are emojs in the token, the read_count may be less than token.len(), for example:
-        // in chars, 😀 only takes 1 slot, which is '\u{1f600}'
-        // in token, 😀 takes 4 slots, which are: 240, 159, 152, 128
-        let next_index = start_index + read_count;
-        (token, next_index)
+        Some(
+            input
+                .find(|c| delimiters.contains(&c))
+                .unwrap_or(input.len()),
+        )
     }
 }
 
@@ -259,6 +204,66 @@ impl ConfigTokenParser {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn shared_scanner_preserves_escapes_and_unicode_boundaries() {
+        let pairs = [
+            TokenEscapePair::from(CharEscapePair::new('[', ']', InnerEscapeMode::DoubleRight)),
+            TokenEscapePair::from(CharEscapePair::new('"', '"', InnerEscapeMode::DoubleRight)),
+            TokenEscapePair::from(("r#".into(), "#".into())),
+            TokenEscapePair::from(("«".into(), "»»".into())),
+        ];
+        for (input, delimiters, expected) in [
+            (
+                " [db]]1] . \"表😀\" : r#orders[,.]+# ",
+                &['.', ',', ':'][..],
+                vec!["[db]]1]", ".", "\"表😀\"", ":", "r#orders[,.]+#"],
+            ),
+            (
+                "«订单,😀»»,«二»»",
+                &[','][..],
+                vec!["«订单,😀»»", ",", "«二»»"],
+            ),
+            (
+                "\"first\" \"second\"",
+                &[' '][..],
+                vec!["\"first\"", " ", "\"second\""],
+            ),
+        ] {
+            assert_eq!(
+                ConfigTokenParser::tokens(input, delimiters, &pairs).unwrap(),
+                expected
+            );
+            assert_eq!(
+                ConfigTokenParser::parse(input, delimiters, &pairs),
+                expected.into_iter().step_by(2).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn resource_tokens_reject_incomplete_rules_while_legacy_keeps_raw_tokens() {
+        let pairs = [
+            TokenEscapePair::from(CharEscapePair::new('`', '`', InnerEscapeMode::DoubleRight)),
+            TokenEscapePair::from(("r#".into(), "#".into())),
+        ];
+        for input in ["db..t", "db.t,", "`db", "r#db", "`db`tail", "r#db#tail"] {
+            assert!(
+                ConfigTokenParser::tokens(input, &['.', ',', ':'][..], &pairs).is_err(),
+                "{input}"
+            );
+        }
+        for (input, expected) in [
+            ("`db", vec!["`db"]),
+            ("r#db", vec!["r#db"]),
+            ("SET,,DEL,", vec!["SET", "", "DEL", ""]),
+        ] {
+            assert_eq!(
+                ConfigTokenParser::parse(input, &[','][..], &pairs),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn test_parse_mysql_filter_config_tokens() {

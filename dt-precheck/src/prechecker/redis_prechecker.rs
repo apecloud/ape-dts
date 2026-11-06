@@ -9,19 +9,16 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::{DtError, DtOptionExt},
+    filter::DtFilter,
     meta::{dt_queue::DtQueue, redis::cluster_node::ClusterNode, syncer::Syncer},
     monitor::{task_monitor::MonitorType, task_monitor_handle::TaskMonitorHandle},
-    rdb_filter::RdbFilter,
     time_filter::TimeFilter,
     utils::redis_util::RedisUtil,
 };
-use dt_connector::{
-    extractor::{
-        base_extractor::{BaseExtractor, ExtractState},
-        extractor_monitor::ExtractorMonitor,
-        redis::{redis_client::RedisClient, redis_psync_extractor::RedisPsyncExtractor},
-    },
-    rdb_router::RdbRouter,
+use dt_connector::extractor::{
+    base_extractor::{BaseExtractor, ExtractState},
+    extractor_monitor::ExtractorMonitor,
+    redis::{redis_client::RedisClient, redis_psync_extractor::RedisPsyncExtractor},
 };
 use tokio::sync::Mutex;
 use url::Url;
@@ -181,12 +178,12 @@ impl Prechecker for RedisPrechecker {
 
         let buffer = Arc::new(DtQueue::new(1, 0, None, None));
 
-        let filter = RdbFilter::from_config(&self.task_config.filter, &DbType::Redis)?;
+        let filter = DtFilter::from_config(&self.task_config.filter, DbType::Redis)?;
         let monitor = TaskMonitorHandle::noop(MonitorType::Extractor);
 
         let base_extractor = BaseExtractor {
             buffer,
-            router: RdbRouter::from_config(&self.task_config.router, &DbType::Redis)?,
+            router: self.task_config.build_router()?,
             shut_down: Arc::new(AtomicBool::new(false)),
         };
         let extract_state = ExtractState {

@@ -1,3 +1,6 @@
+USE [ape_dts_snapshot_splitter_component_test];
+GO
+
 INSERT INTO [ape_dts_snapshot_splitter_component_test].[even_split].[tinyint_value] ([id], [value])
 SELECT value_id, CONVERT(tinyint, value_id) FROM (VALUES (1), (2), (3), (4), (5)) AS test_values(value_id);
 INSERT INTO [ape_dts_snapshot_splitter_component_test].[even_split].[smallint_value] ([id], [value])
@@ -63,4 +66,12 @@ INSERT INTO [ape_dts_snapshot_splitter_component_test].[full_table].[image_value
 SELECT value_id, CONVERT(varbinary(8), value_id) FROM (VALUES (1), (2), (3), (4), (5)) AS test_values(value_id);
 INSERT INTO [ape_dts_snapshot_splitter_component_test].[full_table].[xml_value] ([id], [value])
 SELECT value_id, CONVERT(xml, CONCAT('<value>', value_id, '</value>')) FROM (VALUES (1), (2), (3), (4), (5)) AS test_values(value_id);
+INSERT INTO [ape_dts_snapshot_splitter_component_test].[full_table].[geometry_value] ([id], [value])
+SELECT value_id, geometry::Point(value_id, value_id * 2, value_id) FROM (VALUES (1), (2), (3), (4), (5)) AS test_values(value_id);
+INSERT INTO [ape_dts_snapshot_splitter_component_test].[full_table].[geography_value] ([id], [value])
+SELECT value_id, geography::Point(value_id, value_id * 2, 4326) FROM (VALUES (1), (2), (3), (4), (5)) AS test_values(value_id);
+INSERT INTO [ape_dts_snapshot_splitter_component_test].[full_table].[hierarchyid_value] ([id], [value])
+SELECT value_id, hierarchyid::Parse(CONCAT(N'/', value_id, N'/')) FROM (VALUES (1), (2), (3), (4), (5)) AS test_values(value_id);
+INSERT INTO [ape_dts_snapshot_splitter_component_test].[full_table].[bigvariant_value] ([id], [value])
+SELECT value_id, dbo.BigVariantFromString(CONCAT(N'value-', value_id)) FROM (VALUES (1), (2), (3), (4), (5)) AS test_values(value_id);
 GO

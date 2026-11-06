@@ -403,7 +403,7 @@ impl MssqlStructFetcher {
                 "MSSQL struct fetcher requires a database"
             ));
         }
-        if self.filter.filter_schema(&self.db) {
+        if self.filter.filter_schema(&self.db)? {
             return Ok(None);
         }
 
@@ -476,9 +476,10 @@ impl MssqlStructFetcher {
             let has_sequence =
                 MssqlColValueConvertor::from_query_required_bool(&row, "has_sequence")?;
             if !has_sequence
-                && table
-                    .as_ref()
-                    .is_some_and(|table| self.filter.filter_tb_with_db(db, &schema, table))
+                && match &table {
+                    Some(table) => self.filter.filter_tb_with_db(db, &schema, table)?,
+                    None => false,
+                }
             {
                 continue;
             }
@@ -623,7 +624,7 @@ impl MssqlStructFetcher {
                 &table_name,
                 requested_schema,
                 requested_table,
-            ) {
+            )? {
                 continue;
             }
 
@@ -725,7 +726,7 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table)? {
                 continue;
             }
             if let Some(statement) =
@@ -761,7 +762,7 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table)? {
                 continue;
             }
             let name = Self::required_string(&row, "constraint_name")?;
@@ -830,7 +831,7 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table)? {
                 continue;
             }
             if let Some(statement) =
@@ -878,7 +879,7 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table)? {
                 continue;
             }
             let name = Self::required_string(&row, "index_name")?;
@@ -991,7 +992,7 @@ impl MssqlStructFetcher {
         for row in rows {
             let schema = Self::required_string(&row, "schema_name")?;
             let table = Self::required_string(&row, "table_name")?;
-            if !self.include_table(db, &schema, &table, requested_schema, requested_table) {
+            if !self.include_table(db, &schema, &table, requested_schema, requested_table)? {
                 continue;
             }
             if let Some(statement) =
@@ -1038,10 +1039,10 @@ impl MssqlStructFetcher {
         table: &str,
         requested_schema: &str,
         requested_table: &str,
-    ) -> bool {
-        (requested_schema.is_empty() || requested_schema == schema)
+    ) -> anyhow::Result<bool> {
+        Ok((requested_schema.is_empty() || requested_schema == schema)
             && (requested_table.is_empty() || requested_table == table)
-            && !self.filter.filter_tb_with_db(db, schema, table)
+            && !self.filter.filter_tb_with_db(db, schema, table)?)
     }
 
     fn catalog_sql(template: &str, db: &str) -> String {

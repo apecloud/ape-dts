@@ -11,12 +11,14 @@ use std::{
 
 use anyhow::Error;
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::{
     config::{
         config_enums::DbType, config_token_parser::ConfigTokenParser,
         connection_auth_config::ConnectionAuthConfig,
     },
     error::{DtError, DtOptionExt, DtResultExt, ErrorObject},
+    filter::{CommonFilterKind, DtFilter},
     log_error, log_info, log_warn,
     meta::{
         adaptor::pg_col_value_convertor::PgColValueConvertor,
@@ -34,7 +36,7 @@ use dt_common::{
         row_type::RowType,
         syncer::Syncer,
     },
-    rdb_filter::RdbFilter,
+    resource::RID,
     utils::time_util::TimeUtil,
 };
 use futures::StreamExt;
@@ -66,7 +68,7 @@ pub struct PgCdcExtractor {
     pub extract_state: ExtractState,
     pub meta_manager: PgMetaManager,
     pub conn_pool: Pool<Postgres>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
     pub url: String,
     pub connection_auth: ConnectionAuthConfig,
     pub slot_name: String,
@@ -139,9 +141,6 @@ impl PgCdcExtractor {
         // setup ddl capture
         let ddl_meta =
             ConfigTokenParser::parse_config(&self.ddl_meta_tb, &DbType::Pg, &['.'], None)?;
-        if ddl_meta.len() == 2 {
-            self.filter.add_do_tb(&ddl_meta[0], &ddl_meta[1]);
-        }
 
         // start heartbeat
         self.start_heartbeat(self.base_extractor.shut_down.clone())?;
@@ -177,7 +176,7 @@ impl PgCdcExtractor {
                     let data = body.into_data();
                     match data {
                         Relation(relation) => {
-                            self.decode_relation(&relation).await?;
+                            self.decode_relation(&relation, &ddl_meta).await?;
                         }
 
                         // do not push Begin into buffer to accelerate sinking
@@ -304,13 +303,18 @@ impl PgCdcExtractor {
         Ok(())
     }
 
-    async fn decode_relation(&mut self, event: &RelationBody) -> anyhow::Result<()> {
+    async fn decode_relation(
+        &mut self,
+        event: &RelationBody,
+        ddl_meta: &[String],
+    ) -> anyhow::Result<()> {
         let schema = event.namespace()?;
         let tb = event.name()?;
         // if the tb is filtered, we won't try to get the tb_meta since we may get privilege errors,
         // but we need to keep the oid —— tb_meta map which may be used for decoding events,
         // the built-in object used by datamarker, although it is not in filter config, still needs to get tb_meta.
-        if self.filter.filter_tb(schema, tb)
+        if !Self::is_ddl_meta(ddl_meta, schema, tb)
+            && self.filter.filter(rid!(schema, tb))?
             && !self.extract_state.is_data_marker_info("", schema, tb)
         {
             let tb_meta = Self::mock_pg_tb_meta(schema, tb, event.rel_id() as i32);
@@ -367,13 +371,19 @@ impl PgCdcExtractor {
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
-        if self.filter_event(&tb_meta, RowType::Insert) {
+        let is_ddl_meta = Self::is_ddl_meta(ddl_meta, &tb_meta.basic.schema, &tb_meta.basic.tb);
+        if !is_ddl_meta && self.filter_event(&tb_meta, RowType::Insert)? {
             self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
 
-        let col_values = self.parse_row_data(&tb_meta, event.tuple().tuple_data())?;
+        let col_values = self.parse_row_data(&tb_meta, event.tuple().tuple_data(), !is_ddl_meta)?;
+        if col_values.is_empty() {
+            self.extract_state
+                .record_extracted_metrics(1, size_of_val(event) as u64);
+            return Ok(());
+        }
         let row_data = RowData::new(
             tb_meta.basic.db,
             tb_meta.basic.schema,
@@ -384,7 +394,7 @@ impl PgCdcExtractor {
             Some(col_values),
         );
 
-        if ddl_meta.len() == 2 && row_data.schema == ddl_meta[0] && row_data.tb == ddl_meta[1] {
+        if is_ddl_meta {
             self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return self.decode_ddl(&row_data, position).await;
@@ -401,18 +411,24 @@ impl PgCdcExtractor {
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
-        if self.filter_event(&tb_meta, RowType::Update) {
+        if self.filter_event(&tb_meta, RowType::Update)? {
             self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
 
         let basic = &tb_meta.basic;
-        let col_values_after = self.parse_row_data(&tb_meta, event.new_tuple().tuple_data())?;
+        let col_values_after =
+            self.parse_row_data(&tb_meta, event.new_tuple().tuple_data(), true)?;
+        if col_values_after.is_empty() {
+            self.extract_state
+                .record_extracted_metrics(1, size_of_val(event) as u64);
+            return Ok(());
+        }
         let col_values_before = if let Some(old_tuple) = event.old_tuple() {
-            self.parse_row_data(&tb_meta, old_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, old_tuple.tuple_data(), true)?
         } else if let Some(key_tuple) = event.key_tuple() {
-            self.parse_row_data(&tb_meta, key_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, key_tuple.tuple_data(), true)?
         } else if !basic.id_cols.is_empty() {
             let mut col_values_tmp = HashMap::new();
             for col in basic.id_cols.iter() {
@@ -464,20 +480,25 @@ impl PgCdcExtractor {
         let tb_meta = self
             .meta_manager
             .get_tb_meta_by_oid(event.rel_id() as i32)?;
-        if self.filter_event(&tb_meta, RowType::Delete) {
+        if self.filter_event(&tb_meta, RowType::Delete)? {
             self.extract_state
                 .record_extracted_metrics(1, size_of_val(event) as u64);
             return Ok(());
         }
 
         let col_values = if let Some(old_tuple) = event.old_tuple() {
-            self.parse_row_data(&tb_meta, old_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, old_tuple.tuple_data(), true)?
         } else if let Some(key_tuple) = event.key_tuple() {
-            self.parse_row_data(&tb_meta, key_tuple.tuple_data())?
+            self.parse_row_data(&tb_meta, key_tuple.tuple_data(), true)?
         } else {
             HashMap::new()
         };
 
+        if col_values.is_empty() {
+            self.extract_state
+                .record_extracted_metrics(1, size_of_val(event) as u64);
+            return Ok(());
+        }
         let row_data = RowData::new(
             tb_meta.basic.db,
             tb_meta.basic.schema,
@@ -533,9 +554,9 @@ impl PgCdcExtractor {
             for ddl_data in ddl_data.split_to_multi() {
                 // invalidate metadata cache
                 self.meta_manager.invalidate_cache_by_ddl_data(&ddl_data);
-                let (schema, tb) = ddl_data.get_schema_tb();
+                let id: RID = ddl_data.get_id();
 
-                if !self.filter.filter_ddl(&schema, &tb, &ddl_data.ddl_type) {
+                if !self.filter.filter_ddl(&id, &ddl_data.ddl_type)? {
                     self.base_extractor
                         .push_ddl(&mut self.extract_state, ddl_data, position.clone())
                         .await?;
@@ -550,7 +571,11 @@ impl PgCdcExtractor {
         truncate_body: &TruncateBody,
         position: &Position,
     ) -> anyhow::Result<()> {
-        if self.filter.filter_all_ddl() || self.filter.filter_spec_ddl(&DdlType::TruncateTable) {
+        if self.filter.filter_all_ddl()
+            || self
+                .filter
+                .filter_common(CommonFilterKind::Ddl, &DdlType::TruncateTable.to_string())
+        {
             return Ok(());
         }
 
@@ -558,7 +583,7 @@ impl PgCdcExtractor {
             let tb_meta = self.meta_manager.get_tb_meta_by_oid(*rel_id as i32)?;
             let schema = tb_meta.basic.schema;
             let tb = tb_meta.basic.tb;
-            if self.filter.filter_tb(&schema, &tb) {
+            if self.filter.filter(rid!(schema, tb))? {
                 continue;
             }
 
@@ -587,15 +612,28 @@ impl PgCdcExtractor {
         &mut self,
         tb_meta: &PgTbMeta,
         tuple_data: &[TupleData],
+        apply_filter: bool,
     ) -> anyhow::Result<HashMap<String, ColValue>> {
-        let ignore_cols = self
-            .filter
-            .get_ignore_cols(&tb_meta.basic.schema, &tb_meta.basic.tb);
+        let excluded_columns = if apply_filter
+            && !self
+                .extract_state
+                .is_data_marker_info("", &tb_meta.basic.schema, &tb_meta.basic.tb)
+        {
+            Some(self.filter.excluded_children(
+                rid!(tb_meta.basic.schema, tb_meta.basic.tb),
+                &tb_meta.basic.cols,
+            )?)
+        } else {
+            None
+        };
         let mut col_values: HashMap<String, ColValue> = HashMap::new();
         for i in 0..tuple_data.len() {
             let tuple_data = &tuple_data[i];
             let col = &tb_meta.basic.cols[i];
-            if ignore_cols.is_some_and(|cols| cols.contains(col)) {
+            if excluded_columns
+                .as_ref()
+                .is_some_and(|cols| cols.contains(col))
+            {
                 continue;
             }
 
@@ -635,14 +673,18 @@ impl PgCdcExtractor {
             .await
     }
 
-    fn filter_event(&mut self, tb_meta: &PgTbMeta, row_type: RowType) -> bool {
+    fn filter_event(&mut self, tb_meta: &PgTbMeta, row_type: RowType) -> anyhow::Result<bool> {
         let schema = &tb_meta.basic.schema;
         let tb = &tb_meta.basic.tb;
-        let filtered = self.filter.filter_event(schema, tb, &row_type);
+        let filtered = self.filter.filter_event(rid!(schema, tb), &row_type)?;
         if filtered {
-            return !self.extract_state.is_data_marker_info("", schema, tb);
+            return Ok(!self.extract_state.is_data_marker_info("", schema, tb));
         }
-        filtered
+        Ok(filtered)
+    }
+
+    fn is_ddl_meta(ddl_meta: &[String], schema: &str, tb: &str) -> bool {
+        matches!(ddl_meta, [meta_schema, meta_tb] if meta_schema == schema && meta_tb == tb)
     }
 
     fn mock_pg_tb_meta(schema: &str, tb: &str, oid: i32) -> PgTbMeta {
@@ -667,7 +709,7 @@ impl PgCdcExtractor {
             return Ok(());
         }
 
-        self.filter.add_ignore_tb(&schema_tb[0], &schema_tb[1]);
+        self.filter.add_exclude(rid!(schema_tb[0], schema_tb[1]))?;
 
         let (slot_name, heartbeat_interval_secs, syncer, conn_pool) = (
             self.slot_name.clone(),

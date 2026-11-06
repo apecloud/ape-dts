@@ -7,12 +7,16 @@ use std::{
 use anyhow::{bail, ensure};
 use async_mutex::Mutex;
 use chrono::Local;
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::config_enums::DbType,
     error::{DtError, DtErrorContextExt, Stage},
+    filter::DtFilter,
     log_diff, log_info, log_miss, log_sql, log_summary,
     meta::{
         mssql::mssql_connection_pool::MssqlConnectionPool,
+        mysql::mysql_meta_manager::MysqlMetaManager,
         struct_meta::{
             statement::struct_statement::{StructKey, StructStatement},
             struct_data::StructData,
@@ -23,7 +27,6 @@ use dt_common::{
         counter_type::CounterType, task_metrics::TaskMetricsType,
         task_monitor_handle::TaskMonitorHandle,
     },
-    rdb_filter::RdbFilter,
 };
 use sqlx::{MySql, Pool, Postgres};
 use tokio::time::sleep;
@@ -36,7 +39,6 @@ use crate::{
         mssql::mssql_struct_fetcher::MssqlStructFetcher,
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
-    rdb_router::RdbRouter,
     rdb_struct_filter::RdbStructFilter,
 };
 
@@ -45,8 +47,8 @@ pub struct StructCheckerHandle {
     conn_pool_mysql: Option<Pool<MySql>>,
     conn_pool_pg: Option<Pool<Postgres>>,
     conn_pool_mssql: Option<MssqlConnectionPool>,
-    filter: RdbFilter,
-    router: Option<RdbRouter>,
+    filter: DtFilter,
+    router: Option<DtRouter>,
     output_revise_sql: bool,
     retry_interval_secs: u64,
     max_retries: u32,
@@ -112,8 +114,8 @@ impl StructCheckerHandle {
         conn_pool_mysql: Option<Pool<MySql>>,
         conn_pool_pg: Option<Pool<Postgres>>,
         conn_pool_mssql: Option<MssqlConnectionPool>,
-        filter: RdbFilter,
-        router: Option<RdbRouter>,
+        filter: DtFilter,
+        router: Option<DtRouter>,
         output_revise_sql: bool,
         retry_interval_secs: u64,
         max_retries: u32,
@@ -145,7 +147,7 @@ impl StructCheckerHandle {
         let mut source_statement = struct_data.statement.clone();
         let source_sqls = source_statement.to_sqls(&self.filter)?;
         let routed = if let Some(router) = &self.router {
-            router.route_struct(struct_data)
+            router.route_struct(struct_data)?
         } else {
             struct_data
         };
@@ -198,34 +200,45 @@ impl StructCheckerHandle {
 
     fn source_key_from_target(
         target_key: &StructCheckKey,
-        router: Option<&RdbRouter>,
-    ) -> StructCheckKey {
+        router: Option<&DtRouter>,
+    ) -> anyhow::Result<StructCheckKey> {
         let Some(router) = router else {
-            return target_key.clone();
+            return Ok(target_key.clone());
         };
         if target_key.is_table_scoped() {
-            let (db, schema, tb) = router.reverse_get_tb_map_with_db(
-                &target_key.db,
-                &target_key.schema,
-                &target_key.tb,
-            );
-            return target_key.with_location(db, schema, tb);
+            let (db, schema, tb) = {
+                let id = if router.route_db_type() == &DbType::Mssql {
+                    rid!(&target_key.db, &target_key.schema, &target_key.tb)
+                } else {
+                    rid!(&target_key.schema, &target_key.tb)
+                };
+                if router.src_db_type() == &DbType::Mssql {
+                    router.reverse::<(String, String, String)>(id)
+                } else {
+                    router
+                        .reverse::<(String, String)>(id)
+                        .map(|(schema, tb)| (String::new(), schema, tb))
+                }
+            }?;
+            return Ok(target_key.with_location(&db, &schema, &tb));
         }
         if target_key.key.database().is_some() {
-            let db = router.reverse_get_schema_map(&target_key.db);
-            return target_key.with_location(db, &target_key.schema, &target_key.tb);
+            let source: dt_common::resource::RID =
+                router.reverse(rid!(&target_key.db, &target_key.schema))?;
+            let [db, schema]: [String; 2] = source.into_left();
+            return Ok(target_key.with_location(&db, &schema, &target_key.tb));
         }
         if !target_key.schema.is_empty() {
-            let schema = router.reverse_get_schema_map(&target_key.schema);
-            return target_key.with_location(&target_key.db, schema, &target_key.tb);
+            let schema: String = router.reverse(rid!(target_key.schema))?;
+            return Ok(target_key.with_location(&target_key.db, &schema, &target_key.tb));
         }
-        target_key.clone()
+        Ok(target_key.clone())
     }
 
     fn insert_statement(
         sql_map: &mut BTreeMap<StructKey, String>,
         mut statement: StructStatement,
-        filter: &RdbFilter,
+        filter: &DtFilter,
         side: &str,
     ) -> anyhow::Result<()> {
         for (key, sql) in statement.to_sqls(filter)? {
@@ -252,11 +265,7 @@ impl StructCheckerHandle {
                     .as_ref()
                     .ok_or(DtError::MissingTaskClient(DbType::Mysql))?
                     .clone();
-                let meta_manager =
-                    dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(
-                        conn_pool.clone(),
-                    )
-                    .await?;
+                let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
                 let mut fetcher = MysqlStructFetcher {
                     conn_pool,
                     dbs: namespaces.clone(),
@@ -397,24 +406,24 @@ impl StructCheckerHandle {
         log_enabled: bool,
     ) -> anyhow::Result<CheckSummaryLog> {
         let dst_map = self.build_dst_sql_map(namespaces).await?;
-        Ok(Self::compare_sql_maps(
+        Self::compare_sql_maps(
             src_sql_map,
             dst_map,
             self.router.as_ref(),
             &self.start_time,
             log_enabled,
             self.output_revise_sql,
-        ))
+        )
     }
 
     fn compare_sql_maps(
         src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
         mut dst_map: BTreeMap<StructKey, String>,
-        router: Option<&RdbRouter>,
+        router: Option<&DtRouter>,
         start_time: &str,
         log_enabled: bool,
         output_revise_sql: bool,
-    ) -> CheckSummaryLog {
+    ) -> anyhow::Result<CheckSummaryLog> {
         let mut summary = CheckSummaryLog {
             start_time: start_time.to_string(),
             checked_count: src_sql_map.len(),
@@ -465,7 +474,7 @@ impl StructCheckerHandle {
         for (key, dst_sql) in dst_map {
             summary.diff_count += 1;
             let target_key = StructCheckKey::new("", key);
-            let source_key = Self::source_key_from_target(&target_key, router);
+            let source_key = Self::source_key_from_target(&target_key, router)?;
             if let Some(table) = struct_table_summary(&source_key, &target_key, 0, false, true) {
                 summary.merge_table(table);
             }
@@ -483,13 +492,10 @@ impl StructCheckerHandle {
         }
         summary.end_time = Local::now().to_rfc3339();
         summary.sort_tables();
-        summary
+        Ok(summary)
     }
 
-    pub async fn check_struct(
-        &mut self,
-        data: Vec<dt_common::meta::struct_meta::struct_data::StructData>,
-    ) -> anyhow::Result<()> {
+    pub async fn check_struct(&mut self, data: Vec<StructData>) -> anyhow::Result<()> {
         for struct_data in data {
             self.add_src_sqls(struct_data).await?;
         }
@@ -555,7 +561,10 @@ impl StructCheckerHandle {
 #[cfg(test)]
 mod tests {
     use dt_common::{
-        config::{filter_config::FilterConfig, router_config::RouterConfig},
+        config::{
+            filter_config::FilterConfig,
+            router_config::{LegacyRouterConfig, RouterConfig},
+        },
         meta::struct_meta::statement::{
             mssql_comment_statement::MssqlComment,
             mssql_create_database_statement::MssqlCreateDatabaseStatement,
@@ -568,28 +577,31 @@ mod tests {
 
     use super::*;
 
-    fn mssql_router() -> RdbRouter {
-        RdbRouter::from_config(
-            &RouterConfig::Rdb {
+    fn mssql_router() -> DtRouter {
+        DtRouter::from_config(
+            &RouterConfig::Legacy(LegacyRouterConfig {
                 schema_map: "src_db:dst_db".to_string(),
                 tb_map: "src_db.src_schema.src_tb:dst_db.dst_schema.dst_tb".to_string(),
                 col_map: String::new(),
                 topic_map: String::new(),
-            },
-            &DbType::Mssql,
+            }),
+            DbType::Mssql,
+            DbType::Mssql,
         )
-        .unwrap()
         .unwrap()
     }
 
     #[tokio::test]
     async fn mssql_routed_objects_keep_source_locations_and_reject_duplicates() {
-        let filter = RdbFilter::from_config(
-            &FilterConfig {
-                do_structures: "table,comment".to_string(),
+        let filter = DtFilter::from_config(
+            &FilterConfig::Legacy(dt_common::config::filter_config::LegacyFilterConfig {
+                common_rules: dt_common::config::filter_config::CommonFilterConfig {
+                    do_structures: "table,comment".to_string(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            &DbType::Mssql,
+            }),
+            DbType::Mssql,
         )
         .unwrap();
         let mut checker = StructCheckerHandle::new(
@@ -674,7 +686,8 @@ mod tests {
             "start",
             false,
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(
             (
                 summary.checked_count,
@@ -732,7 +745,8 @@ mod tests {
                     std::iter::once("dst_db").chain(segments),
                 ),
             );
-            let source = StructCheckerHandle::source_key_from_target(&target, Some(&router));
+            let source =
+                StructCheckerHandle::source_key_from_target(&target, Some(&router)).unwrap();
             assert_eq!(source.db, "src_db", "{kind:?}");
             assert_eq!(source.key.database(), Some("src_db"), "{kind:?}");
             assert_eq!(
@@ -750,13 +764,47 @@ mod tests {
     }
 
     #[test]
+    fn mssql_target_schema_and_sequences_reverse_schema_routes() {
+        let router = DtRouter::new(
+            DbType::Mssql,
+            DbType::Mssql,
+            [(rid!("src_db", "src_schema"), rid!("dst_db", "dst_schema"))],
+        )
+        .unwrap();
+        for (kind, tail) in [
+            (StructKeyType::Schema, vec![]),
+            (StructKeyType::Sequence, vec!["sequence"]),
+            (StructKeyType::SequenceComment, vec!["sequence"]),
+        ] {
+            let target = StructCheckKey::new(
+                "",
+                StructKey::new(
+                    DbType::Mssql,
+                    kind,
+                    ["dst_db", "dst_schema"].into_iter().chain(tail),
+                ),
+            );
+            let source =
+                StructCheckerHandle::source_key_from_target(&target, Some(&router)).unwrap();
+            assert_eq!(
+                (source.db.as_str(), source.schema.as_str()),
+                ("src_db", "src_schema")
+            );
+            assert_eq!(source.tb, target.tb);
+        }
+    }
+
+    #[test]
     fn duplicate_target_statements_are_rejected() {
-        let filter = RdbFilter::from_config(
-            &FilterConfig {
-                do_structures: "database".to_string(),
+        let filter = DtFilter::from_config(
+            &FilterConfig::Legacy(dt_common::config::filter_config::LegacyFilterConfig {
+                common_rules: dt_common::config::filter_config::CommonFilterConfig {
+                    do_structures: "database".to_string(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            &DbType::Mssql,
+            }),
+            DbType::Mssql,
         )
         .unwrap();
         let statement = StructStatement::MssqlCreateDatabase(MssqlCreateDatabaseStatement {
@@ -798,7 +846,8 @@ mod tests {
             "start",
             false,
             false,
-        );
+        )
+        .unwrap();
 
         assert!(!summary.is_consistent);
         assert_eq!(summary.checked_count, 2);
@@ -839,7 +888,8 @@ mod tests {
             "start",
             false,
             false,
-        );
+        )
+        .unwrap();
 
         assert!(summary.is_consistent);
         assert_eq!(summary.checked_count, 2);

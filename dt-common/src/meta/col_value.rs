@@ -33,6 +33,7 @@ pub enum ColValue {
     Timestamp(String),
     Year(u16),
     String(String),
+    Spatial { srid: i32, wkt: String },
     RawString(Vec<u8>),
     Blob(Vec<u8>),
     Bit(u64),
@@ -239,6 +240,7 @@ impl ColValue {
             ColValue::Timestamp(_) => "Timestamp",
             ColValue::Year(_) => "Year",
             ColValue::String(_) => "String",
+            ColValue::Spatial { .. } => "Spatial",
             ColValue::RawString(_) => "RawString",
             ColValue::Blob(_) => "Blob",
             ColValue::Bit(_) => "Bit",
@@ -274,6 +276,7 @@ impl ColValue {
             ColValue::Timestamp(v) => Some(v.to_string()),
             ColValue::Year(v) => Some(v.to_string()),
             ColValue::String(v) => Some(v.to_string()),
+            ColValue::Spatial { srid, wkt } => Some(format!("{srid}|{wkt}")),
             ColValue::RawString(v) => Some(hex::encode(v)),
             ColValue::Bit(v) => Some(v.to_string()),
             ColValue::Set(v) => Some(v.to_string()),
@@ -342,6 +345,7 @@ impl ColValue {
             | ColValue::Set2(v)
             | ColValue::Enum2(v)
             | ColValue::Json2(v) => v.len(),
+            ColValue::Spatial { wkt, .. } => std::mem::size_of::<i32>() + wkt.len(),
             ColValue::Json(v) | ColValue::Blob(v) | ColValue::RawString(v) => v.len(),
             ColValue::Json3(v) => v.to_string().len(),
             ColValue::MongoDoc(v) => Self::get_bson_size_doc(v),
@@ -417,6 +421,7 @@ impl Serialize for ColValue {
             ColValue::Timestamp(v) => serializer.serialize_str(v),
             ColValue::Year(v) => serializer.serialize_u16(*v),
             ColValue::String(v) => serializer.serialize_str(v),
+            ColValue::Spatial { srid, wkt } => serializer.serialize_str(&format!("{srid}|{wkt}")),
             ColValue::RawString(v) => serializer.serialize_bytes(v),
             ColValue::Blob(v) => serializer.serialize_bytes(v),
             ColValue::Bit(v) => serializer.serialize_u64(*v),
@@ -468,6 +473,8 @@ impl From<Bson> for ColValue {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    use serde::Deserialize;
 
     use super::*;
     use crate::meta::tagged_col_value_map;
@@ -635,5 +642,29 @@ mod tests {
             ColValue::RawString(vec![0xff, 0xfe]).to_utf8_or_hex_string(),
             Some("fffe".to_string())
         );
+    }
+
+    #[test]
+    fn test_spatial_value_serialization() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct TaggedValues {
+            #[serde(with = "tagged_col_value_map")]
+            values: BTreeMap<String, ColValue>,
+        }
+
+        let value = ColValue::Spatial {
+            srid: 4326,
+            wkt: "POINT (-122.36 47.656)".to_string(),
+        };
+        let transfer_value = "4326|POINT (-122.36 47.656)";
+        assert_eq!(value.to_option_string().as_deref(), Some(transfer_value));
+        assert_eq!(serde_json::to_value(&value).unwrap(), transfer_value);
+
+        let expected = TaggedValues {
+            values: BTreeMap::from([("shape".to_string(), value)]),
+        };
+        let serialized = serde_json::to_string(&expected).unwrap();
+        let actual: TaggedValues = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(actual, expected);
     }
 }

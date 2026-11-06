@@ -191,7 +191,7 @@ impl MysqlStructFetcher {
                 Self::get_str_with_null(&row, "TABLE_NAME")?,
             );
 
-            if self.filter_tb(&db, &tb) {
+            if self.filter_tb(&db, &tb)? {
                 continue;
             }
 
@@ -402,7 +402,7 @@ impl MysqlStructFetcher {
         }
 
         for ((db, tb, _index_name), index) in index_map {
-            self.push_to_results(&mut results, &db, &tb, index);
+            self.push_to_results(&mut results, &db, &tb, index)?;
         }
 
         Ok(results)
@@ -471,7 +471,7 @@ impl MysqlStructFetcher {
                 constraint_type: ConstraintType::Check,
                 definition,
             };
-            self.push_to_results(&mut results, &database_name, &table_name, constraint);
+            self.push_to_results(&mut results, &database_name, &table_name, constraint)?;
         }
 
         Ok(results)
@@ -544,7 +544,7 @@ impl MysqlStructFetcher {
                 constraint_type: ConstraintType::Foreign,
                 definition,
             };
-            self.push_to_results(&mut results, &database_name, &table_name, constraint);
+            self.push_to_results(&mut results, &database_name, &table_name, constraint)?;
         }
         Ok(results)
     }
@@ -564,9 +564,9 @@ impl MysqlStructFetcher {
         Ok(SqlUtil::try_get_mysql_optional_string(row, col_name)?.unwrap_or_default())
     }
 
-    fn filter_tb(&mut self, db: &str, tb: &str) -> bool {
+    fn filter_tb(&mut self, db: &str, tb: &str) -> anyhow::Result<bool> {
         if !self.dbs.contains(db) {
-            return true;
+            return Ok(true);
         }
         self.filter.filter_tb(db, tb)
     }
@@ -622,9 +622,9 @@ impl MysqlStructFetcher {
         table_schema: &str,
         table_name: &str,
         item: T,
-    ) {
-        if self.filter_tb(table_schema, table_name) {
-            return;
+    ) -> anyhow::Result<()> {
+        if self.filter_tb(table_schema, table_name)? {
+            return Ok(());
         }
 
         let key = (table_schema.into(), table_name.into());
@@ -633,6 +633,7 @@ impl MysqlStructFetcher {
         } else {
             results.insert(key, vec![item]);
         }
+        Ok(())
     }
 
     fn get_result<T>(

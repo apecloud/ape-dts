@@ -73,8 +73,8 @@ sink_type=struct
 db_type=mysql
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
+[source.db]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -129,8 +129,10 @@ db_type=mysql
 sink_type=write
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 
+[source.db]
+include=test_db
+
 [filter]
-do_dbs=test_db
 do_events=insert
 
 [parallelizer]
@@ -196,8 +198,10 @@ url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
 [checker]
 
 
+[source.db]
+include=test_db
+
 [filter]
-do_dbs=test_db
 do_events=insert
 
 [parallelizer]
@@ -342,15 +346,17 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
+[source.db]
+include=test_db
 
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -407,15 +413,17 @@ url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 gtid_enabled=true
 gtid_set=
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
+[source.db]
+include=test_db
 
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -471,16 +479,18 @@ extract_type=cdc
 server_id=2000
 url=mysql://root:123456@127.0.0.1:3307?ssl-mode=disabled
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
-do_ddls=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+[source.db]
+include=test_db
 
 [sinker]
 db_type=mysql
 sink_type=write
 batch_size=200
 url=mysql://root:123456@127.0.0.1:3308?ssl-mode=disabled
+
+[filter]
+do_events=insert,update,delete
+do_ddls=create_database,drop_database,alter_database,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
 
 [parallelizer]
 parallel_type=rdb_merge

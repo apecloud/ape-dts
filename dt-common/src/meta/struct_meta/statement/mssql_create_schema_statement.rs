@@ -3,8 +3,8 @@ use super::{
     struct_statement::{StructKey, StructKeyType},
 };
 use crate::{
-    config::config_enums::DbType, meta::struct_meta::structure::structure_type::StructureType,
-    rdb_filter::RdbFilter, utils::sql_util::SqlUtil,
+    config::config_enums::DbType, filter::DtFilter,
+    meta::struct_meta::structure::structure_type::StructureType, utils::sql_util::SqlUtil,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +34,7 @@ impl MssqlCreateSchemaStatement {
         self.database_name = dst_db.to_string();
     }
 
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         if !filter.filter_structure(&StructureType::Database) {
             sqls.push((
@@ -147,13 +147,16 @@ mod tests {
     use super::*;
     use crate::config::filter_config::FilterConfig;
 
-    fn filter(do_structures: &str) -> RdbFilter {
-        RdbFilter::from_config(
-            &FilterConfig {
-                do_structures: do_structures.to_string(),
+    fn filter(do_structures: &str) -> DtFilter {
+        DtFilter::from_config(
+            &FilterConfig::Legacy(crate::config::filter_config::LegacyFilterConfig {
+                common_rules: crate::config::filter_config::CommonFilterConfig {
+                    do_structures: do_structures.to_string(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            &DbType::Mssql,
+            }),
+            DbType::Mssql,
         )
         .unwrap()
     }

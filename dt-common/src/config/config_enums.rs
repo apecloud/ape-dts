@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
-use strum::{Display, EnumString, IntoStaticStr};
+use strum::{Display, EnumIter, EnumString, IntoStaticStr};
 
 #[derive(
     Clone,
     Display,
+    EnumIter,
     EnumString,
     IntoStaticStr,
     Debug,

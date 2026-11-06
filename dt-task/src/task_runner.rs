@@ -11,6 +11,8 @@ use async_mutex::Mutex as AsyncMutex;
 use chrono::Local;
 #[cfg(feature = "metrics")]
 use dt_common::monitor::prometheus_metrics::PrometheusMetrics;
+use dt_common::rid;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::{
         checker_config::CheckerConfig,
@@ -22,13 +24,15 @@ use dt_common::{
         task_config::TaskConfig,
     },
     error::{DtError, DtOptionExt, DtResultExt, EndpointRole, Stage},
+    filter::DtFilter,
     limiter::buffer_limiter::BufferLimiter,
     log_error,
     log_filter::parse_size_limit,
-    log_finished, log_info, log_warn,
+    log_finished, log_info, log_summary, log_warn,
     meta::{
-        dt_queue::DtQueue, mssql::mssql_connection_pool::MssqlConnectionPool, position::Position,
-        row_type::RowType, syncer::Syncer,
+        dt_queue::DtQueue, mssql::mssql_connection_pool::MssqlConnectionPool,
+        mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
+        position::Position, row_type::RowType, syncer::Syncer,
     },
     monitor::{
         runtime_trace_monitor::RuntimeTraceMonitor,
@@ -37,7 +41,6 @@ use dt_common::{
         task_monitor_handle::TaskMonitorHandle,
         FlushableMonitor,
     },
-    rdb_filter::RdbFilter,
     runtime_trace,
     utils::sql_util::SqlUtil,
 };
@@ -50,7 +53,6 @@ use dt_connector::{
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
-    rdb_router::RdbRouter,
     sinker::base_sinker::BaseSinker,
     Extractor, Sinker,
 };
@@ -82,7 +84,7 @@ pub struct TaskInfo {
 pub struct TaskRunner {
     task_type: Option<TaskType>,
     config: TaskConfig,
-    filter: RdbFilter,
+    filter: DtFilter,
     task_monitor: Arc<TaskMonitor>,
     #[cfg(feature = "metrics")]
     prometheus_metrics: Arc<PrometheusMetrics>,
@@ -125,7 +127,7 @@ impl TaskRunner {
         let task_monitor = Arc::new(TaskMonitor::new(task_type, prometheus_metrics.clone()));
 
         Ok(Self {
-            filter: RdbFilter::from_config(&config.filter, &config.extractor_basic.db_type)?,
+            filter: config.build_filter()?,
             config,
             task_monitor,
             #[cfg(feature = "metrics")]
@@ -151,9 +153,7 @@ impl TaskRunner {
             &self.task_type
         );
 
-        let db_type = &self.config.extractor_basic.db_type;
-        let router =
-            Arc::new(RdbRouter::from_config(&self.config.router, db_type).stage(Stage::Bootstrap)?);
+        let router = Arc::new(self.config.build_router().stage(Stage::Bootstrap)?);
         let (recorder, recovery, checker_state_store) = match &self.task_type {
             Some(task_type) => TaskUtil::build_resumer(
                 task_type.to_owned(),
@@ -232,7 +232,7 @@ impl TaskRunner {
                 }
                 summary.sort_tables();
                 if let Some(log) = to_json_line(&*summary) {
-                    dt_common::log_summary!("{}", log);
+                    log_summary!("{}", log);
                 }
             }
         }
@@ -389,7 +389,7 @@ impl TaskRunner {
         extractor_config: ExtractorConfig,
         extractor_client: ConnClient,
         sinker_client: ConnClient,
-        router: Arc<Option<RdbRouter>>,
+        router: Arc<Option<DtRouter>>,
         recorder: Option<Arc<dyn Recorder + Send + Sync>>,
         recovery: Option<Arc<dyn Recovery + Send + Sync>>,
         check_summary: Option<Arc<AsyncMutex<CheckSummaryLog>>>,
@@ -901,8 +901,8 @@ impl TaskRunner {
         );
 
         if is_struct_task {
-            let filter = RdbFilter::from_config(&self.config.filter, &checker_db_type)?;
-            let router = RdbRouter::from_config(&self.config.router, &checker_db_type)?;
+            let filter = self.config.build_filter()?;
+            let router = self.config.build_router()?;
             let checker = match checker_db_type {
                 DbType::Mysql => {
                     let conn_pool = TaskUtil::create_mysql_conn_pool(
@@ -1034,7 +1034,7 @@ impl TaskRunner {
 
         match checker_db_type {
             DbType::Mysql => {
-                let router = RdbRouter::from_config(&self.config.router, &DbType::Mysql)?;
+                let router = self.config.build_router()?;
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
                 let source_checker = self
@@ -1049,11 +1049,7 @@ impl TaskRunner {
                     None,
                 )
                 .await?;
-                let meta_manager =
-                    dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(
-                        conn_pool.clone(),
-                    )
-                    .await?;
+                let meta_manager = MysqlMetaManager::new(conn_pool.clone()).await?;
                 let checker = MysqlChecker::new(conn_pool, meta_manager);
                 let ctx = build_check_context(
                     extractor_meta_manager,
@@ -1079,7 +1075,7 @@ impl TaskRunner {
                 }
             }
             DbType::Pg => {
-                let router = RdbRouter::from_config(&self.config.router, &DbType::Pg)?;
+                let router = self.config.build_router()?;
                 let extractor_meta_manager =
                     ExtractorUtil::get_extractor_meta_manager(&self.config).await?;
                 let source_checker = self
@@ -1093,9 +1089,7 @@ impl TaskRunner {
                     false,
                 )
                 .await?;
-                let meta_manager =
-                    dt_common::meta::pg::pg_meta_manager::PgMetaManager::new(conn_pool.clone())
-                        .await?;
+                let meta_manager = PgMetaManager::new(conn_pool.clone()).await?;
                 let checker = PgChecker::new(conn_pool, meta_manager);
                 let ctx = build_check_context(
                     extractor_meta_manager,
@@ -1121,7 +1115,7 @@ impl TaskRunner {
                 }
             }
             DbType::Mongo => {
-                let router = RdbRouter::from_config(&self.config.router, &DbType::Mongo)?;
+                let router = self.config.build_router()?;
                 let source_checker = self
                     .create_source_checker(is_cdc_task, enable_sqlx_log)
                     .await?;
@@ -1178,9 +1172,7 @@ impl TaskRunner {
                     None,
                 )
                 .await?;
-                let meta_manager =
-                    dt_common::meta::mysql::mysql_meta_manager::MysqlMetaManager::new(pool.clone())
-                        .await?;
+                let meta_manager = MysqlMetaManager::new(pool.clone()).await?;
                 Box::new(MysqlChecker::new(pool, meta_manager))
             }
             DbType::Pg => {
@@ -1192,8 +1184,7 @@ impl TaskRunner {
                     false,
                 )
                 .await?;
-                let meta_manager =
-                    dt_common::meta::pg::pg_meta_manager::PgMetaManager::new(pool.clone()).await?;
+                let meta_manager = PgMetaManager::new(pool.clone()).await?;
                 Box::new(PgChecker::new(pool, meta_manager))
             }
             DbType::Mongo => {
@@ -1376,8 +1367,12 @@ impl TaskRunner {
 
         // list_schemas returns the existing top-level namespace for each database type. For
         // MSSQL this is the physical database. list_tbs normalizes tables to (db, schema, table).
-        let mut schemas = TaskUtil::list_schemas(&extractor_client, db_type).await?;
-        schemas.retain(|schema| !filter.filter_schema(schema));
+        let mut schemas = Vec::new();
+        for schema in TaskUtil::list_schemas(&extractor_client, db_type).await? {
+            if !filter.filter(rid!(schema))? {
+                schemas.push(schema);
+            }
+        }
         if schemas.is_empty() && is_snapshot_task {
             log_warn!("no schemas to extract");
             return Ok(TaskInfo {
@@ -1502,7 +1497,12 @@ impl TaskRunner {
                     }
                 }
 
-                if filter.filter_event_with_db(&db, &schema, &tb, &RowType::Insert) {
+                let id = if db_type == &DbType::Mssql {
+                    rid!(db, schema, tb)
+                } else {
+                    rid!(schema, tb)
+                };
+                if filter.filter_event(&id, &RowType::Insert)? {
                     log_info!(
                         "db: {}, schema: {}, tb: {}, insert events filtered",
                         db,

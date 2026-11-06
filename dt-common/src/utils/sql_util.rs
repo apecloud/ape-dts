@@ -158,16 +158,16 @@ impl SqlUtil {
         escaped_cols
     }
 
-    pub fn mysql_spatial_as_wkb_expr(col: &str, alias: &str) -> String {
-        format!("ST_AsBinary({}) AS {}", col, alias)
+    pub fn mysql_spatial_as_text_expr(col: &str, alias: &str) -> String {
+        format!("CONCAT(ST_SRID({col}), '|', ST_AsText({col})) AS {alias}")
     }
 
-    pub fn mysql_spatial_from_wkb_hex_expr(hex_value: &str) -> String {
-        format!("ST_GeomFromWKB(x'{}')", hex_value)
+    pub fn mysql_spatial_from_text_expr(wkt: &str, srid: i32) -> String {
+        format!("ST_GeomFromText('{}', {srid})", wkt.replace('\'', "''"))
     }
 
-    pub fn mysql_spatial_from_wkb_placeholder_expr() -> String {
-        "ST_GeomFromWKB(?)".to_string()
+    pub fn mysql_spatial_from_text_placeholder_expr() -> String {
+        "ST_GeomFromText(?, ?)".to_string()
     }
 
     pub fn mysql_comparison_placeholder(col_type: &MysqlColType) -> String {
@@ -180,7 +180,11 @@ impl SqlUtil {
 
     pub fn get_escape_pairs(db_type: &DbType) -> Vec<CharEscapePair> {
         match db_type {
-            DbType::Mysql | DbType::ClickHouse | DbType::StarRocks => {
+            DbType::Mysql
+            | DbType::Tidb
+            | DbType::Doris
+            | DbType::ClickHouse
+            | DbType::StarRocks => {
                 vec![CharEscapePair::new(
                     MYSQL_ESCAPE,
                     MYSQL_ESCAPE,
@@ -371,16 +375,16 @@ mod tests {
     #[test]
     fn test_mysql_spatial_exprs() {
         assert_eq!(
-            "ST_AsBinary(`geo`) AS `geo`",
-            SqlUtil::mysql_spatial_as_wkb_expr("`geo`", "`geo`")
+            "CONCAT(ST_SRID(`geo`), '|', ST_AsText(`geo`)) AS `geo`",
+            SqlUtil::mysql_spatial_as_text_expr("`geo`", "`geo`")
         );
         assert_eq!(
-            "ST_GeomFromWKB(x'0101000000000000000000F03F000000000000F03F')",
-            SqlUtil::mysql_spatial_from_wkb_hex_expr("0101000000000000000000F03F000000000000F03F")
+            "ST_GeomFromText('POINT(1 2)', 4326)",
+            SqlUtil::mysql_spatial_from_text_expr("POINT(1 2)", 4326)
         );
         assert_eq!(
-            "ST_GeomFromWKB(?)",
-            SqlUtil::mysql_spatial_from_wkb_placeholder_expr()
+            "ST_GeomFromText(?, ?)",
+            SqlUtil::mysql_spatial_from_text_placeholder_expr()
         );
     }
 
@@ -414,14 +418,6 @@ mod tests {
             &no_inner_escape
         ));
 
-        assert_eq!(
-            "`order``detail`",
-            SqlUtil::escape_by_db_type("order`detail", &DbType::Mysql)
-        );
-        assert_eq!(
-            "order`detail",
-            SqlUtil::unescape_by_db_type("`order``detail`", &DbType::Mysql)
-        );
         assert_eq!(
             r#""order""detail""#,
             SqlUtil::escape_by_db_type(r#"order"detail"#, &DbType::Pg)
@@ -465,5 +461,26 @@ mod tests {
             r#""public"."orders""#,
             SqlUtil::render_rdb_table(&DbType::Pg, "", "public", "orders")
         );
+    }
+
+    #[test]
+    fn test_mysql_compatible_identifier_escaping() {
+        for db_type in [
+            DbType::Mysql,
+            DbType::Tidb,
+            DbType::Doris,
+            DbType::ClickHouse,
+            DbType::StarRocks,
+        ] {
+            for (input, expected) in [
+                ("p:k", "`p:k`"),
+                ("select", "`select`"),
+                ("order`detail", "`order``detail`"),
+            ] {
+                assert_eq!(SqlUtil::escape_by_db_type(input, &db_type), expected);
+                assert_eq!(SqlUtil::escape_by_db_type(expected, &db_type), expected);
+                assert_eq!(SqlUtil::unescape_by_db_type(expected, &db_type), input);
+            }
+        }
     }
 }

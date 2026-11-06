@@ -1,7 +1,7 @@
 use super::struct_statement::{StructKey, StructKeyType};
 use crate::{
-    config::config_enums::DbType, meta::struct_meta::structure::structure_type::StructureType,
-    rdb_filter::RdbFilter, utils::sql_util::SqlUtil,
+    config::config_enums::DbType, filter::DtFilter,
+    meta::struct_meta::structure::structure_type::StructureType, utils::sql_util::SqlUtil,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +40,7 @@ impl MssqlComment {
         database_name: &str,
         schema_name: &str,
         object_name: &str,
-        filter: &RdbFilter,
+        filter: &DtFilter,
     ) -> Option<(StructKey, String)> {
         if filter.filter_structure(&StructureType::Comment) || !self.owner_enabled(filter) {
             return None;
@@ -170,7 +170,7 @@ impl MssqlComment {
         Some((key, sql))
     }
 
-    fn owner_enabled(&self, filter: &RdbFilter) -> bool {
+    fn owner_enabled(&self, filter: &DtFilter) -> bool {
         let structure_type = match self {
             Self::Database { .. } | Self::Schema { .. } => StructureType::Database,
             Self::Table { .. } | Self::Column { .. } => StructureType::Table,

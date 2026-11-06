@@ -75,7 +75,7 @@ checker 侧的运行时错误会被记录日志，但不会阻塞主路径上的
 
 # 其他配置参考
 
-- [filter]、[route] 等配置请参考 [配置详解](../config.md)。
+- 过滤与路由配置请参考 [配置详解](../config.md)。
 - 参考各类型集成测试的 task_config.ini：
     - dt-tests/tests/mysql_to_mysql/cdc
     - dt-tests/tests/pg_to_pg/cdc

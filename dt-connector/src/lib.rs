@@ -9,7 +9,6 @@ pub mod data_marker;
 pub mod extractor;
 pub mod meta_fetcher;
 pub mod rdb_query_builder;
-pub mod rdb_router;
 pub mod rdb_struct_filter;
 pub mod sinker;
 

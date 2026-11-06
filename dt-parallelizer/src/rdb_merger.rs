@@ -240,7 +240,9 @@ impl RdbTbMergedData {
 mod tests {
     use std::collections::HashMap;
 
-    use dt_common::meta::{col_value::ColValue, row_type::RowType};
+    use dt_common::meta::{
+        col_value::ColValue, rdb_meta_manager::RDB_PRIMARY_KEY, row_type::RowType,
+    };
 
     use super::*;
 
@@ -255,7 +257,7 @@ mod tests {
                 "value".to_string(),
             ],
             key_map: HashMap::from([
-                ("primary".to_string(), vec!["id".to_string()]),
+                (RDB_PRIMARY_KEY.to_string(), vec!["id".to_string()]),
                 (
                     "uk_test".to_string(),
                     vec!["uk_1".to_string(), "uk_2".to_string()],

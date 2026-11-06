@@ -40,8 +40,8 @@ url=mysql://root:@127.0.0.1:9030
 sink_type=struct
 db_type=doris
 
-[filter]
-do_dbs=test_db
+[source.schema]
+include=test_db
 
 [parallelizer]
 parallel_type=serial
@@ -111,8 +111,10 @@ url=mysql://root:@127.0.0.1:9030
 stream_load_url=mysql://root:@127.0.0.1:8040
 batch_size=5000
 
+[source.schema]
+include=test_db
+
 [filter]
-do_dbs=test_db
 do_events=insert
 
 [parallelizer]
@@ -167,9 +169,8 @@ extract_type=cdc
 url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeout]=10s
 slot_name=ape_test
 
-[filter]
-do_dbs=test_db
-do_events=insert,update,delete
+[source.schema]
+include=test_db
 
 [sinker]
 db_type=doris
@@ -177,6 +178,9 @@ sink_type=write
 url=mysql://root:@127.0.0.1:9030
 stream_load_url=mysql://root:@127.0.0.1:8040
 batch_size=5000
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge

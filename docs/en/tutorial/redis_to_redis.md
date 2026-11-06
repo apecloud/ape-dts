@@ -54,8 +54,8 @@ extract_type=snapshot
 repl_port=10008
 url=redis://:123456@127.0.0.1:6380
 
-[filter]
-do_dbs=*
+[source.db]
+include=*
 
 [sinker]
 db_type=redis
@@ -119,15 +119,17 @@ repl_port=10008
 repl_offset=0
 url=redis://:123456@127.0.0.1:6380
 
-[filter]
-do_dbs=*
-ignore_cmds=flushall,flushdb
+[source.db]
+include=*
 
 [sinker]
 db_type=redis
 sink_type=write
 method=restore
 url=redis://:123456@127.0.0.1:6390
+
+[filter]
+ignore_cmds=flushall,flushdb
 
 [pipeline]
 buffer_size=16000

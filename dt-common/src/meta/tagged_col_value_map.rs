@@ -30,6 +30,7 @@ pub enum TaggedColValueDef {
     Timestamp(String),
     Year(u16),
     String(String),
+    Spatial { srid: i32, wkt: String },
     RawString(Vec<u8>),
     Blob(Vec<u8>),
     Bit(u64),

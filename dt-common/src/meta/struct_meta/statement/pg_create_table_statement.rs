@@ -2,6 +2,7 @@ use anyhow::bail;
 
 use crate::config::config_enums::DbType;
 use crate::error::DtError;
+use crate::filter::DtFilter;
 use crate::meta::ddl_meta::ddl_parser::DdlParser;
 use crate::meta::ddl_meta::ddl_statement::DdlStatement;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
@@ -16,7 +17,6 @@ use crate::meta::struct_meta::structure::{
     structure_type::StructureType,
     table::Table,
 };
-use crate::rdb_filter::RdbFilter;
 
 #[derive(Debug, Clone)]
 pub struct PgCreateTableStatement {
@@ -63,7 +63,7 @@ impl PgCreateTableStatement {
         }
     }
 
-    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&mut self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
 
         if !filter.filter_structure(&StructureType::Table) {

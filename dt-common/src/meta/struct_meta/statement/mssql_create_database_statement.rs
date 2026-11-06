@@ -3,8 +3,8 @@ use super::{
     struct_statement::{StructKey, StructKeyType},
 };
 use crate::{
-    config::config_enums::DbType, meta::struct_meta::structure::structure_type::StructureType,
-    rdb_filter::RdbFilter, utils::sql_util::SqlUtil,
+    config::config_enums::DbType, filter::DtFilter,
+    meta::struct_meta::structure::structure_type::StructureType, utils::sql_util::SqlUtil,
 };
 
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ impl MssqlCreateDatabaseStatement {
         self.database_name = dst_db.to_string();
     }
 
-    pub fn to_sqls(&self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         if filter.filter_structure(&StructureType::Database) {
             return Ok(Vec::new());
         }
@@ -55,12 +55,15 @@ mod tests {
 
     #[test]
     fn database_sql_preserves_escaping_and_collation() {
-        let filter = RdbFilter::from_config(
-            &FilterConfig {
-                do_structures: "database".into(),
+        let filter = DtFilter::from_config(
+            &FilterConfig::Legacy(crate::config::filter_config::LegacyFilterConfig {
+                common_rules: crate::config::filter_config::CommonFilterConfig {
+                    do_structures: "database".into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            &DbType::Mssql,
+            }),
+            DbType::Mssql,
         )
         .unwrap();
         for (name, collation, expected) in [

@@ -2,8 +2,9 @@ use std::collections::HashSet;
 
 use anyhow::{bail, Error};
 use async_trait::async_trait;
+use dt_common::rid;
 use dt_common::{
-    config::{config_enums::DbType, filter_config::FilterConfig},
+    config::config_enums::DbType,
     error::{DtError, DtOptionExt},
 };
 
@@ -21,7 +22,6 @@ const PG_SUPPORT_DB_VERSION_NUM_MIN: i32 = 120000;
 
 pub struct PostgresqlPrechecker {
     pub fetcher: PgFetcher,
-    pub filter_config: FilterConfig,
     pub precheck_config: PrecheckConfig,
     pub is_source: bool,
 }
@@ -203,8 +203,7 @@ impl Prechecker for PostgresqlPrechecker {
             ));
         }
 
-        let is_filter_pattern =
-            BasicPrechecker::is_filter_pattern(DbType::Pg, &self.fetcher.filter);
+        let is_filter_pattern = BasicPrechecker::is_filter_pattern(&self.fetcher.filter);
         if is_filter_pattern {
             return Ok(CheckResult::build_with_err(
                 CheckItem::CheckIfStructExisted,
@@ -220,12 +219,8 @@ impl Prechecker for PostgresqlPrechecker {
             ));
         }
 
-        let (mut db_tables, mut err_msgs): (Vec<DbTable>, Vec<String>) = (Vec::new(), Vec::new());
-        if !self.filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&self.filter_config.do_tbs, &mut db_tables)
-        } else if !self.filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&self.filter_config.do_schemas, &mut db_tables)
-        }
+        let db_tables = DbTable::from_filter(&self.fetcher.filter)?;
+        let mut err_msgs = Vec::new();
 
         let (schemas, tb_schemas, tbs) = DbTable::get_config_maps(&db_tables)?;
         let mut all_schemas = Vec::new();
@@ -316,8 +311,7 @@ impl Prechecker for PostgresqlPrechecker {
             ));
         }
 
-        let is_filter_pattern =
-            BasicPrechecker::is_filter_pattern(DbType::Pg, &self.fetcher.filter);
+        let is_filter_pattern = BasicPrechecker::is_filter_pattern(&self.fetcher.filter);
         if is_filter_pattern {
             return Ok(CheckResult::build_with_err(
                 CheckItem::CheckIfTableStructSupported,
@@ -333,13 +327,8 @@ impl Prechecker for PostgresqlPrechecker {
             ));
         }
 
-        let (mut db_tables, mut err_msgs, mut warn_msgs): (Vec<DbTable>, Vec<String>, Vec<String>) =
-            (Vec::new(), Vec::new(), Vec::new());
-        if !self.filter_config.do_tbs.is_empty() {
-            DbTable::from_str(&self.filter_config.do_tbs, &mut db_tables)
-        } else if !self.filter_config.do_schemas.is_empty() {
-            DbTable::from_str(&self.filter_config.do_schemas, &mut db_tables)
-        }
+        let db_tables = DbTable::from_filter(&self.fetcher.filter)?;
+        let (mut err_msgs, mut warn_msgs) = (Vec::new(), Vec::new());
 
         let (schemas, tb_schemas, _) = DbTable::get_config_maps(&db_tables)?;
         let primary =
@@ -392,7 +381,7 @@ impl Prechecker for PostgresqlPrechecker {
                         && self
                             .fetcher
                             .filter
-                            .filter_tb(c.rel_schema_name.as_str(), &c.rel_table_name)
+                            .filter(rid!(c.rel_schema_name.as_str(), c.rel_table_name))?
                     {
                         fkref_nonexists_tables.insert(schema_table_name);
                     }

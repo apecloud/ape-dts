@@ -48,3 +48,98 @@ CREATE TABLE [filter_db_skip].dbo.db_level_filtered (id int NOT NULL PRIMARY KEY
 CREATE TABLE [ape_dts].filter_schema_keep.schema_level_kept (id int NOT NULL PRIMARY KEY, value nvarchar(80) NULL);
 CREATE TABLE [ape_dts].filter_schema_skip.schema_level_filtered (id int NOT NULL PRIMARY KEY, value nvarchar(80) NULL);
 GO
+
+-- Wildcards, explicit regex, and otherwise literal names.
+USE [ape_dts];
+GO
+IF SCHEMA_ID(N'wildchar_filter') IS NULL EXEC(N'CREATE SCHEMA wildchar_filter');
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[star];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[star_many];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[prestar];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[question];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[question1];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[question12];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[regex_1];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[regex_12];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[regex_x];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[regex_12tail];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[exact_name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[exact_name_tail];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[plus+name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[plusname];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[paren(name)];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[parenname];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[bracket[12]]];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[bracket1];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[brace{2}];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[bracee];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[caret^name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[caretname];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[dollar$name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[dollarname];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[pipe|name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[pipe_tail];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[quoted*name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[quotedXname];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[quoted?name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[quotedYname];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip_star];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip_star_many];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skipXstar];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip_question];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip_question1];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip_question12];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip_regex_1];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip_regex_x];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skip+name];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[skipname];
+CREATE TABLE [ape_dts].[wildchar_filter].[star] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[star_many] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[prestar] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[question] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[question1] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[question12] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[regex_1] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[regex_12] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[regex_x] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[regex_12tail] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[exact_name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[exact_name_tail] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[plus+name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[plusname] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[paren(name)] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[parenname] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[bracket[12]]] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[bracket1] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[brace{2}] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[bracee] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[caret^name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[caretname] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[dollar$name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[dollarname] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[pipe|name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[pipe_tail] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[quoted*name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[quotedXname] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[quoted?name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[quotedYname] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip_star] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip_star_many] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skipXstar] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip_question] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip_question1] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip_question12] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip_regex_1] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip_regex_x] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skip+name] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[skipname] (id int NOT NULL PRIMARY KEY, val int);
+GO
+
+-- Other metacharacters stay literal when combined with a wildcard.
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[plus+star];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[plus+star_many];
+DROP TABLE IF EXISTS [ape_dts].[wildchar_filter].[plusstar];
+CREATE TABLE [ape_dts].[wildchar_filter].[plus+star] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[plus+star_many] (id int NOT NULL PRIMARY KEY, val int);
+CREATE TABLE [ape_dts].[wildchar_filter].[plusstar] (id int NOT NULL PRIMARY KEY, val int);
+GO

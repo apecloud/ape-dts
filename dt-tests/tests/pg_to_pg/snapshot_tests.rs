@@ -6,12 +6,20 @@ mod test {
     use dt_common::config::config_enums::DbType;
     use serial_test::serial;
 
-    use crate::test_runner::test_base::TestBase;
+    use crate::test_runner::{
+        test_base::TestBase, test_cases::rdb_order_key_test::run_order_key_test,
+    };
 
     #[tokio::test]
     #[serial]
     async fn snapshot_basic_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/basic_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_order_key_test() -> anyhow::Result<()> {
+        run_order_key_test(DbType::Pg).await
     }
 
     #[tokio::test]
@@ -38,6 +46,12 @@ mod test {
     #[serial]
     async fn snapshot_wildchar_filter_test() {
         TestBase::run_snapshot_test("pg_to_pg/snapshot/wildchar_filter_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_column_scope_filter_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/column_scope_filter_test").await;
     }
 
     #[tokio::test]
@@ -219,5 +233,23 @@ mod test {
             dst_expected_counts,
         )
         .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_filter_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/rules_filter_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_rules_router_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/rules_router_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_legacy_rules_test() {
+        TestBase::run_snapshot_test("pg_to_pg/snapshot/legacy_rules_test").await;
     }
 }

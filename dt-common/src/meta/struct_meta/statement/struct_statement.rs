@@ -19,11 +19,11 @@ use super::{
 };
 use crate::{
     config::config_enums::DbType,
+    filter::DtFilter,
     meta::struct_meta::statement::{
         pg_create_udf_statement::PgCreateUdfStatement,
         pg_create_udt_statement::PgCreateUdtStatement,
     },
-    rdb_filter::RdbFilter,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, StrumDisplay)]
@@ -236,7 +236,7 @@ pub enum StructStatement {
 }
 
 impl StructStatement {
-    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&mut self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         match self {
             Self::MssqlCreateDatabase(s) => s.to_sqls(filter),
             Self::MssqlCreateSchema(s) => s.to_sqls(filter),

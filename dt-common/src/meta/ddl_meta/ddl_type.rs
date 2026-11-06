@@ -1,8 +1,17 @@
 use serde::{Deserialize, Serialize};
-use strum::{Display, EnumString, IntoStaticStr};
+use strum::{Display, EnumIter, EnumString, IntoStaticStr};
 
 #[derive(
-    Debug, Clone, PartialEq, Display, EnumString, IntoStaticStr, Serialize, Deserialize, Eq,
+    Debug,
+    Clone,
+    PartialEq,
+    Display,
+    EnumString,
+    EnumIter,
+    IntoStaticStr,
+    Serialize,
+    Deserialize,
+    Eq,
 )]
 pub enum DdlType {
     #[strum(serialize = "create_database")]

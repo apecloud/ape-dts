@@ -126,6 +126,12 @@ impl LuaProcessor {
             // expose NULL so a no-op script keeps the source bytes untouched.
             ColValue::Blob(v) => Ok((mlua::Value::NULL, Some(ColValue::Blob(v)))),
 
+            // Spatial values carry both WKT and SRID. Preserve the typed value across a no-op Lua
+            // processor instead of degrading it to a plain string.
+            ColValue::Spatial { srid, wkt } => {
+                Ok((mlua::Value::NULL, Some(ColValue::Spatial { srid, wkt })))
+            }
+
             // MySQL CDC text columns may arrive as RawString. If bytes are valid UTF-8, expose
             // them as normal Lua strings. Otherwise preserve the original bytes and expose NULL.
             ColValue::RawString(v) => match ColValue::RawString(v.clone()).to_utf8_string() {
@@ -171,6 +177,7 @@ impl LuaProcessor {
             | ColValue::Json2(v) => v.into_lua(lua)?,
 
             ColValue::Json3(_)
+            | ColValue::Spatial { .. }
             | ColValue::RawString(_)
             | ColValue::Blob(_)
             | ColValue::Json(_)

@@ -1,0 +1,13 @@
+DROP SCHEMA IF EXISTS "rules_inventory" CASCADE;
+CREATE SCHEMA "rules_inventory";
+DROP SCHEMA IF EXISTS "rules_archive" CASCADE;
+CREATE SCHEMA "rules_archive";
+DROP SCHEMA IF EXISTS "rules_plain" CASCADE;
+CREATE SCHEMA "rules_plain";
+CREATE TABLE "rules_inventory"."orders" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_inventory"."audit" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_archive"."unchained" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_plain"."identity" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_inventory"."order,log:1" ("id" INT PRIMARY KEY, "note" VARCHAR(80), "secret" VARCHAR(80));
+CREATE TABLE "rules_inventory"."literal*" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));
+CREATE TABLE "rules_inventory"."literal_other" (id INT PRIMARY KEY, note VARCHAR(80), secret VARCHAR(80));

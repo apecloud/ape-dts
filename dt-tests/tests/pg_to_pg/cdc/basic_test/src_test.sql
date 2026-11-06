@@ -19,7 +19,7 @@ DELETE FROM numeric_decimal_table;
 INSERT INTO string_table (pk, vc, vcv, ch, c, t, b, bnn, ct) VALUES (1, 'žš', 'bb', 'cdef', 'abc', 'some text', E'\\000\\001\\002'::bytea, E'\\003\\004\\005'::bytea, 'Hello World');
 INSERT INTO string_table (pk, vc, vcv, ch, c, t, b, bnn, ct) VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 UPDATE string_table SET vc='žš', vcv='bb', ch='cdef', c='abc', t='some text', b=E'\\000\\001\\002'::bytea, bnn=E'\\003\\004\\005'::bytea, ct='Hello World' WHERE pk=2;
-UPDATE string_table SET vc=NULL, vcv=NULL, ch=NULL, c=NULL, t=NULL, b=NULL, bnn=NULL, ct=NULL WHERE pk=1;
+UPDATE string_table SET vc='', vcv='', ch=NULL, c=NULL, t=NULL, b=NULL, bnn=NULL, ct=NULL WHERE pk=1;
 DELETE FROM string_table;
 
 INSERT INTO network_address_table (pk, i) VALUES (1, '192.168.2.0/12');

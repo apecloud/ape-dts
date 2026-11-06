@@ -31,10 +31,6 @@ impl PgColValueConvertor {
         value_str: &str,
         meta_manager: &mut PgMetaManager,
     ) -> anyhow::Result<ColValue> {
-        if value_str.is_empty() {
-            return Ok(ColValue::None);
-        }
-
         if col_type.parent_oid != 0 {
             let parent_col_type = meta_manager.get_col_type_by_oid(col_type.parent_oid)?;
             return Self::from_str(&parent_col_type, value_str, meta_manager);
@@ -46,7 +42,10 @@ impl PgColValueConvertor {
         }
 
         let col_value = match col_type.value_type {
-            PgValueType::Boolean => ColValue::Bool("t" == value_str.to_lowercase()),
+            PgValueType::Boolean => ColValue::Bool(matches!(
+                value_str.to_ascii_lowercase().as_str(),
+                "t" | "true"
+            )),
 
             PgValueType::Int32 => {
                 let res: i32 = value_str.parse()?;

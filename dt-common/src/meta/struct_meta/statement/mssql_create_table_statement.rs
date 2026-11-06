@@ -3,9 +3,8 @@ use super::{
     struct_statement::{StructKey, StructKeyType},
 };
 use crate::{
-    config::config_enums::DbType, error::DtError,
-    meta::struct_meta::structure::structure_type::StructureType, rdb_filter::RdbFilter,
-    utils::sql_util::SqlUtil,
+    config::config_enums::DbType, error::DtError, filter::DtFilter,
+    meta::struct_meta::structure::structure_type::StructureType, utils::sql_util::SqlUtil,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,7 +121,7 @@ impl MssqlCreateTableStatement {
         self.table.table_name = dst_tb.to_string();
     }
 
-    pub fn to_sqls(&mut self, filter: &RdbFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
+    pub fn to_sqls(&mut self, filter: &DtFilter) -> anyhow::Result<Vec<(StructKey, String)>> {
         let mut sqls = Vec::new();
         let table_enabled = !filter.filter_structure(&StructureType::Table);
 
@@ -662,12 +661,15 @@ mod tests {
 
     #[test]
     fn index_name_with_disable_suffix_does_not_collide_with_index_state() {
-        let filter = RdbFilter::from_config(
-            &FilterConfig {
-                do_structures: "index".to_string(),
+        let filter = DtFilter::from_config(
+            &FilterConfig::Legacy(crate::config::filter_config::LegacyFilterConfig {
+                common_rules: crate::config::filter_config::CommonFilterConfig {
+                    do_structures: "index".to_string(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            &DbType::Mssql,
+            }),
+            DbType::Mssql,
         )
         .unwrap();
         let disabled = MssqlIndex {
@@ -708,13 +710,16 @@ mod tests {
 
     #[test]
     fn index_types_not_executed_by_e2e_generate_sql() {
-        let filter = RdbFilter::from_config(
-            &FilterConfig {
+        let filter = DtFilter::from_config(
+            &FilterConfig::Legacy(crate::config::filter_config::LegacyFilterConfig {
                 do_schemas: "*".to_string(),
-                do_structures: "index".to_string(),
+                common_rules: crate::config::filter_config::CommonFilterConfig {
+                    do_structures: "index".to_string(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            &DbType::Mssql,
+            }),
+            DbType::Mssql,
         )
         .unwrap();
         let column = |name: &str| MssqlIndexColumn {

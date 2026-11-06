@@ -1,4 +1,5 @@
 use clickhouse::{Client, Row};
+use dt_common::resource::RID;
 use dt_common::{meta::col_value::ColValue, utils::time_util::TimeUtil};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -8,7 +9,6 @@ use super::{
     base_test_runner::BaseTestRunner,
     rdb_struct_test_runner::RdbStructTestRunner,
     rdb_test_runner::{RdbTestRunner, SRC},
-    rdb_util::DbSchemaTb,
 };
 
 pub struct RdbClickHouseTestRunner {
@@ -47,7 +47,8 @@ impl RdbClickHouseTestRunner {
 
         let expect_ddl_sqls = self.rdb_struct_test_runner.load_expect_ddl_sqls().await;
         let (_, dst_db_tbs) = self.rdb_test_runner.get_compare_db_tbs().unwrap();
-        for (_, schema, tb) in dst_db_tbs.iter() {
+        for table in dst_db_tbs {
+            let (schema, tb): (String, String) = table.into();
             let sql = format!("SHOW CREATE TABLE `{}`.`{}`", schema, tb);
 
             let mut cursor = self.client.query(&sql).fetch()?;
@@ -142,18 +143,24 @@ impl RdbClickHouseTestRunner {
 
     async fn compare_tb_data<'a, T: Row + Serialize + for<'b> Deserialize<'b>>(
         &self,
-        src_db_tb: &DbSchemaTb,
-        dst_db_tb: &DbSchemaTb,
+        src_db_tb: &RID,
+        dst_db_tb: &RID,
     ) -> anyhow::Result<()> {
         let src_data = self.rdb_test_runner.fetch_data(src_db_tb, SRC).await?;
 
-        let sql = format!("OPTIMIZE TABLE {}.{} FINAL", dst_db_tb.1, dst_db_tb.2);
+        let sql = format!(
+            "OPTIMIZE TABLE {}.{} FINAL",
+            dst_db_tb.segment(0),
+            dst_db_tb.segment(1)
+        );
         self.client.query(&sql).execute().await?;
         // Must use `SELECT ?fields` instead of `SELECT *`, otherwise the results is unpredictable.
         let src_tb_cols = self.rdb_test_runner.get_tb_cols(src_db_tb, SRC).await?;
         let sql = format!(
             "SELECT ?fields FROM {}.{} WHERE _ape_dts_is_deleted=0 ORDER BY {}",
-            dst_db_tb.1, dst_db_tb.2, src_tb_cols[0]
+            dst_db_tb.segment(0),
+            dst_db_tb.segment(1),
+            src_tb_cols[0]
         );
         let dst_data = self.client.query(&sql).fetch_all::<T>().await?;
 

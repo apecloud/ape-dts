@@ -186,7 +186,7 @@ impl BaseTestRunner {
     /// 1. Handles multi-line SQLs automatically.
     /// 2. Handles standard SQLs split across lines (e.g. INSERT VALUES ...) by waiting for a semicolon ';'.
     /// 3. Ignores lines starting with '--'.
-    fn load_sql_file(sql_file: &str, sql_load_strategy: SqlLoadStrategy) -> Vec<String> {
+    pub fn load_sql_file(sql_file: &str, sql_load_strategy: SqlLoadStrategy) -> Vec<String> {
         let lines = Self::load_file(sql_file);
         if matches!(sql_load_strategy, SqlLoadStrategy::Line) {
             return Self::load_sql_file_by_line(lines);

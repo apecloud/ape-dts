@@ -1,5 +1,7 @@
 # Benchmark
 
+以下示例采用当前版本的配置写法；历史版本的配置字段见 [Legacy config](legacy_config.md)。
+
 # MySQL -> MySQL
 
 使用 [sysbench](https://github.com/akopytov/sysbench) 生成全量和增量数据。使用 [ape_dts](/docs/en/tutorial/mysql_to_mysql.md)执行迁移任务。
@@ -101,6 +103,9 @@ url=mysql://ape_dts:PASSWORD_REDACTED@xx:3308/sbtest?ssl-mode=disabled&statement
 batch_size=4000
 max_connections=16
 
+[filter]
+do_events=insert
+
 [parallelizer]
 parallel_type=snapshot
 parallel_size=16
@@ -110,10 +115,11 @@ rebalance_strategy=auto_split
 buffer_size=128000
 checkpoint_interval_secs=1
 
-[filter]
-do_dbs=sbtest
-do_tbs=sbtest.sbtest1,sbtest.sbtest2,sbtest.sbtest3,sbtest.sbtest4,sbtest.sbtest5,sbtest.sbtest6,sbtest.sbtest7,sbtest.sbtest8
-do_events=insert
+[source.db]
+include=sbtest
+
+[source.table]
+include=sbtest.sbtest1,sbtest.sbtest2,sbtest.sbtest3,sbtest.sbtest4,sbtest.sbtest5,sbtest.sbtest6,sbtest.sbtest7,sbtest.sbtest8
 
 [runtime]
 log_level=info
@@ -145,6 +151,10 @@ url=mysql://ape_dts:PASSWORD_REDACTED@xxx:3308/sbtest_cdc?ssl-mode=disabled&stat
 batch_size=4000
 max_connections=16
 
+[filter]
+do_events=insert,update
+do_ddls=alter_table
+
 [parallelizer]
 parallel_type=rdb_merge
 parallel_size=16
@@ -153,11 +163,11 @@ parallel_size=16
 buffer_size=128000
 checkpoint_interval_secs=1
 
-[filter]
-do_dbs=sbtest_cdc
-do_tbs=sbtest_cdc.sbtest1,sbtest_cdc.sbtest2,sbtest_cdc.sbtest3,sbtest_cdc.sbtest4,sbtest_cdc.sbtest5,sbtest_cdc.sbtest6,sbtest_cdc.sbtest7,sbtest_cdc.sbtest8,sbtest_cdc.ape_dts_bench_cdc_done
-do_events=insert,update
-do_ddls=alter_table
+[source.db]
+include=sbtest_cdc
+
+[source.table]
+include=sbtest_cdc.sbtest1,sbtest_cdc.sbtest2,sbtest_cdc.sbtest3,sbtest_cdc.sbtest4,sbtest_cdc.sbtest5,sbtest_cdc.sbtest6,sbtest_cdc.sbtest7,sbtest_cdc.sbtest8,sbtest_cdc.ape_dts_bench_cdc_done
 
 [runtime]
 log_level=info

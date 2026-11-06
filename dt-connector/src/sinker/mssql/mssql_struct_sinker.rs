@@ -1,24 +1,25 @@
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
     config::config_enums::ConflictPolicyEnum,
+    filter::DtFilter,
     log_error, log_info,
     meta::{
         mssql::mssql_connection_pool::{MssqlClient, MssqlConnectionPool},
         struct_meta::struct_data::StructData,
     },
-    rdb_filter::RdbFilter,
     utils::limit_queue::LimitedQueue,
 };
 use tokio::time::Instant;
 
-use crate::{rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{sinker::base_sinker::BaseSinker, Sinker};
 
 #[derive(Clone)]
 pub struct MssqlStructSinker {
     pub connection_pool: MssqlConnectionPool,
     pub conflict_policy: ConflictPolicyEnum,
-    pub filter: RdbFilter,
-    pub router: Option<RdbRouter>,
+    pub filter: DtFilter,
+    pub router: Option<DtRouter>,
     pub base_sinker: BaseSinker,
 }
 

@@ -50,6 +50,12 @@ CREATE TABLE test_db_1.spatial_table (
     PRIMARY KEY(id)
 );
 
+CREATE TABLE test_db_1.spatial_srid_table (
+    id int PRIMARY KEY,
+    point_col POINT NOT NULL SRID 4326,
+    nullable_point_col POINT SRID 4326
+);
+
 CREATE TABLE test_db_1.ignore_cols_1 ( f_0 tinyint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
 CREATE TABLE test_db_1.ignore_cols_2 ( f_0 tinyint, f_1 smallint DEFAULT NULL, f_2 smallint DEFAULT NULL, f_3 smallint DEFAULT NULL, PRIMARY KEY (f_0) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; 
 

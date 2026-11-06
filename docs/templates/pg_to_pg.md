@@ -18,18 +18,11 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 conflict_policy=interrupt
 max_connections=10
 
-[filter]
-do_dbs=test_schema
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=
-do_structures=database,table,constraint,sequence,comment,index
+[source.schema]
+include=test_schema
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_structures=database,table,constraint,sequence,comment,index
 
 [runtime]
 log_level=info
@@ -62,17 +55,11 @@ batch_size=200
 replace=true
 max_connections=10
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_schema.a,test_schema.b
-ignore_tbs=
-do_events=insert
+[source.table]
+include=test_schema.a,test_schema.b
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -98,12 +85,8 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[filter]
-do_dbs=
-do_events=insert,update,delete
-ignore_dbs=
-ignore_tbs=
-do_tbs=test_schema.a,test_schema.b
+[source.table]
+include=test_schema.a,test_schema.b
 
 [sinker]
 db_type=pg
@@ -113,10 +96,8 @@ batch_size=200
 replace=true
 max_connections=10
 
-[router]
-tb_map=
-col_map=
-db_map=
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -193,6 +174,7 @@ ddl_meta_tb=public.ape_dts_ddl_command
 
 [filter]
 do_ddls=create_schema,drop_schema,alter_schema,create_table,alter_table,drop_table,create_index,drop_index,truncate_table,rename_table
+
 ```
 
 - [extractor]
@@ -223,17 +205,8 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_schema.*
-ignore_tbs=
-do_events=
-
-[router]
-db_map=
-tb_map=
-col_map=
+[source.table]
+include=test_schema.*
 
 [parallelizer]
 parallel_type=serial
@@ -267,17 +240,11 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 batch_size=100
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_schema.a,test_schema.b
-ignore_tbs=
-do_events=insert
+[source.table]
+include=test_schema.a,test_schema.b
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -314,17 +281,11 @@ replace=true
 [checker]
 batch_size=200
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_schema.a,test_schema.b
-ignore_tbs=
-do_events=insert
+[source.table]
+include=test_schema.a,test_schema.b
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert
 
 [parallelizer]
 parallel_type=snapshot
@@ -366,12 +327,8 @@ is_enabled=true
 resume_type=from_target
 table_full_name=apecloud_metadata.apedts_task_position
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_schema.a,test_schema.b
-ignore_tbs=
-do_events=insert,update,delete
+[source.table]
+include=test_schema.a,test_schema.b
 
 [sinker]
 db_type=pg
@@ -380,10 +337,8 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 batch_size=200
 replace=true
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -420,17 +375,11 @@ sink_type=write
 url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeout]=10s
 batch_size=200
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_schema.a,test_schema.b
-ignore_tbs=
-do_events=*
+[source.table]
+include=test_schema.a,test_schema.b
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -470,17 +419,11 @@ url=postgres://postgres:postgres@127.0.0.1:5434/postgres?options[statement_timeo
 [checker]
 batch_size=100
 
-[filter]
-do_dbs=
-ignore_dbs=
-do_tbs=test_schema.a,test_schema.b
-ignore_tbs=
-do_events=*
+[source.table]
+include=test_schema.a,test_schema.b
 
-[router]
-db_map=
-tb_map=
-col_map=
+[filter]
+do_events=*
 
 [parallelizer]
 parallel_type=rdb_merge
@@ -508,16 +451,15 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[filter]
-do_dbs=test_schema
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=insert,update,delete
+[source.schema]
+include=test_schema
 
 [sinker]
 db_type=mysql
 sink_type=sql
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial
@@ -544,17 +486,16 @@ url=postgres://postgres:postgres@127.0.0.1:5433/postgres?options[statement_timeo
 start_lsn=0/406DE430
 slot_name=ape_test
 
-[filter]
-do_dbs=test_schema
-ignore_dbs=
-do_tbs=
-ignore_tbs=
-do_events=insert,update,delete
+[source.schema]
+include=test_schema
 
 [sinker]
 db_type=mysql
 sink_type=sql
 reverse=true
+
+[filter]
+do_events=insert,update,delete
 
 [parallelizer]
 parallel_type=serial

@@ -11,6 +11,7 @@ use crate::{
     config::{config_enums::ConflictPolicyEnum, connection_auth_config::ConnectionAuthConfig},
     log_error, log_info,
     meta::ddl_meta::{ddl_data::DdlData, ddl_type::DdlType},
+    resource::RID,
 };
 
 #[derive(Clone)]
@@ -37,11 +38,11 @@ impl MysqlDbEngineMetaCenter {
     }
 
     pub async fn sync_from_ddl(&mut self, ddl_data: &DdlData) -> anyhow::Result<()> {
-        let (db, tb) = ddl_data.get_schema_tb();
+        let [db, tb] = ddl_data.get_id::<RID>().into_left();
         self.meta_fetcher.invalidate_cache(&db, &tb);
         log_info!(
             "sync ddl to meta_center, db: {}, query: {}",
-            &db,
+            db,
             &ddl_data.query
         );
         // create a tmp connection with database since sqlx conn pool does NOT support `USE db`

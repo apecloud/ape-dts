@@ -2,6 +2,14 @@
 
 Current reference: [Config details](/docs/en/config.md).
 
+## Unreleased: resource rules
+
+Add `[source.<kind>]` for `include`, `exclude`, `where_conditions`, `route`, and `to_<kind>` dispatch mappings. Event, DDL, DCL, structure and command filters retain their existing `[filter]` keys.
+
+Legacy configuration remains supported when no `[source.*]` section exists. Any source section replaces legacy object filters, WHERE conditions and `[router]` mappings; common `[filter]` keys remain active. Exclusions across all resource levels form a union and take precedence. Includes form a union within each matching parent scope; missing local includes inherit parent selection, and descendant-only includes keep ancestors available for enumeration. Legacy `[filter]` database/table inclusions retain their global union. See [configuration examples](rules.md) and [Legacy config migration](legacy_config.md).
+
+Ordinary object names now treat `+`, parentheses, `[]`, `{}`, `^`, `$` and `|` literally; only `*` and `?` remain wildcards. Existing selectors relying on implicit regex behavior, such as `store[0-9]+`, must use an explicit wrapper: `r#store[0-9]+#`. This also applies to legacy `[filter]` database/table selectors.
+
 ## 2.0.26 compared with 2.0.25
 
 ### Removed configurations

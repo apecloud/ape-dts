@@ -96,6 +96,48 @@ impl DdlStatement {
         res
     }
 
+    pub fn get_schema_tb(&self) -> (String, String) {
+        let (db, schema, tb) = self.get_db_schema_tb();
+        if matches!(
+            self,
+            Self::CreateDatabase(_)
+                | Self::DropDatabase(_)
+                | Self::AlterDatabase(_)
+                | Self::MssqlCreateDatabase(_)
+                | Self::MssqlDropDatabase(_)
+        ) {
+            (db, tb)
+        } else {
+            (schema, tb)
+        }
+    }
+
+    pub fn get_rename_to_schema_tb(&self) -> (String, String) {
+        let (_, schema, tb) = self.get_rename_to_db_schema_tb();
+        (schema, tb)
+    }
+
+    pub fn route(&mut self, dst_schema: String, dst_tb: String) {
+        if matches!(
+            self,
+            Self::CreateDatabase(_) | Self::DropDatabase(_) | Self::AlterDatabase(_)
+        ) {
+            self.route_db_schema_tb(dst_schema, String::new(), dst_tb);
+        } else {
+            self.route_schema_tb(dst_schema, dst_tb);
+        }
+    }
+
+    pub fn route_rename_table(
+        &mut self,
+        schema: String,
+        tb: String,
+        new_schema: String,
+        new_tb: String,
+    ) {
+        self.route_rename(schema, tb, new_schema, new_tb);
+    }
+
     pub fn get_db_schema_tb(&self) -> (String, String, String) {
         match self {
             DdlStatement::CreateDatabase(s) => (s.db.clone(), String::new(), String::new()),

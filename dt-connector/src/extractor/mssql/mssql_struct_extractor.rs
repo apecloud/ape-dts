@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use dt_common::{
+    filter::DtFilter,
     log_info,
     meta::{
         mssql::mssql_connection_pool::MssqlConnectionPool,
         struct_meta::{statement::struct_statement::StructStatement, struct_data::StructData},
     },
-    rdb_filter::RdbFilter,
 };
 
 use crate::{
@@ -20,7 +20,7 @@ pub struct MssqlStructExtractor {
     pub extract_state: ExtractState,
     pub connection_pool: MssqlConnectionPool,
     pub dbs: Vec<String>,
-    pub filter: RdbFilter,
+    pub filter: DtFilter,
 }
 
 #[async_trait]

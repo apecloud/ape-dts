@@ -1,19 +1,22 @@
 use std::cmp;
 
 use async_trait::async_trait;
+use dt_common::router::DtRouter;
 use dt_common::{
+    config::config_enums::DbType,
     meta::{avro::avro_converter::AvroConverter, row_data::RowData},
+    rid,
     utils::limit_queue::LimitedQueue,
 };
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use tokio::{time::Duration, time::Instant};
 
-use crate::{rdb_router::RdbRouter, sinker::base_sinker::BaseSinker, Sinker};
+use crate::{sinker::base_sinker::BaseSinker, Sinker};
 
 // Deprecated: use KafkaSinker instead
 pub struct RdkafkaSinker {
     pub batch_size: usize,
-    pub router: RdbRouter,
+    pub router: DtRouter,
     pub producer: FutureProducer,
     pub avro_converter: AvroConverter,
     pub base_sinker: BaseSinker,
@@ -47,7 +50,12 @@ impl RdkafkaSinker {
         for row_data in data.iter_mut() {
             data_size += row_data.get_data_size();
             row_data.convert_raw_string();
-            let topic = self.router.get_topic(&row_data.schema, &row_data.tb);
+            let id = if self.router.route_db_type() == &DbType::Mssql {
+                rid!(row_data.db, row_data.schema, row_data.tb)
+            } else {
+                rid!(row_data.schema, row_data.tb)
+            };
+            let topic: String = self.router.to(id)?;
             let key = self.avro_converter.row_data_to_avro_key(row_data).await?;
             let payload = self.avro_converter.row_data_to_avro_value(row_data).await?;
 
@@ -56,7 +64,7 @@ impl RdkafkaSinker {
             let delivery_status = async move {
                 producer
                     .send(
-                        FutureRecord::to(topic).payload(&payload).key(&key),
+                        FutureRecord::to(&topic).payload(&payload).key(&key),
                         queue_timeout,
                     )
                     .await

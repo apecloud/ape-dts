@@ -17,7 +17,7 @@ Refer to [task templates](../../templates/mysql_to_mysql.md) and [tutorial](../t
 
 # Other configurations
 
-- For [filter] and [router], refer to [config details](../config.md).
+- For filtering and routing, refer to [config details](../config.md).
 - Refer to task_config.ini in tests:
     - dt-tests/tests/mysql_to_mysql/snapshot
     - dt-tests/tests/pg_to_pg/snapshot

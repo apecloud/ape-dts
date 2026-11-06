@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use dt_common::utils::time_util::TimeUtil;
+use dt_common::{rid, utils::time_util::TimeUtil};
 use dt_connector::data_marker::DataMarker;
 use tokio::task::JoinHandle;
 
@@ -126,11 +126,9 @@ impl RdbCycleTestRunner {
             &db_type,
             &self.base.base.src_prepare_sqls,
         )?;
-        for i in 0..db_tbs.len() {
-            if db_tbs[i].1 == data_marker.marker_schema && db_tbs[i].2 == data_marker.marker_tb {
-                db_tbs.remove(i);
-                break;
-            }
+        let marker = rid!(data_marker.marker_schema, data_marker.marker_tb);
+        if let Some(index) = db_tbs.iter().position(|table| table == &marker) {
+            db_tbs.remove(index);
         }
 
         assert!(self.base.compare_data_for_tbs(&db_tbs, &db_tbs).await?);
@@ -146,14 +144,7 @@ impl RdbCycleTestRunner {
         let data_marker = self.get_data_marker();
         let result = self
             .base
-            .fetch_data(
-                &(
-                    String::new(),
-                    data_marker.marker_schema.to_string(),
-                    data_marker.marker_tb.to_string(),
-                ),
-                DST,
-            )
+            .fetch_data(&rid!(data_marker.marker_schema, data_marker.marker_tb), DST)
             .await?;
 
         for row_data in result {
