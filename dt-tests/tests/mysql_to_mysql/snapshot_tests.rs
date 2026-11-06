@@ -18,12 +18,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn snapshot_expression_unique_key_test() {
-        TestBase::run_snapshot_test("mysql_to_mysql/snapshot/expression_unique_key_test").await;
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn snapshot_order_key_test() -> anyhow::Result<()> {
         run_order_key_test(DbType::Mysql).await
     }

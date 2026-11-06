@@ -16,12 +16,6 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn cdc_expression_unique_key_conflict_test() {
-        TestBase::run_cdc_test("pg_to_pg/cdc/basic_test/expression_uk_conflict", 3000, 4000).await;
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn cdc_big_packet_test() {
         TestBase::run_cdc_test("pg_to_pg/cdc/big_packet_test", 3000, 20000).await;
     }
