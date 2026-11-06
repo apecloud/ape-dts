@@ -251,9 +251,11 @@ impl MysqlCreateTableStatement {
         index
             .columns
             .iter()
-            .filter(|x| !x.column_name.is_empty())
+            .filter(|x| x.expression.is_some() || !x.column_name.is_empty())
             .map(|x| {
-                if let Some(prefix_length) = x.prefix_length {
+                if let Some(expression) = &x.expression {
+                    format!("({})", expression)
+                } else if let Some(prefix_length) = x.prefix_length {
                     format!("`{}`({})", x.column_name, prefix_length)
                 } else {
                     format!("`{}`", x.column_name)

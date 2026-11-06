@@ -125,6 +125,12 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    async fn cdc_expression_unique_key_replace_test() {
+        TestBase::run_cdc_test("pg_to_pg/cdc/expression_uk_replace_test", 3000, 5000).await;
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn cycle_basic_test() {
         let tx_check_data = vec![
             ("node1", "node2", "node1", "10"),

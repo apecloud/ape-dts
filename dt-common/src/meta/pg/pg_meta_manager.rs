@@ -102,7 +102,14 @@ impl PgMetaManager {
             let oid = Self::get_oid(&self.conn_pool, schema, tb).await?;
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &mut self.type_registry, schema, tb).await?;
-            let (key_map, key_col_attrs) = Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let (mut key_map, key_col_attrs, has_expression_unique_index) =
+                Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let expr_uk_no_pk =
+                has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY);
+            // Expression UKs require full-row identity when there is no primary key.
+            if expr_uk_no_pk {
+                key_map.clear();
+            }
             // disable get_foreign_keys since we don't support foreign key check
             // let (foreign_keys, ref_by_foreign_keys) =
             //     Self::get_foreign_keys(&self.conn_pool, schema, tb).await?;
@@ -114,6 +121,7 @@ impl PgMetaManager {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
+                expr_uk_no_pk,
                 ..Default::default()
             };
             let mut tb_meta = PgTbMeta {
@@ -279,7 +287,8 @@ impl PgMetaManager {
     //                  some_uk_name: {value: Asc}, uk_example: {value: Desc, id: Asc}}
     // Constraint names and standalone unique indexes are both retained. Composite
     // columns follow indkey ordinality; indoption's low bit supplies DESC.
-    // Non-unique, partial, expression and invalid/not-ready indexes are excluded;
+    // Non-unique, partial, expression and invalid/not-ready indexes are excluded from keys;
+    // expression unique indexes are still detected for the unkeyed fallback.
     // INCLUDE columns do not become key columns (covered by catalog_key in the test).
     async fn parse_keys(
         conn_pool: &Pool<Postgres>,
@@ -288,12 +297,14 @@ impl PgMetaManager {
     ) -> anyhow::Result<(
         HashMap<String, Vec<String>>,
         HashMap<String, HashMap<String, SortDirection>>,
+        bool,
     )> {
         // A constraint and its backing index share one key. INCLUDE columns are
         // not part of uniqueness; partial/expression indexes cannot identify every row.
         let sql = r#"
             SELECT COALESCE(c.conname, i.relname) AS key_name,
                    ix.indisprimary AS is_primary,
+                   ix.indexprs IS NOT NULL AS has_expression,
                    a.attname AS col_name,
                    (ix.indoption[(k.ord - 1)::int] & 1) <> 0 AS is_descending
             FROM pg_class t
@@ -303,17 +314,22 @@ impl PgMetaManager {
             LEFT JOIN pg_constraint c ON c.conindid = ix.indexrelid
                                     AND c.contype IN ('p', 'u')
             CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
-            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+            LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
                                AND NOT a.attisdropped
             WHERE n.nspname = $1 AND t.relname = $2
               AND ix.indisunique AND ix.indisvalid AND ix.indisready
-              AND ix.indpred IS NULL AND ix.indexprs IS NULL
+              AND (ix.indpred IS NULL OR ix.indexprs IS NOT NULL)
               AND k.ord <= ix.indnkeyatts
             ORDER BY i.oid, k.ord"#;
         let mut rows = sqlx::query(sql).bind(schema).bind(tb).fetch(conn_pool);
         let mut key_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut key_col_attrs: HashMap<String, HashMap<String, SortDirection>> = HashMap::new();
+        let mut has_expression_unique_index = false;
         while let Some(row) = rows.try_next().await? {
+            if row.try_get::<bool, _>("has_expression")? {
+                has_expression_unique_index = true;
+                continue;
+            }
             let key: String = if row.try_get("is_primary")? {
                 RDB_PRIMARY_KEY.to_string()
             } else {
@@ -328,7 +344,7 @@ impl PgMetaManager {
             key_map.entry(key.clone()).or_default().push(col.clone());
             key_col_attrs.entry(key).or_default().insert(col, direction);
         }
-        Ok((key_map, key_col_attrs))
+        Ok((key_map, key_col_attrs, has_expression_unique_index))
     }
 
     async fn get_oid(conn_pool: &Pool<Postgres>, schema: &str, tb: &str) -> anyhow::Result<i32> {
