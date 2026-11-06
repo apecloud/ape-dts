@@ -189,3 +189,28 @@ UPDATE pkuk.tbl_4 SET name='name4' WHERE code='code1';
 DELETE FROM pkuk.tbl_4 WHERE code='code3';
 -- pkuk.tbl_5 no pk & uk, no `ALTER TABLE schema.tb_5 REPLICA IDENTITY FULL;`, cannot do update or delete
 INSERT INTO pkuk.tbl_5 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+
+INSERT INTO pkuk.expression_uk_rows VALUES (2, NULL, 'inserted');
+-- Preserve the sibling with id=1 and code=NULL when updating only code1.
+UPDATE pkuk.expression_uk_rows SET val='after_update' WHERE id=1 AND code='code1';
+DELETE FROM pkuk.expression_uk_rows WHERE id=1 AND code IS NULL;
+
+INSERT INTO pkuk.json_xml_no_key VALUES (8, '[1,2]', '<new/>', '"new"', 'inserted');
+INSERT INTO pkuk.expression_uk_json_xml VALUES (4, 'D', '[1,2]', '<new/>', '"new"', 'inserted');
+
+UPDATE pkuk.json_xml_no_key SET val='json_updated' WHERE id=1 AND j::text='{"kind":"first"}';
+UPDATE pkuk.json_xml_no_key SET val='xml_updated' WHERE id=2 AND x::text='<x>first</x>';
+UPDATE pkuk.json_xml_no_key SET val='key_order_updated' WHERE id=3 AND j::text='{"a":1,"b":2}';
+UPDATE pkuk.json_xml_no_key SET val='whitespace_updated' WHERE id=4 AND j::text='{"a":1}';
+UPDATE pkuk.json_xml_no_key SET j='null', x='', jb='null', val='null_to_values' WHERE id=5;
+UPDATE pkuk.json_xml_no_key SET j=NULL, x=NULL, jb=NULL, val='values_to_null' WHERE id=6;
+UPDATE pkuk.expression_uk_json_xml SET code='', j='{"a":2}', x='<updated/>', val='expression_updated' WHERE id=1;
+UPDATE pkuk.expression_uk_json_xml SET j='null', x='', jb='null', val='null_to_values' WHERE id=2;
+UPDATE pkuk.expression_uk_json_xml SET j=NULL, x=NULL, jb=NULL, val='values_to_null' WHERE id=3;
+
+DELETE FROM pkuk.json_xml_no_key WHERE id=1 AND j::text='{"kind":"second"}';
+DELETE FROM pkuk.json_xml_no_key WHERE id=2 AND x::text='<x>second</x>';
+DELETE FROM pkuk.json_xml_no_key WHERE id=3 AND j::text='{"b":2,"a":1}';
+DELETE FROM pkuk.json_xml_no_key WHERE id=4 AND j::text='{ "a": 1 }';
+DELETE FROM pkuk.json_xml_no_key WHERE id IN (5, 6);
+DELETE FROM pkuk.expression_uk_json_xml WHERE id IN (2, 3);

@@ -1783,6 +1783,7 @@ dependencies = [
  "log",
  "log4rs",
  "mongodb",
+ "sqlx",
  "tokio",
 ]
 

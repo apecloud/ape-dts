@@ -307,7 +307,7 @@ impl RdbQueryBuilder<'_> {
                 .flatten()
                 .collect::<HashSet<&String>>();
 
-            if row_data.is_not_origin {
+            if row_data.is_not_origin && !self.rdb_tb_meta.expr_uk_no_pk {
                 return self.get_pg_replace_query(row_data, placeholder, &key_cols);
             }
 
@@ -756,7 +756,29 @@ impl RdbQueryBuilder<'_> {
                     where_sql = format!("{} {} IS NULL", where_sql, escaped_col);
                 } else {
                     let sql_value = self.get_sql_value(index, col, &col_value, placeholder)?;
-                    where_sql = format!("{} {} = {}", where_sql, escaped_col, sql_value);
+                    let text_comparison_type = match self.pg_tb_meta {
+                        Some(tb_meta) if self.rdb_tb_meta.key_map.is_empty() => {
+                            let col_type = tb_meta.get_col_type(col)?;
+                            (col_type.schema_name == "pg_catalog"
+                                && matches!(col_type.alias.as_str(), "json" | "xml"))
+                            .then_some(col_type.alias.as_str())
+                        }
+                        _ => None,
+                    };
+                    if let Some(col_type) = text_comparison_type {
+                        let sql_value = if placeholder {
+                            sql_value
+                        } else {
+                            format!("({})::{}", sql_value, col_type)
+                        };
+                        // JSON/XML have no equality operator; preserve their textual identity.
+                        where_sql = format!(
+                            r#"{} ({}::text COLLATE "C") = (({})::text COLLATE "C")"#,
+                            where_sql, escaped_col, sql_value
+                        );
+                    } else {
+                        where_sql = format!("{} {} = {}", where_sql, escaped_col, sql_value);
+                    }
                     not_null_cols.push(col.clone());
                     index += 1;
                 }
@@ -1500,6 +1522,60 @@ mod tests {
     }
 
     #[test]
+    fn test_pg_expression_uk_without_pk_replace_ignores_conflicts() {
+        let mut tb_meta = build_pg_tb_meta_without_keys();
+        tb_meta.basic.expr_uk_no_pk = true;
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+
+        for is_not_origin in [false, true] {
+            let row_data = build_insert_row_data(is_not_origin);
+            let query_info = builder.get_query_info(&row_data, true).unwrap();
+            assert_eq!(
+                query_info.sql,
+                r#"INSERT INTO "public"."t1"("id","code","name") VALUES($1::int4,$2::text,$3::text) ON CONFLICT DO NOTHING"#
+            );
+            let _ = builder.create_pg_query(&query_info).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_pg_expression_uk_without_pk_matches_full_before_row() {
+        let mut tb_meta = build_pg_tb_meta_without_keys();
+        tb_meta.basic.expr_uk_no_pk = true;
+        let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+        let mut update = build_plain_update_row_data();
+        update
+            .before
+            .as_mut()
+            .unwrap()
+            .insert("code".into(), ColValue::None);
+        let query_info = builder.get_query_info(&update, true).unwrap();
+        assert_eq!(
+            query_info.sql,
+            r#"UPDATE "public"."t1" SET "id"=$1::int4,"code"=$2::text,"name"=$3::text WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE "id" = $4::int4 AND "code" IS NULL AND "name" = $5::text LIMIT 1)"#
+        );
+        assert_eq!(query_info.binds.len(), 5);
+        let _ = builder.create_pg_query(&query_info).unwrap();
+
+        let delete = RowData::new(
+            update.db,
+            update.schema,
+            update.tb,
+            0,
+            RowType::Delete,
+            update.before,
+            None,
+        );
+        let query_info = builder.get_query_info(&delete, true).unwrap();
+        assert_eq!(
+            query_info.sql,
+            r#"DELETE FROM "public"."t1" WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE "id" = $1::int4 AND "code" IS NULL AND "name" = $2::text LIMIT 1)"#
+        );
+        assert_eq!(query_info.binds.len(), 2);
+        let _ = builder.create_pg_query(&query_info).unwrap();
+    }
+
+    #[test]
     fn test_pg_origin_replace_query_with_invalid_id_cols_does_nothing_on_conflict() {
         let tb_meta = build_pg_tb_meta_with_invalid_id_cols();
         let row_data = build_insert_row_data(false);
@@ -1601,5 +1677,74 @@ mod tests {
             .sql
             .contains(r#"WHERE ctid IN (SELECT ctid FROM "public"."t1" WHERE"#));
         assert!(query_info.sql.contains("LIMIT 1"));
+    }
+
+    #[test]
+    fn test_pg_unkeyed_json_xml_where_comparison() {
+        for (alias, value, use_text) in [
+            ("json", r#"{ "b":2,"a":1 }"#, true),
+            ("xml", "<x>value</x>", true),
+            ("jsonb", r#"{"a":1}"#, false),
+            ("text", "value", false),
+        ] {
+            for expr_uk_no_pk in [false, true] {
+                let mut tb_meta = build_pg_tb_meta_without_keys();
+                tb_meta.basic.expr_uk_no_pk = expr_uk_no_pk;
+                tb_meta
+                    .col_type_map
+                    .insert("code".into(), build_pg_col_type(alias));
+                let builder = RdbQueryBuilder::new_for_pg(&tb_meta, None);
+                let mut row = build_plain_update_row_data();
+                row.before
+                    .as_mut()
+                    .unwrap()
+                    .insert("code".into(), ColValue::String(value.into()));
+                row.after
+                    .as_mut()
+                    .unwrap()
+                    .insert("code".into(), ColValue::String(value.into()));
+                for row_type in [RowType::Update, RowType::Delete] {
+                    row.row_type = row_type.clone();
+                    let parameter = if row_type == RowType::Update { 5 } else { 2 };
+                    let bound = format!("${parameter}::{alias}");
+                    let literal = format!("('{}')::{alias}", value);
+                    for (placeholder, value_sql) in [(true, bound), (false, literal)] {
+                        let query = builder
+                            .get_query_info_internal(&row, false, placeholder)
+                            .unwrap();
+                        if use_text {
+                            assert!(
+                                query.sql.contains(&format!(
+                                    r#"("code"::text COLLATE "C") = (({})::text COLLATE "C")"#,
+                                    value_sql
+                                )),
+                                "{alias}: {}",
+                                query.sql
+                            );
+                        } else {
+                            assert!(!query.sql.contains("COLLATE"), "{alias}: {}", query.sql);
+                            assert!(query.sql.contains(r#""code" = "#));
+                        }
+                        assert!(query.sql.contains("WHERE ctid IN"));
+                        assert!(query.sql.contains("LIMIT 1"));
+                        assert_eq!(
+                            query.binds.len(),
+                            if row_type == RowType::Update { 6 } else { 3 }
+                        );
+                        if placeholder {
+                            let _ = builder.create_pg_query(&query).unwrap();
+                        }
+                    }
+                }
+                row.before
+                    .as_mut()
+                    .unwrap()
+                    .insert("code".into(), ColValue::None);
+                let query = builder.get_query_info(&row, false).unwrap();
+                assert!(query.sql.contains(r#""code" IS NULL"#));
+                assert!(!query.sql.contains("COLLATE"));
+                assert_eq!(query.binds.len(), 2);
+            }
+        }
     }
 }

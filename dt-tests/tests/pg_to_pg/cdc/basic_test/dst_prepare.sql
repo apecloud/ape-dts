@@ -156,3 +156,35 @@ INSERT INTO pkuk.tbl_1 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'co
 INSERT INTO pkuk.tbl_2 VALUES('code1', 'name1'),('code1', 'name2'),('code3', 'name3');
 INSERT INTO pkuk.tbl_3 VALUES(1, 'code1', 'name1'),(2, 'code2', 'name2'),(3, 'code3', 'name3');
 INSERT INTO pkuk.tbl_4 VALUES('code1', 'name1'),('code2', 'name2'),('code3', 'name3');
+
+CREATE TABLE pkuk.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX expression_uk_rows_idx ON pkuk.expression_uk_rows (id, COALESCE(code, ''));
+INSERT INTO pkuk.expression_uk_rows VALUES (1, NULL, 'keep_null'), (1, 'code1', 'before_update');
+
+-- The target may also be published by other CDC tests.
+ALTER TABLE pkuk.tbl_2 REPLICA IDENTITY FULL;
+ALTER TABLE pkuk.tbl_4 REPLICA IDENTITY FULL;
+ALTER TABLE pkuk.expression_uk_rows REPLICA IDENTITY FULL;
+
+-- Full-row matching for JSON/XML with no PK/UK and with an expression UK.
+CREATE TABLE pkuk.json_xml_no_key (id INT, j JSON, x XML, jb JSONB, val TEXT);
+CREATE TABLE pkuk.expression_uk_json_xml (id INT NOT NULL UNIQUE, code VARCHAR(30), j JSON, x XML, jb JSONB, val TEXT);
+CREATE UNIQUE INDEX expression_uk_json_xml_idx ON pkuk.expression_uk_json_xml ((COALESCE(code, '')));
+ALTER TABLE pkuk.json_xml_no_key REPLICA IDENTITY FULL;
+ALTER TABLE pkuk.expression_uk_json_xml REPLICA IDENTITY FULL;
+-- Reverse target row order to expose predicates that omit JSON/XML or normalize JSON.
+INSERT INTO pkuk.json_xml_no_key VALUES
+(6, '{"a":1}', '<x/>', '{"ok":true}', 'values_before'),
+(5, NULL, NULL, NULL, 'null_before'),
+(4, '{ "a": 1 }', '<x/>', '{"ok":true}', 'same'),
+(4, '{"a":1}', '<x/>', '{"ok":true}', 'same'),
+(3, '{"b":2,"a":1}', '<x/>', '{"ok":true}', 'same'),
+(3, '{"a":1,"b":2}', '<x/>', '{"ok":true}', 'same'),
+(2, '{"kind":"xml"}', '<x>second</x>', '{"ok":true}', 'same'),
+(2, '{"kind":"xml"}', '<x>first</x>', '{"ok":true}', 'same'),
+(1, '{"kind":"second"}', '<x/>', '{"ok":true}', 'same'),
+(1, '{"kind":"first"}', '<x/>', '{"ok":true}', 'same');
+INSERT INTO pkuk.expression_uk_json_xml VALUES
+(1, NULL, '{"a":1}', '<x/>', '{"ok":true}', 'same'),
+(2, 'B', NULL, NULL, NULL, 'null_before'),
+(3, 'C', '{"a":1}', '<x/>', '{"ok":true}', 'values_before');

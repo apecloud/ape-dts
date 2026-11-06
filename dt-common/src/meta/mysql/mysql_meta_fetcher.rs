@@ -93,7 +93,14 @@ impl MysqlMetaFetcher {
         if !self.cache.contains_key(&full_name) {
             let (cols, col_origin_type_map, col_type_map, nullable_cols) =
                 Self::parse_cols(&self.conn_pool, &self.db_type, schema, tb).await?;
-            let (key_map, key_col_attrs) = Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let (mut key_map, key_col_attrs, has_expression_unique_index) =
+                Self::parse_keys(&self.conn_pool, schema, tb).await?;
+            let expr_uk_no_pk =
+                has_expression_unique_index && !key_map.contains_key(RDB_PRIMARY_KEY);
+            // Expression UKs require full-row identity when there is no primary key.
+            if expr_uk_no_pk {
+                key_map.clear();
+            }
             // disable get_foreign_keys since we don't support foreign key check,
             // also querying them is very slow, which may cause terrible performance issue if there were many tables in a CDC task.
             // let (foreign_keys, ref_by_foreign_keys) =
@@ -106,6 +113,7 @@ impl MysqlMetaFetcher {
                 nullable_cols,
                 col_origin_type_map,
                 key_map,
+                expr_uk_no_pk,
                 ..Default::default()
             };
             let mut tb_meta = MysqlTbMeta {
@@ -377,6 +385,7 @@ impl MysqlMetaFetcher {
     ) -> anyhow::Result<(
         HashMap<String, Vec<String>>,
         HashMap<String, HashMap<String, SortDirection>>,
+        bool,
     )> {
         let mut keys: HashMap<String, Vec<(u64, String, SortDirection)>> = HashMap::new();
         let mut invalid_keys = HashSet::new();
@@ -426,7 +435,7 @@ impl MysqlMetaFetcher {
                     .collect(),
             );
         }
-        Ok((key_map, key_col_attrs))
+        Ok((key_map, key_col_attrs, !invalid_keys.is_empty()))
     }
 
     #[allow(dead_code)]

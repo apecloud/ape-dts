@@ -71,6 +71,15 @@ pub async fn run_order_key_test(db_type: DbType) -> anyhow::Result<()> {
     cases.push(("parse_keys_example", &example_cols));
     for (table, expected) in &cases {
         let meta = manager.get_tb_meta(db, schema, table).await?;
+        if *table == "catalog_key" && matches!(db_type, DbType::Mysql | DbType::Pg) {
+            assert!(meta.expr_uk_no_pk, "{table}");
+            assert!(meta.key_map.is_empty(), "{table}");
+            assert!(meta.order_cols.is_empty(), "{table}");
+            assert!(meta.order_col_attrs.is_empty(), "{table}");
+            assert_eq!(meta.id_cols, meta.cols, "{table}");
+            assert_eq!(meta.partition_col, "id", "{table}");
+            continue;
+        }
         let expected_cols = expected
             .iter()
             .map(|(col, _)| col.to_string())
@@ -201,6 +210,13 @@ pub async fn run_order_key_test(db_type: DbType) -> anyhow::Result<()> {
         ]
     };
     for (table, expected_payloads) in resume_cases {
+        // Expression UK fallback ignores the obsolete key cursor and reads the full table.
+        let expected_payloads =
+            if table == "catalog_key" && matches!(db_type, DbType::Mysql | DbType::Pg) {
+                "abcdefg"
+            } else {
+                expected_payloads
+            };
         let target = if matches!(db_type, DbType::Mssql) {
             rid!("order_key_dst", "dbo", table)
         } else {
