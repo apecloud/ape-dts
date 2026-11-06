@@ -27,7 +27,6 @@ use dt_common::rid;
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
     error::{DtError, DtOptionExt},
-    filter::DtFilter,
     log_error, log_info, log_warn,
     utils::sql_util::SqlUtil,
 };
@@ -35,11 +34,12 @@ use futures::TryStreamExt;
 use sqlx::{postgres::PgRow, Pool, Postgres, Row};
 
 use super::pg_struct_check_fetcher::PgStructCheckFetcher;
+use crate::rdb_struct_filter::RdbStructFilter;
 
 pub struct PgStructFetcher {
     pub conn_pool: Pool<Postgres>,
     pub schemas: HashSet<String>,
-    pub filter: Option<DtFilter>,
+    pub filter: RdbStructFilter,
     pub allow_missing_schemas: bool,
 }
 
@@ -964,7 +964,11 @@ impl PgStructFetcher {
             }
 
             results.push(PgPrivilege {
-                key: StructKey::new(StructKeyType::RbacPrivilegeSchema, [schema_name, grantee]),
+                key: StructKey::new(
+                    DbType::Pg,
+                    StructKeyType::RbacPrivilegeSchema,
+                    [schema_name, grantee],
+                ),
                 origin: grant_command,
             });
         }
@@ -1009,6 +1013,7 @@ impl PgStructFetcher {
 
             results.push(PgPrivilege {
                 key: StructKey::new(
+                    DbType::Pg,
                     StructKeyType::RbacPrivilegeTable,
                     [schema_name, table_name, grantee, is_grantable],
                 ),
@@ -1101,6 +1106,7 @@ impl PgStructFetcher {
 
                 results.push(PgPrivilege {
                     key: StructKey::new(
+                        DbType::Pg,
                         StructKeyType::RbacPrivilegeColumn,
                         [
                             schema.as_str(),
@@ -1192,6 +1198,7 @@ impl PgStructFetcher {
 
             results.push(PgPrivilege {
                 key: StructKey::new(
+                    DbType::Pg,
                     StructKeyType::RbacPrivilegeSequence,
                     [schema, sequence, grantee, is_grantable],
                 ),
@@ -1502,17 +1509,11 @@ impl PgStructFetcher {
     }
 
     fn filter_tb(&mut self, schema: &str, tb: &str) -> anyhow::Result<bool> {
-        if let Some(filter) = &mut self.filter {
-            return filter.filter(rid!(schema, tb));
-        }
-        Ok(false)
+        self.filter.filter(rid!(schema, tb))
     }
 
     fn filter_schema(&mut self, schema: &str) -> anyhow::Result<bool> {
-        if let Some(filter) = &mut self.filter {
-            return filter.filter(rid!(schema));
-        }
-        Ok(false)
+        self.filter.filter(rid!(schema))
     }
 
     fn push_to_results<T>(

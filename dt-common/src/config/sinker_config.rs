@@ -66,6 +66,12 @@ pub enum SinkerConfig {
         conflict_policy: ConflictPolicyEnum,
     },
 
+    MssqlStruct {
+        url: String,
+        connection_auth: ConnectionAuthConfig,
+        conflict_policy: ConflictPolicyEnum,
+    },
+
     Kafka {
         url: String,
         batch_size: usize,

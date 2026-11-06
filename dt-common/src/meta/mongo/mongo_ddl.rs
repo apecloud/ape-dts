@@ -313,10 +313,7 @@ mod tests {
             ddl.get_id::<(String, String)>(),
             ("db1".into(), "old_tb".into())
         );
-        assert_eq!(
-            ddl.get_rename_id::<(String, String)>(),
-            ("db2".into(), "new_tb".into())
-        );
+        assert_eq!(ddl.get_rename_id(), Some(crate::rid!("db2", "new_tb")));
         let command = query_to_command(&ddl.query).unwrap();
         assert_eq!(command.get_str("renameCollection").unwrap(), "db1.old_tb");
         assert_eq!(command.get_str("to").unwrap(), "db2.new_tb");

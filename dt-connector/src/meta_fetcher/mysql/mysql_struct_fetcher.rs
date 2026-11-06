@@ -8,7 +8,6 @@ use dt_common::rid;
 use dt_common::{
     config::config_enums::DbType,
     error::DtError,
-    filter::DtFilter,
     meta::{
         mysql::mysql_meta_manager::MysqlMetaManager,
         struct_meta::{
@@ -30,10 +29,12 @@ use dt_common::{
 use futures::TryStreamExt;
 use sqlx::{mysql::MySqlRow, MySql, Pool, Row};
 
+use crate::rdb_struct_filter::RdbStructFilter;
+
 pub struct MysqlStructFetcher {
     pub conn_pool: Pool<MySql>,
     pub dbs: HashSet<String>,
-    pub filter: Option<DtFilter>,
+    pub filter: RdbStructFilter,
     pub meta_manager: MysqlMetaManager,
     pub allow_missing_databases: bool,
 }
@@ -569,10 +570,7 @@ impl MysqlStructFetcher {
         if !self.dbs.contains(db) {
             return Ok(true);
         }
-        if let Some(filter) = &mut self.filter {
-            return filter.filter(rid!(db, tb));
-        }
-        Ok(false)
+        self.filter.filter(rid!(db, tb))
     }
 
     fn get_index_kind(non_unique: i32, index_type: &IndexType) -> IndexKind {

@@ -1,3 +1,4 @@
+use crate::config::config_enums::DbType;
 use crate::filter::DtFilter;
 use crate::meta::struct_meta::statement::struct_statement::{StructKey, StructKeyType};
 use crate::meta::struct_meta::structure::structure_type::StructureType;
@@ -17,6 +18,7 @@ impl PgCreateUdtStatement {
 
         let sql = self.udt.create_statement.to_string();
         let key = StructKey::new(
+            DbType::Pg,
             StructKeyType::Udt,
             [&self.udt.schema_name, &self.udt.typ_name],
         );

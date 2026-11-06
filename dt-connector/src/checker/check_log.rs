@@ -206,13 +206,13 @@ impl StructCheckKey {
         Self {
             schema: key.schema().to_string(),
             tb: key.table().to_string(),
+            db: key.database().unwrap_or(db).to_string(),
             key,
-            db: db.to_string(),
         }
     }
 
     pub fn with_location(&self, db: &str, schema: &str, tb: &str) -> Self {
-        Self::new(db, self.key.with_location(schema, tb))
+        Self::new(db, self.key.with_location(db, schema, tb))
     }
 
     pub fn is_table_scoped(&self) -> bool {
@@ -261,6 +261,7 @@ impl FromStr for CheckLog {
 
 #[cfg(test)]
 mod tests {
+    use dt_common::config::config_enums::DbType;
     use dt_common::meta::struct_meta::statement::struct_statement::StructKeyType;
     use serde_json::json;
 
@@ -328,7 +329,7 @@ mod tests {
 
         let key = StructCheckKey::new(
             "",
-            StructKey::new(StructKeyType::Index, ["s1", "t1", "idx_1"]),
+            StructKey::new(DbType::Pg, StructKeyType::Index, ["s1", "t1", "idx_1"]),
         );
         let struct_log = StructCheckLog::new(
             &key,
@@ -349,7 +350,7 @@ mod tests {
 
         let target_key = StructCheckKey::new(
             "",
-            StructKey::new(StructKeyType::Index, ["s2", "t2", "idx_1"]),
+            StructKey::new(DbType::Pg, StructKeyType::Index, ["s2", "t2", "idx_1"]),
         );
         let routed_struct_log = StructCheckLog::new(&key, &target_key, None, None);
         assert_eq!(
@@ -366,6 +367,7 @@ mod tests {
         let column_privilege = StructCheckKey::new(
             "",
             StructKey::new(
+                DbType::Pg,
                 StructKeyType::RbacPrivilegeColumn,
                 ["s1", "t1", "SELECT", "user", "NO"],
             ),
@@ -376,7 +378,7 @@ mod tests {
 
         let special_identifier = StructCheckKey::new(
             "",
-            StructKey::new(StructKeyType::Index, ["a.b", "t.1", "idx.1"]),
+            StructKey::new(DbType::Pg, StructKeyType::Index, ["a.b", "t.1", "idx.1"]),
         );
         assert_eq!(special_identifier.schema, "a.b");
         assert_eq!(special_identifier.tb, "t.1");

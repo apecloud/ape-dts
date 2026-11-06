@@ -341,13 +341,15 @@ mod tests {
 
         let started = Instant::now();
         for _ in 0..ITERATIONS {
-            black_box(direct.sink_dml(Vec::new(), false).await.unwrap());
+            direct.sink_dml(Vec::new(), false).await.unwrap();
+            black_box(());
         }
         let direct_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
 
         let started = Instant::now();
         for _ in 0..ITERATIONS {
-            black_box(tracked.sink_dml(Vec::new(), false).await.unwrap());
+            tracked.sink_dml(Vec::new(), false).await.unwrap();
+            black_box(());
         }
         let tracked_ns = started.elapsed().as_nanos() as f64 / f64::from(ITERATIONS);
 
