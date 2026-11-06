@@ -165,3 +165,11 @@ CREATE UNIQUE INDEX expression_uk_as_unkeyed_idx ON test_db_1.expression_uk_as_u
 
 CREATE TABLE test_db_1.expression_uk_rows (id INT NOT NULL, code VARCHAR(30), val TEXT);
 CREATE UNIQUE INDEX expression_uk_rows_idx ON test_db_1.expression_uk_rows (id, COALESCE(code, ''));
+
+-- Expression-only UK and coexistence with ordinary UK/PK.
+CREATE TABLE test_db_1.expression_only_uk (code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX expression_only_uk_idx ON test_db_1.expression_only_uk (LOWER(code));
+CREATE TABLE test_db_1.primary_and_expression_uk (id INT PRIMARY KEY, code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX primary_and_expression_uk_idx ON test_db_1.primary_and_expression_uk (COALESCE(code, ''));
+CREATE TABLE test_db_1.ordinary_and_expression_uk (id INT NOT NULL UNIQUE, code VARCHAR(30), val TEXT);
+CREATE UNIQUE INDEX ordinary_and_expression_uk_idx ON test_db_1.ordinary_and_expression_uk (COALESCE(code, ''));

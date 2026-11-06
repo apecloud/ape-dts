@@ -201,3 +201,18 @@ CREATE TABLE struct_it_mysql2mysql_1.match (
 CREATE INDEX idx_index_on_index ON struct_it_mysql2mysql_1.match(offset);
 CREATE INDEX idx_key_col ON struct_it_mysql2mysql_1.match(`match`);
 CREATE UNIQUE INDEX uniq_unique_col ON struct_it_mysql2mysql_1.match(unique_col);
+
+-- Expression indexes with mixed key parts and escaped literals.
+CREATE TABLE struct_it_mysql2mysql_1.expression_rows (
+  id INT NOT NULL,
+  code VARCHAR(30),
+  val VARCHAR(30),
+  UNIQUE KEY ordinary_uk (id, code(5))
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_bin;
+
+-- Older versions keep the ordinary prefix UK and skip functional indexes.
+/*!80013 CREATE UNIQUE INDEX mixed_uk ON struct_it_mysql2mysql_1.expression_rows (id, (COALESCE(code, ''))) */;
+/*!80013 CREATE UNIQUE INDEX expression_uk ON struct_it_mysql2mysql_1.expression_rows ((LOWER(code))) */;
+/*!80013 CREATE UNIQUE INDEX multi_expression_uk ON struct_it_mysql2mysql_1.expression_rows ((LOWER(code)), id, (COALESCE(val, ''))) */;
+/*!80013 CREATE INDEX expression_idx ON struct_it_mysql2mysql_1.expression_rows ((LENGTH(val))) */;
+/*!80013 CREATE UNIQUE INDEX escaped_uk ON struct_it_mysql2mysql_1.expression_rows ((COALESCE(val, 'it''s\\ok'))) */;
