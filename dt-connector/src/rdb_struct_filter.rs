@@ -1,5 +1,5 @@
 use dt_common::filter::DtFilter;
-use dt_common::{resource::RID, rid, router::DtRouter};
+use dt_common::{resource::RID, router::DtRouter};
 
 #[derive(Clone)]
 pub struct RdbStructFilter {
@@ -22,19 +22,7 @@ impl RdbStructFilter {
         }
     }
 
-    pub fn filter_schema(&self, schema: &str) -> anyhow::Result<bool> {
-        self.filter_id(rid!(schema))
-    }
-
-    pub fn filter_tb(&self, schema: &str, table: &str) -> anyhow::Result<bool> {
-        self.filter_id(rid!(schema, table))
-    }
-
-    pub fn filter_tb_with_db(&self, db: &str, schema: &str, table: &str) -> anyhow::Result<bool> {
-        self.filter_id(rid!(db, schema, table))
-    }
-
-    fn filter_id(&self, id: RID) -> anyhow::Result<bool> {
+    pub fn filter(&self, id: RID) -> anyhow::Result<bool> {
         let source = match &self.reverse_router {
             Some(router) => router.reverse(id)?,
             None => id,
@@ -50,6 +38,7 @@ mod tests {
         filter_config::{FilterConfig, LegacyFilterConfig},
         router_config::{LegacyRouterConfig, RouterConfig},
     };
+    use dt_common::rid;
 
     use super::*;
 
@@ -88,21 +77,27 @@ mod tests {
             .unwrap();
             let source_filter = RdbStructFilter::for_source(filter.clone());
             let target_filter = RdbStructFilter::for_target(filter, Some(router.clone()));
-            assert!(!source_filter.filter_tb("src_schema", "src_table").unwrap());
-            assert!(source_filter.filter_tb("dst_schema", "dst_table").unwrap());
-            assert!(!target_filter.filter_tb("dst_schema", "dst_table").unwrap());
+            assert!(!source_filter
+                .filter(rid!("src_schema", "src_table"))
+                .unwrap());
+            assert!(source_filter
+                .filter(rid!("dst_schema", "dst_table"))
+                .unwrap());
+            assert!(!target_filter
+                .filter(rid!("dst_schema", "dst_table"))
+                .unwrap());
             assert_eq!(
                 target_filter
-                    .filter_tb("dst_schema", "ignored_table")
+                    .filter(rid!("dst_schema", "ignored_table"))
                     .unwrap(),
                 exclude_ignored_table,
                 "{do_schemas}/{do_tbs}/{ignore_tbs}"
             );
             if !do_schemas.is_empty() {
-                assert!(!source_filter.filter_schema("src_schema").unwrap());
-                assert!(source_filter.filter_schema("dst_schema").unwrap());
-                assert!(!target_filter.filter_schema("dst_schema").unwrap());
-                assert!(target_filter.filter_schema("other_schema").unwrap());
+                assert!(!source_filter.filter(rid!("src_schema")).unwrap());
+                assert!(source_filter.filter(rid!("dst_schema")).unwrap());
+                assert!(!target_filter.filter(rid!("dst_schema")).unwrap());
+                assert!(target_filter.filter(rid!("other_schema")).unwrap());
             }
         }
     }
@@ -128,12 +123,12 @@ mod tests {
         let router = DtRouter::from_config(&config, DbType::Mssql, DbType::Mssql).unwrap();
         let target_filter = RdbStructFilter::for_target(filter, Some(router));
 
-        assert!(!target_filter.filter_schema("target.db?").unwrap());
+        assert!(!target_filter.filter(rid!("target.db?")).unwrap());
         assert!(!target_filter
-            .filter_tb_with_db("target.db?", "routed.*", "target?")
+            .filter(rid!("target.db?", "routed.*", "target?"))
             .unwrap());
         assert!(target_filter
-            .filter_tb_with_db("other.db?", "routed.*", "other")
+            .filter(rid!("other.db?", "routed.*", "other"))
             .unwrap());
     }
 }

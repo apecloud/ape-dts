@@ -2434,12 +2434,8 @@ mod test_mssql {
 
             assert_eq!(ddl.ddl_type, ddl_type, "sql: {sql}");
             assert_eq!(
-                ddl.get_db_schema_tb(),
-                (
-                    expected_name.0.to_string(),
-                    expected_name.1.to_string(),
-                    expected_name.2.to_string(),
-                ),
+                ddl.get_id::<crate::resource::RID>(),
+                crate::rid!(expected_name.0, expected_name.1, expected_name.2),
                 "sql: {sql}"
             );
             assert_eq!(ddl.to_sql(), sql, "sql: {sql}");

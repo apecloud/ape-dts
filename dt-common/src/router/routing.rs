@@ -7,7 +7,7 @@ use crate::{
     config::config_enums::DbType,
     meta::{
         col_value::ColValue,
-        ddl_meta::{ddl_data::DdlData, ddl_statement::DdlStatement},
+        ddl_meta::ddl_data::DdlData,
         row_data::RowData,
         struct_meta::{statement::struct_statement::StructStatement, struct_data::StructData},
     },
@@ -25,42 +25,21 @@ impl DtRouter {
     }
 
     pub fn route_ddl(&self, mut ddl_data: DdlData) -> Result<DdlData> {
+        let target = self.forward::<RID>(ddl_data.get_id::<RID>())?;
+        let rename_target = ddl_data
+            .get_rename_id()
+            .map(|id| self.forward::<RID>(id))
+            .transpose()?;
+        ddl_data.statement.set_id(target);
+        if let Some(target) = rename_target {
+            ddl_data.statement.set_rename_id(target);
+        }
+
+        // SQL Server statements carry their routed database explicitly.
         if ddl_data.db_type == DbType::Mssql {
-            let target: RID = self.forward(ddl_data.get_id::<RID>())?;
-            let [db, schema, tb] = target.into_left();
-            ddl_data.route(db, schema, tb);
             return Ok(ddl_data);
         }
-        let src_db = ddl_data.default_db.clone();
-        let source: RID = ddl_data.get_id();
-        let has_rename_target = !ddl_data.statement.get_rename_to_schema_tb().1.is_empty();
-        match &mut ddl_data.statement {
-            DdlStatement::MysqlAlterTableRename(_)
-            | DdlStatement::PgAlterTableRename(_)
-            | DdlStatement::RenameTable(_)
-            | DdlStatement::MongoCommand(_)
-                if has_rename_target =>
-            {
-                let (dst_schema, dst_tb) = self.forward(source)?;
-                let (dst_new_schema, dst_new_tb) = self.forward(ddl_data.get_rename_id::<RID>())?;
-                ddl_data.statement.route_rename_table(
-                    dst_schema,
-                    dst_tb,
-                    dst_new_schema,
-                    dst_new_tb,
-                );
-            }
-
-            _ => {
-                let (dst_schema, dst_tb) = if ddl_data.statement.get_schema_tb().1.is_empty() {
-                    (self.forward::<String>(source)?, String::new())
-                } else {
-                    self.forward(source)?
-                };
-                ddl_data.statement.route(dst_schema, dst_tb);
-            }
-        }
-
+        let src_db = &ddl_data.default_db;
         if src_db.is_empty() && !ddl_data.default_schema.is_empty() {
             ddl_data.default_schema = self.forward(rid!(ddl_data.default_schema))?;
         } else if !src_db.is_empty() {
@@ -224,7 +203,10 @@ mod tests {
             router_config::{LegacyRouterConfig, RouterConfig},
         },
         meta::{
-            ddl_meta::ddl_parser::DdlParser,
+            ddl_meta::{
+                ddl_parser::DdlParser,
+                ddl_statement::{DdlStatement, MongoCommandStatement},
+            },
             row_type::RowType,
             struct_meta::{
                 statement::{
@@ -412,8 +394,8 @@ mod tests {
                 ddl.default_schema = defaults.1.into();
                 let routed = router.route_ddl(ddl).unwrap();
                 assert_eq!(
-                    routed.get_db_schema_tb(),
-                    (expected.0.into(), expected.1.into(), expected.2.into()),
+                    routed.get_id::<RID>(),
+                    rid!(expected.0, expected.1, expected.2),
                     "{sql}"
                 );
                 assert_eq!(routed.to_sql(), expected_sql, "{sql}");
@@ -512,6 +494,75 @@ mod tests {
     }
 
     #[test]
+    fn namespace_ddl_routing_preserves_resource_depth() {
+        for (engine, query, expected_id, expected_sql) in [
+            (
+                DbType::Mssql,
+                "CREATE DATABASE [inventory]",
+                rid!("archive"),
+                "CREATE DATABASE [archive]",
+            ),
+            (
+                DbType::Mssql,
+                "DROP DATABASE [inventory]",
+                rid!("archive"),
+                "DROP DATABASE [archive]",
+            ),
+            (
+                DbType::Mssql,
+                "CREATE SCHEMA [sales]",
+                rid!("archive", "sales"),
+                "CREATE SCHEMA [sales]",
+            ),
+            (
+                DbType::Mssql,
+                "DROP SCHEMA [sales]",
+                rid!("archive", "sales"),
+                "DROP SCHEMA [sales]",
+            ),
+        ] {
+            let router = DtRouter::new(
+                engine.clone(),
+                engine.clone(),
+                [(rid!("inventory"), rid!("archive"))],
+            )
+            .unwrap();
+            let mut ddl = DdlParser::new(engine).parse(query).unwrap().unwrap();
+            ddl.default_db = "inventory".into();
+            ddl.default_schema = "dbo".into();
+            assert!(ddl.get_rename_id().is_none());
+            let routed = router.route_ddl(ddl).unwrap();
+            assert_eq!(routed.get_id::<RID>(), expected_id, "{query}");
+            assert_eq!(routed.to_sql(), expected_sql, "{query}");
+            assert!(routed.get_rename_id().is_none());
+        }
+
+        let router = DtRouter::new(
+            DbType::Mongo,
+            DbType::Mongo,
+            [(rid!("inventory"), rid!("archive"))],
+        )
+        .unwrap();
+        let ddl = DdlData {
+            db_type: DbType::Mongo,
+            default_schema: "inventory".into(),
+            statement: DdlStatement::MongoCommand(MongoCommandStatement {
+                schema: "inventory".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let routed = router.route_ddl(ddl).unwrap();
+        assert_eq!(routed.get_id::<RID>(), rid!("archive"));
+        assert!(routed.get_rename_id().is_none());
+        let DdlStatement::MongoCommand(statement) = routed.statement else {
+            panic!("unexpected statement");
+        };
+        assert_eq!(statement.schema, "archive");
+        assert!(statement.tb.is_empty());
+    }
+
+    #[test]
     fn pg_rename_routes_within_the_table_schema_and_keeps_new_name_unqualified() {
         let router = DtRouter::new(
             DbType::Pg,
@@ -541,18 +592,15 @@ mod tests {
         ] {
             let mut ddl = DdlParser::new(DbType::Pg).parse(query).unwrap().unwrap();
             ddl.default_schema = default_schema.into();
-            assert_eq!(ddl.get_rename_id::<RID>().segment(0), "inventory");
+            assert_eq!(ddl.get_rename_id().unwrap().segment(0), "inventory");
             let routed = router.route_ddl(ddl).unwrap();
             assert_eq!(routed.to_sql(), expected);
-            assert_eq!(routed.get_rename_id::<RID>().segment(0), "archive");
+            assert_eq!(routed.get_rename_id().unwrap().segment(0), "archive");
 
             let decoded: DdlData =
                 serde_json::from_str(&serde_json::to_string(&routed).unwrap()).unwrap();
             assert_eq!(decoded.to_sql(), expected);
-            assert_eq!(
-                decoded.get_rename_id::<RID>(),
-                routed.get_rename_id::<RID>()
-            );
+            assert_eq!(decoded.get_rename_id(), routed.get_rename_id());
         }
     }
 
@@ -582,10 +630,7 @@ mod tests {
                 routed.get_id::<(String, String)>(),
                 ("archive".into(), "old_orders".into())
             );
-            assert_eq!(
-                routed.get_rename_id::<(String, String)>(),
-                ("archive".into(), "new_events".into())
-            );
+            assert_eq!(routed.get_rename_id(), Some(rid!("archive", "new_events")));
         }
         for (engine, query) in [
             (DbType::Mysql, "CREATE DATABASE inventory"),

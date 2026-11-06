@@ -517,7 +517,7 @@ impl MongoSinker {
 
     async fn run_ddl(&mut self, ddl_data: &DdlData) -> Result<()> {
         let mut command = query_to_command(&ddl_data.query)?;
-        Self::rewrite_ddl_command_namespace(ddl_data, &mut command);
+        Self::rewrite_ddl_command_namespace(ddl_data, &mut command)?;
 
         match ddl_data.ddl_type {
             DdlType::MongoDropDatabase => {
@@ -593,20 +593,23 @@ impl MongoSinker {
         Ok(true)
     }
 
-    fn rewrite_ddl_command_namespace(ddl_data: &DdlData, command: &mut Document) {
+    fn rewrite_ddl_command_namespace(ddl_data: &DdlData, command: &mut Document) -> Result<()> {
         let [db, tb] = ddl_data.get_id::<RID>().into_left();
         for command_name in ["create", "drop", "createIndexes", "dropIndexes", "collMod"] {
             if command.contains_key(command_name) && !tb.is_empty() {
                 command.insert(command_name, tb);
-                return;
+                return Ok(());
             }
         }
 
         if command.contains_key("renameCollection") {
-            let [new_db, new_tb] = ddl_data.get_rename_id::<RID>().into_left();
+            let target = ddl_data
+                .get_rename_id()
+                .context("MongoDB rename command is missing its target namespace")?;
+            let [new_db, new_tb] = target.into_left();
             command.insert("renameCollection", format!("{}.{}", db, tb));
             command.insert("to", format!("{}.{}", new_db, new_tb));
-            return;
+            return Ok(());
         }
 
         for command_name in [
@@ -616,9 +619,10 @@ impl MongoSinker {
         ] {
             if command.contains_key(command_name) && !tb.is_empty() {
                 command.insert(command_name, format!("{}.{}", db, tb));
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 
     async fn serial_sink(&mut self, data: &[RowData]) -> Result<()> {
@@ -1530,6 +1534,23 @@ mod tests {
     }
 
     #[test]
+    fn rename_command_without_target_namespace_is_rejected() {
+        let ddl = DdlData {
+            statement: DdlStatement::MongoCommand(MongoCommandStatement {
+                schema: "inventory".into(),
+                tb: "orders".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let command = doc! { "renameCollection": "inventory.orders", "to": "archive.events" };
+        let mut rewritten = command.clone();
+        let error = MongoSinker::rewrite_ddl_command_namespace(&ddl, &mut rewritten).unwrap_err();
+        assert!(error.to_string().contains("missing its target namespace"));
+        assert_eq!(rewritten, command);
+    }
+
+    #[test]
     fn ddl_commands_use_routed_collection_names() {
         for (ddl_type, table, mut command, expected) in [
             (
@@ -1568,7 +1589,7 @@ mod tests {
                 }),
                 ..Default::default()
             };
-            MongoSinker::rewrite_ddl_command_namespace(&ddl, &mut command);
+            MongoSinker::rewrite_ddl_command_namespace(&ddl, &mut command).unwrap();
             assert_eq!(command, expected, "{:?}", ddl.ddl_type);
         }
     }

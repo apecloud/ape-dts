@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::bail;
+use dt_common::rid;
 use dt_common::{
     config::config_enums::DbType,
     error::DtError,
@@ -568,7 +569,7 @@ impl MysqlStructFetcher {
         if !self.dbs.contains(db) {
             return Ok(true);
         }
-        self.filter.filter_tb(db, tb)
+        self.filter.filter(rid!(db, tb))
     }
 
     fn get_index_kind(non_unique: i32, index_type: &IndexType) -> IndexKind {

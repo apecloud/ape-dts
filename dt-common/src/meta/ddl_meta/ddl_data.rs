@@ -26,35 +26,6 @@ impl DdlData {
         self.statement.to_sql(&self.db_type)
     }
 
-    pub fn get_db_schema_tb(&self) -> (String, String, String) {
-        let (mut db, mut schema, tb) = self.statement.get_db_schema_tb();
-        match self.ddl_type {
-            DdlType::CreateDatabase | DdlType::DropDatabase | DdlType::AlterDatabase => {
-                return (db, String::new(), String::new());
-            }
-            DdlType::CreateSchema | DdlType::DropSchema | DdlType::AlterSchema => {
-                if db.is_empty() {
-                    db = self.default_db.clone();
-                }
-                return (db, schema, String::new());
-            }
-            _ => {}
-        }
-
-        if db.is_empty() {
-            db = self.default_db.clone();
-        }
-        if schema.is_empty() {
-            schema = self.default_schema.clone();
-        }
-        (db, schema, tb)
-    }
-
-    pub fn route(&mut self, dst_db: String, dst_schema: String, dst_tb: String) {
-        self.statement
-            .route_db_schema_tb(dst_db, dst_schema, dst_tb);
-    }
-
     pub fn split_to_multi(self) -> Vec<DdlData> {
         let mut res = Vec::new();
         for statement in self.statement.split_to_multi() {
@@ -89,23 +60,14 @@ impl DdlData {
 
     /// Namespace DDL omits the table: use `into_left()` for fixed levels; tuples right-align.
     pub fn get_id<T: From<RID>>(&self) -> T {
-        if self.db_type == DbType::Mssql {
-            let (db, schema, tb) = self.get_db_schema_tb();
-            return RID::new([db, schema, tb]).into();
-        }
-        let (mut schema, tb) = self.statement.get_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone();
-        }
-        RID::new([self.default_db.clone(), schema, tb]).into()
+        self.statement
+            .get_id(&self.default_db, &self.default_schema)
+            .into()
     }
 
-    pub fn get_rename_id<T: From<RID>>(&self) -> T {
-        let (mut schema, tb) = self.statement.get_rename_to_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone();
-        }
-        RID::new([self.default_db.clone(), schema, tb]).into()
+    pub fn get_rename_id(&self) -> Option<RID> {
+        self.statement
+            .get_rename_id(&self.default_db, &self.default_schema)
     }
 }
 
@@ -142,8 +104,8 @@ mod tests {
             };
             assert_eq!(ddl.get_id::<RID>(), rid!(db, expected_schema, "orders"));
             assert_eq!(
-                ddl.get_rename_id::<RID>(),
-                rid!(db, expected_new_schema, "events")
+                ddl.get_rename_id(),
+                Some(rid!(db, expected_new_schema, "events"))
             );
         }
     }
@@ -217,6 +179,6 @@ mod tests {
             assert_eq!(ddl.get_id::<String>(), name);
         }
         assert!(DdlData::default().get_id::<RID>().is_empty());
-        assert!(DdlData::default().get_rename_id::<RID>().is_empty());
+        assert!(DdlData::default().get_rename_id().is_none());
     }
 }

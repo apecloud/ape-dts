@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::bail;
+use dt_common::rid;
 use dt_common::{
     config::config_enums::DbType,
     error::DtError,
@@ -403,7 +404,7 @@ impl MssqlStructFetcher {
                 "MSSQL struct fetcher requires a database"
             ));
         }
-        if self.filter.filter_schema(&self.db)? {
+        if self.filter.filter(rid!(&self.db))? {
             return Ok(None);
         }
 
@@ -477,7 +478,7 @@ impl MssqlStructFetcher {
                 MssqlColValueConvertor::from_query_required_bool(&row, "has_sequence")?;
             if !has_sequence
                 && match &table {
-                    Some(table) => self.filter.filter_tb_with_db(db, &schema, table)?,
+                    Some(table) => self.filter.filter(rid!(db, &schema, table))?,
                     None => false,
                 }
             {
@@ -1042,7 +1043,7 @@ impl MssqlStructFetcher {
     ) -> anyhow::Result<bool> {
         Ok((requested_schema.is_empty() || requested_schema == schema)
             && (requested_table.is_empty() || requested_table == table)
-            && !self.filter.filter_tb_with_db(db, schema, table)?)
+            && !self.filter.filter(rid!(db, schema, table))?)
     }
 
     fn catalog_sql(template: &str, db: &str) -> String {

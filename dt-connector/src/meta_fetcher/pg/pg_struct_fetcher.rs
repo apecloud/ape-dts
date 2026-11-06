@@ -23,6 +23,7 @@ use dt_common::meta::struct_meta::{
         user_defined::{PgUdf, PgUdt, PgUdtType},
     },
 };
+use dt_common::rid;
 use dt_common::{
     config::{config_enums::DbType, config_token_parser::ConfigTokenParser},
     error::{DtError, DtOptionExt},
@@ -1508,11 +1509,11 @@ impl PgStructFetcher {
     }
 
     fn filter_tb(&mut self, schema: &str, tb: &str) -> anyhow::Result<bool> {
-        self.filter.filter_tb(schema, tb)
+        self.filter.filter(rid!(schema, tb))
     }
 
     fn filter_schema(&mut self, schema: &str) -> anyhow::Result<bool> {
-        self.filter.filter_schema(schema)
+        self.filter.filter(rid!(schema))
     }
 
     fn push_to_results<T>(
