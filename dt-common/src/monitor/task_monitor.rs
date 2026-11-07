@@ -344,6 +344,7 @@ impl TaskMonitor {
         > = BTreeMap::new();
         let mut sample_average_statistics: BTreeMap<TaskMetricsType, WindowCounterStatistics> =
             BTreeMap::new();
+        let mut sinker_rt_statistics: Option<WindowCounterStatistics> = None;
         let mut calc_rate_handler =
             |min_type, max_type, avg_type, statistics: &WindowCounterStatistics| {
                 let entry = rate_statistics
@@ -576,12 +577,7 @@ impl TaskMonitor {
                 .map(|r| r.value().clone());
             if let Some(counter) = counter {
                 let statics = counter.statistics_at(now).await;
-                calc_rate_handler(
-                    TaskMetricsType::SinkerRtMin,
-                    TaskMetricsType::SinkerRtMax,
-                    TaskMetricsType::SinkerRtAvg,
-                    &statics,
-                );
+                sinker_rt_statistics.get_or_insert_with(WindowCounterStatistics::default).merge(&statics);
             }
             // sinker rps
             let counter = monitor
@@ -680,6 +676,12 @@ impl TaskMonitor {
         for (metrics_type, mut statistics) in sample_average_statistics {
             statistics.recalculate();
             metrics.insert(metrics_type, statistics.avg_by_count);
+        }
+        if let Some(mut statistics) = sinker_rt_statistics {
+            statistics.recalculate();
+            metrics.insert(TaskMetricsType::SinkerRtMin, statistics.min);
+            metrics.insert(TaskMetricsType::SinkerRtMax, statistics.max);
+            metrics.insert(TaskMetricsType::SinkerRtAvg, statistics.avg_by_count);
         }
 
         calc_nowindow_metrics(&self.no_window_metrics_map, calc_monitors);
@@ -1038,6 +1040,20 @@ mod sinker_worker_tests {
             super::TaskMetricValue::Integer(3)
         );
     }
+    #[tokio::test]
+    async fn sinker_response_times_use_samples_instead_of_second_totals() {
+        let task = build_task_monitor();
+        let sinker = Arc::new(Monitor::new("sinker", "test", 60, 100, 10));
+        task.register("test", vec![(MonitorType::Sinker, sinker.clone())]);
+        sinker.add_batch_counter(CounterType::RtPerQuery, 10, 1).await;
+        sinker.add_batch_counter(CounterType::RtPerQuery, 30, 1).await;
+
+        let metrics = task.calc().await.unwrap();
+        assert_eq!(metrics[&TaskMetricsType::SinkerRtMin].as_u64(), Some(10));
+        assert_eq!(metrics[&TaskMetricsType::SinkerRtMax].as_u64(), Some(30));
+        assert_eq!(metrics[&TaskMetricsType::SinkerRtAvg].as_u64(), Some(20));
+    }
+
     #[tokio::test]
     async fn calc_merges_rate_buckets_and_weights_sample_averages() {
         let task = build_task_monitor();

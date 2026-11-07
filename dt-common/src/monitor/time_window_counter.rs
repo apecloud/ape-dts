@@ -62,13 +62,13 @@ impl WindowCounterStatistics {
                 .values()
                 .copied()
                 .reduce(TaskMetricValue::min)
-                .unwrap();
+                .unwrap_or_default();
             self.max_by_sec = self
                 .per_second
                 .values()
                 .copied()
                 .reduce(TaskMetricValue::max)
-                .unwrap();
+                .unwrap_or_default();
             let total = self
                 .per_second
                 .values()
