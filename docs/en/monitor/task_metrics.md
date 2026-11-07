@@ -32,20 +32,23 @@ See [pipeline monitoring](monitor.md#pipeline) for the format and no-sample beha
 - A time-window counter retains at most
   `[pipeline] counter_max_sub_count` samples. At higher event rates, its
   statistics cover the newest retained samples in the window.
-- For throughput and response-time metrics, `max`, `min`, and `avg` describe
+- For throughput metrics, `max`, `min`, and `avg` describe
   the maximum, minimum, and arithmetic mean of per-second values containing
   samples in the current window. Seconds without samples are excluded.
 - Existing metrics use integers and truncate division. Utilization, batch duration,
   and partitioner duration retain fractional values.
-- Window metrics retain their existing aggregation. Each monitor calculates its
-  own statistics; task metrics take minima/maxima across monitors and combine
-  averages with `(previous + current) / 2`. Sinker RPS/BPS use
-  `RecordsPerQuery`/`DataBytes`, and RT uses `RtPerQuery`.
-- Global window logs add each monitor's statistics, including its averages and
-  maxima. Global per-second window minima retain the existing zero output. Unexpired samples
-  from completed tables still participate in global logs, while task metrics
-  filter completed monitors. These outputs therefore have different aggregation
-  semantics.
+- Sample-based task averages combine counter sums and counts before division;
+  sample minima and maxima are taken across the retained samples. Throughput
+  task metrics first sum counters into aligned per-second buckets across active
+  monitors, then calculate min/max/average over the seconds containing samples.
+  Sinker RPS/BPS use `RecordsPerQuery`/`DataBytes`. Sinker RT uses retained
+  `RtPerQuery` samples: average is total duration divided by count, and extrema
+  are recorded sample durations. Kafka records a batch duration and message
+  count, so its extrema are batch extrema, not individual message latencies.
+- Snapshot global window logs use the same weighted sample and aligned per-second
+  aggregation. Completed (tombstoned) monitors are excluded from both windowed
+  aggregates and task metrics; their cumulative no-window counters are settled
+  when unregistered.
 - Samples are timestamped when submitted. Batched submissions can differ from
   the actual extraction or database request completion times.
 - A task-log field is present only after its source counter has been populated.
@@ -119,9 +122,9 @@ measured yet. Checkpoint recovery does not restore these statistics.
 | `sinker_bps_max`               | `sinker_bps_max`               | bytes/s       | Highest sink write byte rate in one sampled second of the window.                                                                                                                                                                                                           |
 | `sinker_bps_min`               | `sinker_bps_min`               | bytes/s       | Lowest sink write byte rate in one sampled second of the window.                                                                                                                                                                                                            |
 | `sinker_bps_avg`               | `sinker_bps_avg`               | bytes/s       | Average sink write byte rate across sampled seconds of the window.                                                                                                                                                                                                          |
-| `sinker_rt_max`                | `sinker_rt_max`                | milliseconds  | Highest per-second sum of recorded sink-operation response times in the window. This is not a per-request latency percentile.                                                                                                                                               |
-| `sinker_rt_min`                | `sinker_rt_min`                | milliseconds  | Lowest per-second sum of recorded sink-operation response times in the window.                                                                                                                                                                                              |
-| `sinker_rt_avg`                | `sinker_rt_avg`                | milliseconds  | Average per-second sum of recorded sink-operation response times across sampled seconds.                                                                                                                                                                                    |
+| `sinker_rt_max`                | `sinker_rt_max`                | milliseconds  | Highest recorded sink-operation duration in the window. |
+| `sinker_rt_min`                | `sinker_rt_min`                | milliseconds  | Lowest recorded sink-operation duration in the window. |
+| `sinker_rt_avg`                | `sinker_rt_avg`                | milliseconds  | Total recorded duration divided by the recorded request count. |
 | `sinker_workers_configured`    | `sinker_workers_configured`    | workers       | Number of sinker instances registered for the task.                                                                                                                                                                                                                         |
 | `sinker_workers_busy`          | `sinker_workers_busy`          | workers       | Number of registered sinkers currently executing a tracked sinker operation. Tracked operations include data writes, metadata refresh, and control-item processing such as table-finish handling; `close` is not tracked. This is a point-in-time value sampled at refresh. |
 | `sinker_workers_per_drain_max` | `sinker_workers_per_drain_max` | workers/drain | Maximum number of distinct sinkers that received non-empty business data in one pipeline drain during the current window.                                                                                                                                                   |
