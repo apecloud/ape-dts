@@ -1695,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "dt-main"
-version = "2.0.26"
+version = "2.0.27"
 dependencies = [
  "clap",
  "dt-precheck",
@@ -3510,8 +3510,8 @@ dependencies = [
 
 [[package]]
 name = "mysql-binlog-connector-rust"
-version = "0.3.4"
-source = "git+https://github.com/apecloud/mysql-binlog-connector-rust?tag=v0.3.4#f7cca8ec2ebb55a1eb24c52702f9694c42d6a093"
+version = "0.3.5"
+source = "git+https://github.com/apecloud/mysql-binlog-connector-rust?tag=v0.3.5#2cb609167e58941b902caf7f15d894835e0f8a17"
 dependencies = [
  "async-recursion",
  "async-std",
