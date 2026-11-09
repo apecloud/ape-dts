@@ -2,16 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versions follow the project-specific numbering scheme described in the 2.0.27 release notes.
 
 ---
 
-## [Unreleased]
+## [2.0.27] - ?
+
+This is another maintenance release based on `release-2.0.26`. To comply with Cargo's three-component package version format, future releases will follow `<super_major_version>.<major_version>.<minor_version>`. Under this scheme, moving from `2.0.26` to `2.0.27` is a minor update. Releases with substantial new features will use `2.1.xx`, while releases with major architectural changes will use `3.0.xx`. Subsequent releases will follow the same convention.
+
+### Added
+
+#### MySQL
+
+- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - support MySQL 8.4 binlog status queries, tagged GTID events and GTID-based resume, and newer heartbeat events by upgrading `mysql-binlog-connector-rust` to 0.3.5
+- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - support empty-password accounts for binlog connections using `mysql_native_password` or `caching_sha2_password` authentication
+
+### Changed
+
+#### MySQL
+
+- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - reduce redundant binlog event-body and decoded-value copies through the connector upgrade
 
 ### Fixed
 
-- Treat MySQL/PostgreSQL tables without a primary key and with expression unique indexes as unkeyed for CDC row matching and snapshot pagination, including when ordinary unique keys coexist. Retain primary-key behavior for tables with a primary key, and avoid invalid PostgreSQL replace conflict targets for derived inserts on unkeyed expression-index tables.
+#### General and Platform
+
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - treat MySQL/PostgreSQL tables without a primary key and with expression unique indexes as unkeyed for CDC row matching and snapshot extraction, including when ordinary unique keys coexist; preserve the original DML sequence in `rdb_merge` and retain primary-key behavior for tables with a primary key
+  - CDC requires complete before images (`binlog_row_image=FULL` for MySQL; `REPLICA IDENTITY FULL` for PostgreSQL). Restart affected snapshots from the beginning if their old checkpoints used an incomplete expression-index key. The unkeyed fallback can reduce throughput.
+- [[621]](https://github.com/apecloud/ape-dts/pull/621) - return an error with database/schema and table context instead of panicking when MySQL/PostgreSQL table metadata contains no columns
+
+#### MySQL
+
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve expression key parts in indexes during structure migration instead of omitting them from generated DDL
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - apply the configured sinker transaction isolation level to the connection session so it remains effective across transactions on reused pool connections
+
+#### PostgreSQL
+
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - avoid invalid replace conflict targets for derived inserts on unkeyed expression-index tables; `sinker.replace=true` uses `ON CONFLICT DO NOTHING` for these tables and does not update existing conflicting rows
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve empty string values during CDC decoding instead of converting them to `NULL`
+- [[627]](https://github.com/apecloud/ape-dts/pull/627) - compare `json` and `xml` columns by their text representation with `C` collation when matching unkeyed rows for UPDATE/DELETE, avoiding missing equality-operator errors
+
+#### Redis
+
+- [[615]](https://github.com/apecloud/ape-dts/pull/615) - restore metrics collection for `snapshot_and_cdc` tasks by classifying them as CDC tasks
+
+---
 
 ## [2.0.26.1] - 2026-09-29
 
