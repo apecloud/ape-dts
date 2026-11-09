@@ -98,92 +98,273 @@ impl DdlStatement {
 
     /// Resolve defaults before constructing RID, which omits empty segments.
     pub fn get_id(&self, default_db: &str, default_schema: &str) -> RID {
-        let table = |schema: &str, tb: &str| {
-            rid!(
-                default_db,
-                if schema.is_empty() {
-                    default_schema
-                } else {
-                    schema
-                },
-                tb
-            )
-        };
-        let mssql = |db: &str, schema: &str, tb: &str| {
-            rid!(
-                if db.is_empty() { default_db } else { db },
-                if schema.is_empty() {
-                    default_schema
-                } else {
-                    schema
-                },
-                tb
-            )
-        };
         match self {
-            Self::CreateDatabase(s) => table(&s.db, ""),
-            Self::DropDatabase(s) => table(&s.db, ""),
-            Self::AlterDatabase(s) => table(&s.db, ""),
+            Self::CreateDatabase(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema)
+            }
+            Self::DropDatabase(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema)
+            }
+            Self::AlterDatabase(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema)
+            }
             Self::MssqlCreateDatabase(s) => rid!(s.db),
             Self::MssqlDropDatabase(s) => rid!(s.db),
-            Self::CreateSchema(s) => table(&s.schema, ""),
-            Self::DropSchema(s) => table(&s.schema, ""),
-            Self::AlterSchema(s) => table(&s.schema, ""),
+            Self::CreateSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema)
+            }
+            Self::DropSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema)
+            }
+            Self::AlterSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema)
+            }
             Self::MssqlCreateSchema(s) => {
                 rid!(if s.db.is_empty() { default_db } else { &s.db }, s.schema)
             }
             Self::MssqlDropSchema(s) => {
                 rid!(if s.db.is_empty() { default_db } else { &s.db }, s.schema)
             }
-            Self::MysqlCreateTable(s) => table(&s.db, &s.tb),
-            Self::MysqlAlterTable(s) => table(&s.db, &s.tb),
-            Self::MysqlAlterTableRename(s) => table(&s.db, &s.tb),
-            Self::MysqlTruncateTable(s) => table(&s.db, &s.tb),
-            Self::MysqlCreateIndex(s) => table(&s.db, &s.tb),
-            Self::MysqlDropIndex(s) => table(&s.db, &s.tb),
-            Self::PgCreateTable(s) => table(&s.schema, &s.tb),
-            Self::PgAlterTable(s) => table(&s.schema, &s.tb),
-            Self::PgAlterTableRename(s) => table(&s.schema, &s.tb),
-            Self::PgAlterTableSetSchema(s) => table(&s.schema, &s.tb),
-            Self::PgTruncateTable(s) => table(&s.schema, &s.tb),
-            Self::PgCreateIndex(s) => table(&s.schema, &s.tb),
-            Self::DropTable(s) => table(&s.schema, &s.tb),
-            Self::RenameTable(s) => table(&s.schema, &s.tb),
-            Self::MongoCommand(s) => table(&s.schema, &s.tb),
-            Self::MssqlCreateTable(s) => mssql(&s.db, &s.schema, &s.tb),
-            Self::MssqlDropTable(s) => mssql(&s.db, &s.schema, &s.tb),
-            Self::MssqlCreateIndex(s) => mssql(&s.db, &s.schema, &s.tb),
-            Self::MssqlDropIndex(s) => mssql(&s.db, &s.schema, &s.tb),
-            _ => table("", ""),
+            Self::MysqlCreateTable(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlAlterTable(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlAlterTableRename(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlTruncateTable(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlCreateIndex(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlDropIndex(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgCreateTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgAlterTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgAlterTableRename(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgAlterTableSetSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgTruncateTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgCreateIndex(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::DropTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::RenameTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MongoCommand(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MssqlCreateTable(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            Self::MssqlDropTable(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            Self::MssqlCreateIndex(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            Self::MssqlDropIndex(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            _ => rid!(default_db, default_schema),
         }
     }
 
     pub fn get_rename_id(&self, default_db: &str, default_schema: &str) -> Option<RID> {
-        let target = |schema: &str, tb: &str| {
-            (!tb.is_empty()).then(|| {
-                rid!(
-                    default_db,
-                    if schema.is_empty() {
-                        default_schema
-                    } else {
-                        schema
-                    },
-                    tb
-                )
-            })
-        };
         match self {
-            Self::RenameTable(s) => target(&s.new_schema, &s.new_tb),
-            Self::MysqlAlterTableRename(s) => target(&s.new_db, &s.new_tb),
-            Self::PgAlterTableRename(s) => target(
-                if s.new_schema.is_empty() {
-                    &s.schema
+            Self::RenameTable(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_schema.is_empty() {
+                    default_schema
                 } else {
                     &s.new_schema
-                },
-                &s.new_tb,
-            ),
-            Self::MongoCommand(s) => target(&s.new_schema, &s.new_tb),
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
+            Self::MysqlAlterTableRename(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_db.is_empty() {
+                    default_schema
+                } else {
+                    &s.new_db
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
+            Self::PgAlterTableRename(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_schema.is_empty() {
+                    if s.schema.is_empty() {
+                        default_schema
+                    } else {
+                        &s.schema
+                    }
+                } else {
+                    &s.new_schema
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
+            Self::MongoCommand(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.new_schema
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
             _ => None,
         }
     }
