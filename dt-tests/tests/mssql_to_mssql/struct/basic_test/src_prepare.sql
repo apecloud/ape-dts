@@ -125,6 +125,17 @@ CREATE TABLE [struct_it_mssql2mssql_1].dbo.defaults_and_generated (
 );
 GO
 
+-- Computed nullability: inferred from expressions or explicitly enforced with PERSISTED.
+CREATE TABLE [struct_it_mssql2mssql_1].dbo.computed_column_nullability (
+    value INT NULL,
+    virtual_nullable AS (value * 2),
+    virtual_not_null AS (ISNULL(value, 0)),
+    persisted_nullable AS (value * 2) PERSISTED,
+    persisted_inferred_not_null AS (ISNULL(value, 0)) PERSISTED,
+    persisted_not_null AS (value * 2) PERSISTED NOT NULL
+);
+GO
+
 -- DEFAULT constraint syntax: minimal, named, expression, ALTER, and WITH VALUES.
 CREATE TABLE [struct_it_mssql2mssql_1].dbo.default_constraint_syntax (
     id INT NOT NULL,

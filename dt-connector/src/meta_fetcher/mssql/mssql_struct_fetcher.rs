@@ -665,6 +665,10 @@ impl MssqlStructFetcher {
                         &row,
                         "computed_persisted",
                     )?,
+                    is_nullable: MssqlColValueConvertor::from_query_required_bool(
+                        &row,
+                        "is_nullable",
+                    )?,
                 }
             } else {
                 MssqlColumnDefinition::Regular {

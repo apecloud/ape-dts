@@ -25,6 +25,7 @@ pub enum MssqlColumnDefinition {
     Computed {
         definition: String,
         is_persisted: bool,
+        is_nullable: bool,
     },
 }
 
@@ -244,9 +245,16 @@ impl MssqlCreateTableStatement {
                 MssqlColumnDefinition::Computed {
                     definition,
                     is_persisted,
+                    is_nullable,
                 } => {
-                    let persisted = if *is_persisted { " PERSISTED" } else { "" };
-                    column_sqls.push(format!("{column_name} AS {definition}{persisted}"));
+                    let mut sql = format!("{column_name} AS {definition}");
+                    if *is_persisted {
+                        sql.push_str(" PERSISTED");
+                        if !*is_nullable {
+                            sql.push_str(" NOT NULL");
+                        }
+                    }
+                    column_sqls.push(sql);
                 }
                 MssqlColumnDefinition::Regular {
                     column_type,
