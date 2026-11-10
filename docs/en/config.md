@@ -83,7 +83,7 @@ The driver-specific limits for `verify_ca` are described above.
 | MySQL      | `disable`, `require`                             | Yes    | Yes      | Yes                              | Yes     |
 | MySQL      | `verify_ca`, `verify_full`                       | Yes    | Yes      | No (binlog driver limitation)    | Yes     |
 | PostgreSQL | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes     |
-| MSSQL      | `disable`, `require`, `verify_ca`, `verify_full` | No     | Yes      | No                               | No      |
+| MSSQL      | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | No                               | Structure only |
 | Redis      | `disable`, `require`, `verify_ca`, `verify_full` | No     | Yes      | Yes (including snapshot-and-CDC) | No      |
 | MongoDB    | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes     |
 

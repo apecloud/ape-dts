@@ -30,8 +30,9 @@ use dt_common::{
     log_filter::parse_size_limit,
     log_finished, log_info, log_summary, log_warn,
     meta::{
-        dt_queue::DtQueue, mysql::mysql_meta_manager::MysqlMetaManager,
-        pg::pg_meta_manager::PgMetaManager, position::Position, row_type::RowType, syncer::Syncer,
+        dt_queue::DtQueue, mssql::mssql_connection_pool::MssqlConnectionPool,
+        mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
+        position::Position, row_type::RowType, syncer::Syncer,
     },
     monitor::{
         runtime_trace_monitor::RuntimeTraceMonitor,
@@ -895,6 +896,7 @@ impl TaskRunner {
             extractor_config,
             ExtractorConfig::MysqlStruct { .. }
                 | ExtractorConfig::PgStruct { .. }
+                | ExtractorConfig::MssqlStruct { .. }
                 | ExtractorConfig::MongoStruct { .. }
         );
 
@@ -915,6 +917,7 @@ impl TaskRunner {
                     StructCheckerHandle::new(
                         checker_db_type,
                         Some(conn_pool),
+                        None,
                         None,
                         filter,
                         router,
@@ -937,6 +940,31 @@ impl TaskRunner {
                     .await?;
                     StructCheckerHandle::new(
                         checker_db_type,
+                        None,
+                        Some(conn_pool),
+                        None,
+                        filter,
+                        router,
+                        cfg.output.output_revise_sql,
+                        retry_interval_secs,
+                        max_retries,
+                        check_summary,
+                        monitor.clone(),
+                        task_id.to_string(),
+                    )
+                }
+                DbType::Mssql => {
+                    let conn_pool = MssqlConnectionPool::from_config(
+                        &checker_url,
+                        &checker_auth,
+                        checker_target.app_name.as_deref(),
+                        max_connections,
+                        checker_target.connection_timeout_secs,
+                    )
+                    .await?;
+                    StructCheckerHandle::new(
+                        checker_db_type,
+                        None,
                         None,
                         Some(conn_pool),
                         filter,
@@ -1400,6 +1428,22 @@ impl TaskRunner {
                         connection_auth: connection_auth.clone(),
                         schemas,
                         do_global_structs: true,
+                        db_batch_size: *db_batch_size,
+                    },
+                    no_snapshot_data: false,
+                })
+            }
+            ExtractorConfig::MssqlStruct {
+                url,
+                connection_auth,
+                db_batch_size,
+                ..
+            } => {
+                return Ok(TaskInfo {
+                    extractor_config: ExtractorConfig::MssqlStruct {
+                        url: url.clone(),
+                        connection_auth: connection_auth.clone(),
+                        dbs: schemas,
                         db_batch_size: *db_batch_size,
                     },
                     no_snapshot_data: false,

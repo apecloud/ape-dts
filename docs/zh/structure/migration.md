@@ -1,9 +1,10 @@
 # 结构迁移
 
-- 使用范围：MySQL、PG、MongoDB。
+- 使用范围：MySQL、PG、MongoDB、SQL Server。
 - 迁移内容：
   - MySQL/PostgreSQL：database(mysql)、schema(pg)、table、comment、index、sequence(pg)、constraints。
   - MongoDB：collection、index、shardkey。
+  - SQL Server：database、schema、table、主键/唯一键、默认值/检查约束、index、sequence 和 `MS_Description` 注释。不迁移外键及其他结构对象。
 
 # 示例: MySQL -> MySQL / Mongo -> Mongo
 
@@ -75,3 +76,10 @@ MongoDB 不使用独立的 `database` 结构类型。`collection` 会创建选�
 collection options，`shardkey` 会同步源端 sharded collection 的分片定义。
 如果目标端是 sharded cluster，应通过 `mongos` 连接；DTS 会在需要时先执行 `enableSharding`，
 再执行 `shardCollection`。如果目标端不是 `mongos`，shardkey 语句会被忽略。
+
+## SQL Server 结构任务
+
+源端和目标端均设置 `db_type=mssql`，使用 `extract_type=struct`、`sink_type=struct`。
+表名采用 `database.schema.table` 三级名称；`database` 结构过滤项同时控制 schema 创建。
+独立结构校验使用 `sink_type=check`。参考[迁移配置](../../../dt-tests/tests/mssql_to_mssql/struct/basic_test/task_config.ini)
+和[结构校验配置](../../../dt-tests/tests/mssql_to_mssql/struct/filter_test_1/check/task_config.ini)。

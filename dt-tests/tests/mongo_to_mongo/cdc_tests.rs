@@ -169,7 +169,7 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(valid_duplicate.get_str("status").unwrap(), "source");
-        assert_eq!(valid_duplicate.get_bool("target_only").unwrap(), true);
+        assert!(valid_duplicate.get_bool("target_only").unwrap());
 
         src_raw_collection
             .insert_one(invalid_utf8_raw_document(3))
@@ -220,8 +220,8 @@ mod test {
             .unwrap();
         assert!(src_updated.get("value").is_err());
         assert!(dst_updated.get("value").is_err());
-        assert_eq!(dst_updated.get_bool("updated_by_cdc").unwrap(), true);
-        assert_eq!(dst_updated.get_bool("target_only").unwrap(), true);
+        assert!(dst_updated.get_bool("updated_by_cdc").unwrap());
+        assert!(dst_updated.get_bool("target_only").unwrap());
 
         src_collection
             .update_one(
@@ -357,7 +357,7 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(valid_duplicate.get_str("status").unwrap(), "source");
-        assert_eq!(valid_duplicate.get_bool("target_only").unwrap(), true);
+        assert!(valid_duplicate.get_bool("target_only").unwrap());
 
         src_raw_collection
             .insert_one(invalid_utf8_sharded_document())
@@ -408,7 +408,7 @@ mod test {
         assert!(src_updated.get("value").is_err());
         assert!(dst_updated.get("value").is_err());
         assert_eq!(dst_updated.get_str("status").unwrap(), "updated");
-        assert_eq!(dst_updated.get_bool("target_only").unwrap(), true);
+        assert!(dst_updated.get_bool("target_only").unwrap());
 
         let raw_shard_filter = doc! {
             "tenant_id": "tenant_raw",

@@ -79,7 +79,7 @@ URL、ADO.NET、JDBC 中的加密和证书信任选项。
 | MySQL      | `disable`、`require`                             | 支持   | 支持     | 支持                        | 支持    |
 | MySQL      | `verify_ca`、`verify_full`                       | 支持   | 支持     | 不支持（binlog 驱动限制）   | 支持    |
 | PostgreSQL | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持    |
-| MSSQL      | `disable`、`require`、`verify_ca`、`verify_full` | 不支持 | 支持     | 不支持                      | 不支持  |
+| MSSQL      | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 不支持                      | 仅结构校验 |
 | Redis      | `disable`、`require`、`verify_ca`、`verify_full` | 不支持 | 支持     | 支持（含 snapshot-and-CDC） | 不支持  |
 | MongoDB    | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持    |
 

@@ -1,16 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{config::config_enums::DbType, utils::sql_util::SqlUtil};
+use crate::{config::config_enums::DbType, resource::RID, rid, utils::sql_util::SqlUtil};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum DdlStatement {
     CreateDatabase(CreateDatabaseStatement),
     DropDatabase(DropDatabaseStatement),
     AlterDatabase(AlterDatabaseStatement),
+    MssqlCreateDatabase(MssqlCreateDatabaseStatement),
+    MssqlDropDatabase(MssqlDropDatabaseStatement),
 
     CreateSchema(CreateSchemaStatement),
     DropSchema(DropSchemaStatement),
     AlterSchema(AlterSchemaStatement),
+    MssqlCreateSchema(MssqlCreateSchemaStatement),
+    MssqlDropSchema(MssqlDropSchemaStatement),
 
     MysqlCreateTable(MysqlCreateTableStatement),
     MysqlAlterTable(MysqlAlterTableStatement),
@@ -25,6 +29,11 @@ pub enum DdlStatement {
     PgAlterTableSetSchema(PgAlterTableSetSchemaStatement),
     PgTruncateTable(PgTruncateTableStatement),
     PgCreateIndex(PgCreateIndexStatement),
+
+    MssqlCreateTable(MssqlCreateTableStatement),
+    MssqlDropTable(MssqlDropTableStatement),
+    MssqlCreateIndex(MssqlCreateIndexStatement),
+    MssqlDropIndex(MssqlDropIndexStatement),
 
     DropMultiTable(DropMultiTableStatement),
     RenameMultiTable(RenameMultiTableStatement),
@@ -87,207 +96,381 @@ impl DdlStatement {
         res
     }
 
-    pub fn get_schema_tb(&self) -> (String, String) {
+    /// Resolve defaults before constructing RID, which omits empty segments.
+    pub fn get_id(&self, default_db: &str, default_schema: &str) -> RID {
         match self {
-            DdlStatement::CreateDatabase(s) => (s.db.clone(), String::new()),
-            DdlStatement::DropDatabase(s) => (s.db.clone(), String::new()),
-            DdlStatement::AlterDatabase(s) => (s.db.clone(), String::new()),
-
-            DdlStatement::CreateSchema(s) => (s.schema.clone(), String::new()),
-            DdlStatement::DropSchema(s) => (s.schema.clone(), String::new()),
-            DdlStatement::AlterSchema(s) => (s.schema.clone(), String::new()),
-
-            DdlStatement::MysqlCreateTable(s) => (s.db.clone(), s.tb.clone()),
-            DdlStatement::MysqlAlterTable(s) => (s.db.clone(), s.tb.clone()),
-            DdlStatement::MysqlTruncateTable(s) => (s.db.clone(), s.tb.clone()),
-            DdlStatement::MysqlCreateIndex(s) => (s.db.clone(), s.tb.clone()),
-            DdlStatement::MysqlDropIndex(s) => (s.db.clone(), s.tb.clone()),
-
-            DdlStatement::PgCreateTable(s) => (s.schema.clone(), s.tb.clone()),
-            DdlStatement::PgAlterTable(s) => (s.schema.clone(), s.tb.clone()),
-            DdlStatement::PgTruncateTable(s) => (s.schema.clone(), s.tb.clone()),
-            DdlStatement::PgCreateIndex(s) => (s.schema.clone(), s.tb.clone()),
-
-            DdlStatement::DropTable(s) => (s.schema.clone(), s.tb.clone()),
-
-            DdlStatement::RenameTable(s) => (s.schema.clone(), s.tb.clone()),
-            DdlStatement::MysqlAlterTableRename(s) => (s.db.clone(), s.tb.clone()),
-            DdlStatement::PgAlterTableRename(s) => (s.schema.clone(), s.tb.clone()),
-            DdlStatement::PgAlterTableSetSchema(s) => (s.schema.clone(), s.tb.clone()),
-
-            DdlStatement::PgDropIndex(_)
-            | DdlStatement::PgDropMultiIndex(_)
-            | DdlStatement::DropMultiTable(_)
-            | DdlStatement::RenameMultiTable(_) => (String::new(), String::new()),
-
-            DdlStatement::MongoCommand(s) => (s.schema.clone(), s.tb.clone()),
-
-            DdlStatement::Unknown => (String::new(), String::new()),
+            Self::CreateDatabase(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema)
+            }
+            Self::DropDatabase(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema)
+            }
+            Self::AlterDatabase(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema)
+            }
+            Self::MssqlCreateDatabase(s) => rid!(s.db),
+            Self::MssqlDropDatabase(s) => rid!(s.db),
+            Self::CreateSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema)
+            }
+            Self::DropSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema)
+            }
+            Self::AlterSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema)
+            }
+            Self::MssqlCreateSchema(s) => {
+                rid!(if s.db.is_empty() { default_db } else { &s.db }, s.schema)
+            }
+            Self::MssqlDropSchema(s) => {
+                rid!(if s.db.is_empty() { default_db } else { &s.db }, s.schema)
+            }
+            Self::MysqlCreateTable(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlAlterTable(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlAlterTableRename(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlTruncateTable(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlCreateIndex(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MysqlDropIndex(s) => {
+                let schema = if s.db.is_empty() {
+                    default_schema
+                } else {
+                    &s.db
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgCreateTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgAlterTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgAlterTableRename(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgAlterTableSetSchema(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgTruncateTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::PgCreateIndex(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::DropTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::RenameTable(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MongoCommand(s) => {
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(default_db, schema, s.tb)
+            }
+            Self::MssqlCreateTable(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            Self::MssqlDropTable(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            Self::MssqlCreateIndex(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            Self::MssqlDropIndex(s) => {
+                let db = if s.db.is_empty() { default_db } else { &s.db };
+                let schema = if s.schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.schema
+                };
+                rid!(db, schema, s.tb)
+            }
+            _ => rid!(default_db, default_schema),
         }
     }
 
-    pub fn get_rename_to_schema_tb(&self) -> (String, String) {
+    pub fn get_rename_id(&self, default_db: &str, default_schema: &str) -> Option<RID> {
         match self {
-            DdlStatement::RenameTable(s) => (s.new_schema.clone(), s.new_tb.clone()),
-            DdlStatement::MysqlAlterTableRename(s) => (s.new_db.clone(), s.new_tb.clone()),
-            DdlStatement::PgAlterTableRename(s) => (s.new_schema.clone(), s.new_tb.clone()),
-            DdlStatement::MongoCommand(s) => (s.new_schema.clone(), s.new_tb.clone()),
-            _ => (String::new(), String::new()),
+            Self::RenameTable(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.new_schema
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
+            Self::MysqlAlterTableRename(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_db.is_empty() {
+                    default_schema
+                } else {
+                    &s.new_db
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
+            Self::PgAlterTableRename(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_schema.is_empty() {
+                    if s.schema.is_empty() {
+                        default_schema
+                    } else {
+                        &s.schema
+                    }
+                } else {
+                    &s.new_schema
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
+            Self::MongoCommand(s) => {
+                if s.new_tb.is_empty() {
+                    return None;
+                }
+                let schema = if s.new_schema.is_empty() {
+                    default_schema
+                } else {
+                    &s.new_schema
+                };
+                Some(rid!(default_db, schema, s.new_tb))
+            }
+            _ => None,
         }
     }
 
-    pub fn route_rename_table(
-        &mut self,
-        dst_schema: String,
-        dst_tb: String,
-        dst_new_schema: String,
-        dst_new_tb: String,
-    ) {
+    /// Convert resource paths to engine-specific fields only at the statement boundary.
+    pub fn set_id(&mut self, target: RID) {
         match self {
-            DdlStatement::MysqlAlterTableRename(s) => {
-                if !s.db.is_empty() {
-                    s.db = dst_schema;
-                }
-                if !s.new_db.is_empty() {
-                    s.new_db = dst_new_schema;
-                }
-                s.tb = dst_tb;
-                s.new_tb = dst_new_tb;
+            Self::CreateDatabase(s) => s.db = target.into(),
+            Self::DropDatabase(s) => s.db = target.into(),
+            Self::AlterDatabase(s) => s.db = target.into(),
+            Self::MssqlCreateDatabase(s) => s.db = target.into(),
+            Self::MssqlDropDatabase(s) => s.db = target.into(),
+            Self::CreateSchema(s) => s.schema = target.into(),
+            Self::DropSchema(s) => s.schema = target.into(),
+            Self::AlterSchema(s) => s.schema = target.into(),
+            Self::MssqlCreateSchema(s) => {
+                [s.db, s.schema] = target.into_left();
             }
-
-            DdlStatement::PgAlterTableRename(s) => {
-                if !s.schema.is_empty() {
-                    s.schema = dst_schema;
-                }
-                if !s.new_schema.is_empty() {
-                    s.new_schema = dst_new_schema;
-                }
-                s.tb = dst_tb;
-                s.new_tb = dst_new_tb;
+            Self::MssqlDropSchema(s) => {
+                [s.db, s.schema] = target.into_left();
             }
-
-            DdlStatement::RenameTable(s) => {
-                if !s.schema.is_empty() {
-                    s.schema = dst_schema;
-                }
-                if !s.new_schema.is_empty() {
-                    s.new_schema = dst_new_schema;
-                }
-                s.tb = dst_tb;
-                s.new_tb = dst_new_tb;
+            Self::MssqlCreateTable(s) => {
+                [s.db, s.schema, s.tb] = target.into_left();
             }
-
-            DdlStatement::MongoCommand(s) => {
-                s.schema = dst_schema;
-                s.tb = dst_tb;
-                s.new_schema = dst_new_schema;
-                s.new_tb = dst_new_tb;
+            Self::MssqlDropTable(s) => {
+                [s.db, s.schema, s.tb] = target.into_left();
             }
-
+            Self::MssqlCreateIndex(s) => {
+                [s.db, s.schema, s.tb] = target.into_left();
+            }
+            Self::MssqlDropIndex(s) => {
+                [s.db, s.schema, s.tb] = target.into_left();
+            }
+            Self::MysqlCreateTable(s) => {
+                (s.db, s.tb) = target.into();
+            }
+            Self::MysqlAlterTable(s) => {
+                (s.db, s.tb) = target.into();
+            }
+            Self::MysqlAlterTableRename(s) => {
+                (s.db, s.tb) = target.into();
+            }
+            Self::MysqlTruncateTable(s) => {
+                (s.db, s.tb) = target.into();
+            }
+            Self::MysqlCreateIndex(s) => {
+                (s.db, s.tb) = target.into();
+            }
+            Self::MysqlDropIndex(s) => {
+                (s.db, s.tb) = target.into();
+            }
+            Self::PgCreateTable(s) => {
+                (s.schema, s.tb) = target.into();
+            }
+            Self::PgAlterTable(s) => {
+                (s.schema, s.tb) = target.into();
+            }
+            Self::PgAlterTableRename(s) => {
+                (s.schema, s.tb) = target.into();
+            }
+            Self::PgTruncateTable(s) => {
+                (s.schema, s.tb) = target.into();
+            }
+            Self::PgCreateIndex(s) => {
+                (s.schema, s.tb) = target.into();
+            }
+            Self::DropTable(s) => {
+                (s.schema, s.tb) = target.into();
+            }
+            Self::RenameTable(s) => {
+                (s.schema, s.tb) = target.into();
+            }
+            Self::MongoCommand(s) => {
+                if s.tb.is_empty() {
+                    s.schema = target.into();
+                } else {
+                    (s.schema, s.tb) = target.into();
+                }
+            }
             _ => {}
         }
     }
 
-    pub fn route(&mut self, dst_schema: String, dst_tb: String) {
+    pub fn set_rename_id(&mut self, target: RID) {
+        let (schema, tb): (String, String) = target.into();
         match self {
-            DdlStatement::CreateDatabase(s) => {
-                s.db = dst_schema;
+            Self::MysqlAlterTableRename(s) => {
+                s.new_db = schema;
+                s.new_tb = tb;
             }
-            DdlStatement::DropDatabase(s) => {
-                s.db = dst_schema;
-            }
-            DdlStatement::AlterDatabase(s) => {
-                s.db = dst_schema;
-            }
-
-            DdlStatement::CreateSchema(s) => {
-                s.schema = dst_schema;
-            }
-            DdlStatement::DropSchema(s) => {
-                s.schema = dst_schema;
-            }
-            DdlStatement::AlterSchema(s) => {
-                s.schema = dst_schema;
-            }
-
-            DdlStatement::MysqlCreateTable(s) => {
-                if !s.db.is_empty() {
-                    s.db = dst_schema;
+            Self::PgAlterTableRename(s) => {
+                // PostgreSQL RENAME TO takes an unqualified table name.
+                if !s.new_schema.is_empty() {
+                    s.new_schema = schema;
                 }
-                s.tb = dst_tb;
+                s.new_tb = tb;
             }
-            DdlStatement::MysqlAlterTable(s) => {
-                if !s.db.is_empty() {
-                    s.db = dst_schema;
-                }
-                s.tb = dst_tb;
+            Self::RenameTable(s) => {
+                s.new_schema = schema;
+                s.new_tb = tb;
             }
-            DdlStatement::MysqlTruncateTable(s) => {
-                if !s.db.is_empty() {
-                    s.db = dst_schema;
-                }
-                s.tb = dst_tb;
+            Self::MongoCommand(s) => {
+                s.new_schema = schema;
+                s.new_tb = tb;
             }
-            DdlStatement::MysqlCreateIndex(s) => {
-                if !s.db.is_empty() {
-                    s.db = dst_schema;
-                }
-                s.tb = dst_tb;
-            }
-            DdlStatement::MysqlDropIndex(s) => {
-                if !s.db.is_empty() {
-                    s.db = dst_schema;
-                }
-                s.tb = dst_tb;
-            }
-
-            DdlStatement::PgCreateTable(s) => {
-                if !s.schema.is_empty() {
-                    s.schema = dst_schema;
-                }
-                s.tb = dst_tb;
-            }
-            DdlStatement::PgAlterTable(s) => {
-                if !s.schema.is_empty() {
-                    s.schema = dst_schema;
-                }
-                s.tb = dst_tb;
-            }
-            DdlStatement::PgTruncateTable(s) => {
-                if !s.schema.is_empty() {
-                    s.schema = dst_schema;
-                }
-                s.tb = dst_tb;
-            }
-            DdlStatement::PgCreateIndex(s) => {
-                if !s.schema.is_empty() {
-                    s.schema = dst_schema;
-                }
-                s.tb = dst_tb;
-            }
-
-            DdlStatement::MongoCommand(s) => {
-                s.schema = dst_schema;
-                s.tb = dst_tb;
-            }
-
-            DdlStatement::DropTable(s) => {
-                if !s.schema.is_empty() {
-                    s.schema = dst_schema;
-                }
-                s.tb = dst_tb;
-            }
-
-            // not supported
-            DdlStatement::RenameTable(_)
-            | DdlStatement::MysqlAlterTableRename(_)
-            | DdlStatement::PgAlterTableRename(_)
-            | DdlStatement::PgAlterTableSetSchema(_)
-            | DdlStatement::PgDropIndex(_)
-            | DdlStatement::PgDropMultiIndex(_)
-            | DdlStatement::DropMultiTable(_)
-            | DdlStatement::RenameMultiTable(_)
-            | DdlStatement::Unknown => {}
+            _ => {}
         }
     }
 }
@@ -321,6 +504,20 @@ pub struct AlterDatabaseStatement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlCreateDatabaseStatement {
+    pub db: String,
+    pub if_not_exists: bool,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlDropDatabaseStatement {
+    pub db: String,
+    pub if_exists: bool,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct CreateSchemaStatement {
     pub schema: String,
     pub if_not_exists: bool,
@@ -343,6 +540,22 @@ pub struct AlterSchemaStatement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlCreateSchemaStatement {
+    pub db: String,
+    pub schema: String,
+    pub authorization: bool,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlDropSchemaStatement {
+    pub db: String,
+    pub schema: String,
+    pub if_exists: bool,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct MysqlCreateTableStatement {
     pub db: String,
     pub tb: String,
@@ -357,6 +570,23 @@ pub struct PgCreateTableStatement {
     pub temporary: Option<String>,
     pub unlogged: Option<String>,
     pub if_not_exists: bool,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlCreateTableStatement {
+    pub db: String,
+    pub schema: String,
+    pub tb: String,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlDropTableStatement {
+    pub db: String,
+    pub schema: String,
+    pub tb: String,
+    pub if_exists: bool,
     pub unparsed: String,
 }
 
@@ -476,6 +706,26 @@ pub struct PgCreateIndexStatement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlCreateIndexStatement {
+    pub db: String,
+    pub schema: String,
+    pub tb: String,
+    pub index_name: String,
+    pub index_kind: Option<String>,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MssqlDropIndexStatement {
+    pub db: String,
+    pub schema: String,
+    pub tb: String,
+    pub index_name: String,
+    pub if_exists: bool,
+    pub unparsed: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct MysqlDropIndexStatement {
     pub db: String,
     pub tb: String,
@@ -511,7 +761,81 @@ impl DdlStatement {
                 append_unparsed(sql, &s.unparsed)
             }
 
+            DdlStatement::MssqlCreateDatabase(s) => {
+                let mut sql = "CREATE DATABASE".to_string();
+                if s.if_not_exists {
+                    sql = format!("{} IF NOT EXISTS", sql);
+                }
+                sql = append_identifier(&sql, &s.db, true, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlCreateTable(s) => {
+                let mut sql = "CREATE TABLE".to_string();
+                sql = append_db_schema_tb(&sql, &s.db, &s.schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlDropTable(s) => {
+                let mut sql = "DROP TABLE".to_string();
+                if s.if_exists {
+                    sql = format!("{} IF EXISTS", sql);
+                }
+                sql = append_db_schema_tb(&sql, &s.db, &s.schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlCreateIndex(s) => {
+                let mut sql = "CREATE".to_string();
+                if let Some(index_kind) = &s.index_kind {
+                    sql = format!("{} {}", sql, index_kind.to_uppercase());
+                }
+                sql = format!("{} INDEX", sql);
+                sql = append_identifier(&sql, &s.index_name, true, db_type);
+                sql = format!("{} ON", sql);
+                sql = append_db_schema_tb(&sql, &s.db, &s.schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlDropIndex(s) => {
+                let mut sql = "DROP INDEX".to_string();
+                if s.if_exists {
+                    sql = format!("{} IF EXISTS", sql);
+                }
+                sql = append_identifier(&sql, &s.index_name, true, db_type);
+                sql = format!("{} ON", sql);
+                sql = append_db_schema_tb(&sql, &s.db, &s.schema, &s.tb, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlCreateSchema(s) => {
+                let mut sql = "CREATE SCHEMA".to_string();
+                if s.authorization {
+                    sql = format!("{} AUTHORIZATION", sql);
+                }
+                sql = append_identifier(&sql, &s.schema, true, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlDropSchema(s) => {
+                let mut sql = "DROP SCHEMA".to_string();
+                if s.if_exists {
+                    sql = format!("{} IF EXISTS", sql);
+                }
+                sql = append_identifier(&sql, &s.schema, true, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
             DdlStatement::DropDatabase(s) => {
+                let mut sql = "DROP DATABASE".to_string();
+                if s.if_exists {
+                    sql = format!("{} IF EXISTS", sql);
+                }
+                sql = append_identifier(&sql, &s.db, true, db_type);
+                append_unparsed(sql, &s.unparsed)
+            }
+
+            DdlStatement::MssqlDropDatabase(s) => {
                 let mut sql = "DROP DATABASE".to_string();
                 if s.if_exists {
                     sql = format!("{} IF EXISTS", sql);
@@ -749,6 +1073,16 @@ impl DdlStatement {
                 size += alter_database_statement.db.len() as u64;
                 size += alter_database_statement.unparsed.len() as u64;
             }
+            DdlStatement::MssqlCreateDatabase(mssql_create_database_statement) => {
+                size += mssql_create_database_statement.db.len() as u64;
+                size += mssql_create_database_statement.unparsed.len() as u64;
+                size += 1;
+            }
+            DdlStatement::MssqlDropDatabase(mssql_drop_database_statement) => {
+                size += mssql_drop_database_statement.db.len() as u64;
+                size += mssql_drop_database_statement.unparsed.len() as u64;
+                size += 1;
+            }
             DdlStatement::CreateSchema(create_schema_statement) => {
                 size += create_schema_statement.schema.len() as u64;
                 size += create_schema_statement.unparsed.len() as u64;
@@ -767,6 +1101,18 @@ impl DdlStatement {
                     .new_schema
                     .as_ref()
                     .map_or(0, |s| s.len() as u64);
+            }
+            DdlStatement::MssqlCreateSchema(mssql_create_schema_statement) => {
+                size += mssql_create_schema_statement.db.len() as u64;
+                size += mssql_create_schema_statement.schema.len() as u64;
+                size += mssql_create_schema_statement.unparsed.len() as u64;
+                size += 1;
+            }
+            DdlStatement::MssqlDropSchema(mssql_drop_schema_statement) => {
+                size += mssql_drop_schema_statement.db.len() as u64;
+                size += mssql_drop_schema_statement.schema.len() as u64;
+                size += mssql_drop_schema_statement.unparsed.len() as u64;
+                size += 1;
             }
             DdlStatement::MysqlCreateTable(mysql_create_table_statement) => {
                 size += mysql_create_table_statement.db.len() as u64;
@@ -804,6 +1150,19 @@ impl DdlStatement {
                     .unlogged
                     .as_ref()
                     .map_or(0, |s| s.len() as u64);
+                size += 1;
+            }
+            DdlStatement::MssqlCreateTable(mssql_create_table_statement) => {
+                size += mssql_create_table_statement.db.len() as u64;
+                size += mssql_create_table_statement.schema.len() as u64;
+                size += mssql_create_table_statement.tb.len() as u64;
+                size += mssql_create_table_statement.unparsed.len() as u64;
+            }
+            DdlStatement::MssqlDropTable(mssql_drop_table_statement) => {
+                size += mssql_drop_table_statement.db.len() as u64;
+                size += mssql_drop_table_statement.schema.len() as u64;
+                size += mssql_drop_table_statement.tb.len() as u64;
+                size += mssql_drop_table_statement.unparsed.len() as u64;
                 size += 1;
             }
             DdlStatement::PgAlterTable(pg_alter_table_statement) => {
@@ -913,6 +1272,26 @@ impl DdlStatement {
                     .as_ref()
                     .map_or(0, |s| s.len() as u64);
             }
+            DdlStatement::MssqlCreateIndex(mssql_create_index_statement) => {
+                size += mssql_create_index_statement.db.len() as u64;
+                size += mssql_create_index_statement.schema.len() as u64;
+                size += mssql_create_index_statement.tb.len() as u64;
+                size += mssql_create_index_statement.index_name.len() as u64;
+                size += mssql_create_index_statement.unparsed.len() as u64;
+                size += std::mem::size_of::<Option<String>>() as u64;
+                size += mssql_create_index_statement
+                    .index_kind
+                    .as_ref()
+                    .map_or(0, |s| s.len() as u64);
+            }
+            DdlStatement::MssqlDropIndex(mssql_drop_index_statement) => {
+                size += mssql_drop_index_statement.db.len() as u64;
+                size += mssql_drop_index_statement.schema.len() as u64;
+                size += mssql_drop_index_statement.tb.len() as u64;
+                size += mssql_drop_index_statement.index_name.len() as u64;
+                size += mssql_drop_index_statement.unparsed.len() as u64;
+                size += 1;
+            }
             DdlStatement::MysqlDropIndex(mysql_drop_index_statement) => {
                 size += mysql_drop_index_statement.db.len() as u64;
                 size += mysql_drop_index_statement.tb.len() as u64;
@@ -987,6 +1366,21 @@ fn append_tb(sql: &str, schema: &str, tb: &str, db_type: &DbType) -> String {
     } else {
         let schema = escape_identifier(schema, db_type);
         format!("{} {}.{}", sql, schema, tb)
+    }
+}
+
+fn append_db_schema_tb(sql: &str, db: &str, schema: &str, tb: &str, db_type: &DbType) -> String {
+    if db.is_empty() {
+        return append_tb(sql, schema, tb, db_type);
+    }
+
+    let db = escape_identifier(db, db_type);
+    let tb = escape_identifier(tb, db_type);
+    if schema.is_empty() {
+        format!("{} {}..{}", sql, db, tb)
+    } else {
+        let schema = escape_identifier(schema, db_type);
+        format!("{} {}.{}.{}", sql, db, schema, tb)
     }
 }
 

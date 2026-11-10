@@ -38,6 +38,7 @@ impl MysqlCreateTableStatement {
 
         if !filter.filter_structure(&StructureType::Table) {
             let key = StructKey::new(
+                DbType::Mysql,
                 StructKeyType::Table,
                 [&self.table.database_name, &self.table.table_name],
             );
@@ -68,6 +69,7 @@ impl MysqlCreateTableStatement {
                     }
                     _ => {
                         let standalone_key = StructKey::new(
+                            DbType::Mysql,
                             StructKeyType::Index,
                             [&i.database_name, &i.table_name, &i.index_name],
                         );
@@ -77,6 +79,7 @@ impl MysqlCreateTableStatement {
             }
             if !idx_appends.is_empty() {
                 let key = StructKey::new(
+                    DbType::Mysql,
                     StructKeyType::Index,
                     [&self.indexes[0].database_name, &self.indexes[0].table_name],
                 );
@@ -95,6 +98,7 @@ impl MysqlCreateTableStatement {
         if !filter.filter_structure(&StructureType::Constraint) {
             for i in self.constraints.iter() {
                 let key = StructKey::new(
+                    DbType::Mysql,
                     StructKeyType::Constraint,
                     [&i.database_name, &i.table_name, &i.constraint_name],
                 );

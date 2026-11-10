@@ -60,19 +60,14 @@ impl DdlData {
 
     /// Namespace DDL omits the table: use `into_left()` for fixed levels; tuples right-align.
     pub fn get_id<T: From<RID>>(&self) -> T {
-        let (mut schema, tb) = self.statement.get_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone();
-        }
-        RID::new([self.default_db.clone(), schema, tb]).into()
+        self.statement
+            .get_id(&self.default_db, &self.default_schema)
+            .into()
     }
 
-    pub fn get_rename_id<T: From<RID>>(&self) -> T {
-        let (mut schema, tb) = self.statement.get_rename_to_schema_tb();
-        if schema.is_empty() {
-            schema = self.default_schema.clone();
-        }
-        RID::new([self.default_db.clone(), schema, tb]).into()
+    pub fn get_rename_id(&self) -> Option<RID> {
+        self.statement
+            .get_rename_id(&self.default_db, &self.default_schema)
     }
 }
 
@@ -109,8 +104,8 @@ mod tests {
             };
             assert_eq!(ddl.get_id::<RID>(), rid!(db, expected_schema, "orders"));
             assert_eq!(
-                ddl.get_rename_id::<RID>(),
-                rid!(db, expected_new_schema, "events")
+                ddl.get_rename_id(),
+                Some(rid!(db, expected_new_schema, "events"))
             );
         }
     }
@@ -184,6 +179,6 @@ mod tests {
             assert_eq!(ddl.get_id::<String>(), name);
         }
         assert!(DdlData::default().get_id::<RID>().is_empty());
-        assert!(DdlData::default().get_rename_id::<RID>().is_empty());
+        assert!(DdlData::default().get_rename_id().is_none());
     }
 }
