@@ -26,10 +26,9 @@ use dt_common::{
             mongo_key::MongoKey,
             mongo_version::{get_server_version, MongoServerVersion},
         },
-        position::Position,
+        position::{Position, Progress},
         row_data::RowData,
         row_type::RowType,
-        syncer::Syncer,
     },
     resource::RID,
     system_dbs::SystemDb,
@@ -65,7 +64,7 @@ pub struct MongoCdcExtractor {
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
     pub use_raw_document: bool,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -795,10 +794,10 @@ impl MongoCdcExtractor {
 
         self.filter.add_exclude(rid!(db_tb[0], db_tb[1]))?;
 
-        let (app_name, heartbeat_interval_secs, syncer, mongo_client) = (
+        let (app_name, heartbeat_interval_secs, progress, mongo_client) = (
             self.app_name.clone(),
             self.heartbeat_interval_secs,
-            self.syncer.clone(),
+            self.progress.clone(),
             self.mongo_client.clone(),
         );
 
@@ -807,7 +806,7 @@ impl MongoCdcExtractor {
             while !shut_down.load(Ordering::Acquire) {
                 if start_time.elapsed().as_secs() >= heartbeat_interval_secs {
                     if let Err(error) =
-                        Self::heartbeat(&app_name, &db_tb[0], &db_tb[1], &syncer, &mongo_client)
+                        Self::heartbeat(&app_name, &db_tb[0], &db_tb[1], &progress, &mongo_client)
                             .await
                     {
                         log_error!("MongoDB heartbeat stopped: {}", error);
@@ -826,7 +825,7 @@ impl MongoCdcExtractor {
         app_name: &str,
         db: &str,
         tb: &str,
-        syncer: &Arc<Mutex<Syncer>>,
+        progress: &Arc<Mutex<Progress>>,
         client: &Client,
     ) -> anyhow::Result<()> {
         let (received_resume_token, received_operation_time, received_timestamp) =
@@ -834,7 +833,7 @@ impl MongoCdcExtractor {
                 resume_token,
                 operation_time,
                 timestamp,
-            } = &syncer.lock().await.received_position
+            } = &progress.lock().await.received_position
             {
                 (
                     resume_token.to_owned(),
@@ -849,7 +848,7 @@ impl MongoCdcExtractor {
                 resume_token,
                 operation_time,
                 timestamp,
-            } = &syncer.lock().await.committed_position
+            } = &progress.lock().await.committed_position
             {
                 (
                     resume_token.to_owned(),

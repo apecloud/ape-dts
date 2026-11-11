@@ -19,9 +19,8 @@ use dt_common::{
     log_debug, log_error, log_info, log_position, log_warn,
     meta::{
         dt_data::DtData,
-        position::Position,
+        position::{aggregator::redis::RedisPositionAggregator, Position, Progress},
         redis::{redis_entry::RedisEntry, redis_object::RedisCmd},
-        syncer::Syncer,
     },
     utils::{sql_util::SqlUtil, time_util::TimeUtil},
 };
@@ -52,7 +51,7 @@ pub struct RedisPsyncExtractor {
     pub keepalive_interval_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_key: String,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub filter: DtFilter,
     pub extract_type: ExtractType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
@@ -288,7 +287,7 @@ impl RedisPsyncExtractor {
             repl_port,
             repl_offset + 1,
             parser.now_db_id,
-            String::new(),
+            String::default(),
         )
         .await;
         log_position!("start_aof_position | {}", position.to_string());
@@ -357,7 +356,18 @@ impl RedisPsyncExtractor {
                 if self.now_db_id == heartbeat_db_id
                     && cmd.get_str_arg(1).eq_ignore_ascii_case(&heartbeat_key)
                 {
-                    heartbeat_timestamp = cmd.get_str_arg(2);
+                    let mut timestamp = cmd.get_str_arg(2);
+                    if self.cluster_node.is_some() {
+                        RedisPositionAggregator::merge_timestamp(
+                            &heartbeat_timestamp,
+                            &mut timestamp,
+                        );
+                    }
+                    heartbeat_timestamp = timestamp;
+                    let position = self.current_position(heartbeat_timestamp.clone()).await;
+                    self.base_extractor
+                        .push_dt_data(&mut self.extract_state, DtData::Heartbeat {}, position)
+                        .await?;
                     continue;
                 }
 
@@ -509,7 +519,7 @@ impl RedisPsyncExtractor {
         // send replconf ack to keep the connection alive
         let mut position_repl_offset = self.repl_offset;
         let committed_position = {
-            let syncer = self.syncer.lock().await;
+            let progress = self.progress.lock().await;
             if let Some(cluster_node) = &self.cluster_node {
                 let position_key = ResumerUtil::get_key_from_position(&Position::Redis {
                     node_id: Some(cluster_node.id.clone()),
@@ -518,15 +528,15 @@ impl RedisPsyncExtractor {
                     repl_port: 0,
                     repl_offset: 0,
                     now_db_id: 0,
-                    timestamp: String::new(),
+                    timestamp: String::default(),
                 });
-                syncer
+                progress
                     .committed_positions
                     .get(&position_key)
                     .cloned()
-                    .unwrap_or_else(|| syncer.committed_position.clone())
+                    .unwrap_or_else(|| progress.committed_position.clone())
             } else {
-                syncer.committed_position.clone()
+                progress.committed_position.clone()
             }
         };
         if let Position::Redis {

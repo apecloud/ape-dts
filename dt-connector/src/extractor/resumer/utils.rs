@@ -7,7 +7,7 @@ use dt_common::{
     log_info,
     meta::{
         mssql::{mssql_connection_pool::MssqlConnectionPool, MSSQL_DEFAULT_SCHEMA},
-        position::Position,
+        position::{aggregator::redis::RedisPositionAggregator, Position},
         redis::cluster_node::ClusterNode,
     },
     utils::redis_util::RedisUtil,
@@ -278,10 +278,10 @@ impl ResumerUtil {
                 node_id, address, ..
             } => {
                 if let Some(node_id) = node_id.as_ref().filter(|node_id| !node_id.is_empty()) {
-                    format!("redis-node-{}", node_id)
+                    RedisPositionAggregator::node_key(node_id)
                 } else if let Some(address) = address.as_ref().filter(|address| !address.is_empty())
                 {
-                    format!("redis-node-{}", address)
+                    RedisPositionAggregator::node_key(address)
                 } else {
                     DEFAULT_POSITION_KEY.to_string()
                 }
@@ -393,7 +393,7 @@ mod tests {
             repl_port: 10008,
             repl_offset: 10,
             now_db_id: 0,
-            timestamp: String::new(),
+            timestamp: Default::default(),
         };
 
         assert_eq!(

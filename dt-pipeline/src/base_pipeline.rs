@@ -14,9 +14,8 @@ use dt_common::{
         ddl_meta::ddl_data::DdlData,
         dt_data::{DtData, DtItem},
         dt_queue::DtQueue,
-        position::Position,
+        position::{Position, Progress},
         row_data::RowData,
-        syncer::Syncer,
     },
     monitor::{
         counter_type::CounterType, task_metrics::TaskMetricsType, task_monitor::MonitorType,
@@ -45,7 +44,7 @@ pub struct BasePipeline {
     pub shut_down: Arc<AtomicBool>,
     pub checkpoint_interval_secs: u64,
     pub batch_sink_interval_secs: u64,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub monitor: TaskMonitorHandle,
     pub pending_snapshot_finished: HashMap<String, Position>,
     pub data_marker: Option<Arc<RwLock<DataMarker>>>,
@@ -66,8 +65,8 @@ enum SinkMethod {
 impl Pipeline for BasePipeline {
     async fn stop(&mut self) -> anyhow::Result<()> {
         let final_position = {
-            let syncer = self.syncer.lock().await;
-            Self::final_commit_position(&syncer)
+            let progress = self.progress.lock().await;
+            Self::final_commit_position(&progress)
         };
         for sinker in self.sinkers.iter_mut() {
             sinker
@@ -89,8 +88,6 @@ impl Pipeline for BasePipeline {
 
         let mut last_sink_time = Instant::now();
         let mut last_checkpoint_time = Instant::now();
-        let mut last_received_position = Position::None;
-        let mut last_commit_positions = HashMap::new();
         let mut record_time = Instant::now();
 
         loop {
@@ -161,22 +158,17 @@ impl Pipeline for BasePipeline {
                 SinkMethod::Struct => self.sink_struct(data).await?,
             };
 
-            if let Some(position) = &last_received {
-                self.syncer.lock().await.received_position = position.to_owned();
-                last_received_position = position.to_owned();
-            }
-            for position in last_commits {
-                last_commit_positions
-                    .insert(ResumerUtil::get_key_from_position(&position), position);
+            {
+                let mut progress = self.progress.lock().await;
+                progress.update(
+                    last_received,
+                    last_commits
+                        .into_iter()
+                        .map(|position| (ResumerUtil::get_key_from_position(&position), position)),
+                );
             }
 
-            last_checkpoint_time = self
-                .record_checkpoint(
-                    Some(last_checkpoint_time),
-                    &last_received_position,
-                    &last_commit_positions,
-                )
-                .await?;
+            last_checkpoint_time = self.record_checkpoint(Some(last_checkpoint_time)).await?;
 
             self.monitor
                 .add_counter(
@@ -198,17 +190,16 @@ impl Pipeline for BasePipeline {
                 .await;
         }
 
-        self.record_checkpoint(None, &last_received_position, &last_commit_positions)
-            .await?;
+        self.record_checkpoint(None).await?;
         self.try_finish_snapshot_tasks().await?;
         Ok(())
     }
 }
 
 impl BasePipeline {
-    fn final_commit_position(syncer: &Syncer) -> Option<Position> {
-        (!matches!(syncer.committed_position, Position::None))
-            .then_some(syncer.committed_position.clone())
+    fn final_commit_position(progress: &Progress) -> Option<Position> {
+        (!matches!(progress.committed_position, Position::None))
+            .then_some(progress.committed_position.clone())
     }
 
     async fn sink_raw(
@@ -592,8 +583,6 @@ impl BasePipeline {
     async fn record_checkpoint(
         &self,
         last_checkpoint_time: Option<Instant>,
-        last_received_position: &Position,
-        last_commit_positions: &HashMap<String, Position>,
     ) -> anyhow::Result<Instant> {
         if let Some(last) = last_checkpoint_time {
             if last.elapsed().as_secs() < self.checkpoint_interval_secs {
@@ -601,21 +590,29 @@ impl BasePipeline {
             }
         }
 
+        let (received_position, committed_position, last_commit_positions) = {
+            let progress = self.progress.lock().await;
+            (
+                progress.received_position.clone(),
+                progress.aggregate_committed_position(),
+                progress.committed_positions.clone(),
+            )
+        };
+        let last_received_position = &received_position;
         if !matches!(last_received_position, Position::None) {
             // extracting chunks will sink None position.
             log_position!("current_position | {}", last_received_position.to_string());
         }
-        let mut commit_positions: Vec<(&String, &Position)> =
-            last_commit_positions.iter().collect();
+        let mut commit_positions: Vec<(&String, &Position)> = last_commit_positions
+            .iter()
+            .filter(|(_, position)| !matches!(position, Position::None))
+            .collect();
         commit_positions.sort_by(|left, right| left.0.cmp(right.0));
         for (_, position) in commit_positions.iter() {
             log_position!("checkpoint_position | {}", position.to_string());
         }
 
-        let checker_position = commit_positions
-            .last()
-            .map(|(_, position)| *position)
-            .unwrap_or(last_received_position);
+        let checker_position = &committed_position;
 
         if self.propagate_checkpoint_to_sinker && !matches!(checker_position, Position::None) {
             // Lifecycle-aware decorators are attached to the last sinker so their close hook
@@ -632,7 +629,7 @@ impl BasePipeline {
             }
         }
         if let Some(handler) = &self.recorder {
-            if commit_positions.is_empty() {
+            if commit_positions.is_empty() && !matches!(last_received_position, Position::None) {
                 if let Err(e) = handler.record_position(last_received_position).await {
                     log_error!(
                         "failed to record position: {}, err: {:#}",
@@ -650,11 +647,8 @@ impl BasePipeline {
         }
 
         if !matches!(checker_position, Position::None) {
-            let mut syncer = self.syncer.lock().await;
-            syncer.committed_position = checker_position.to_owned();
-            if !last_commit_positions.is_empty() {
-                syncer.committed_positions = last_commit_positions.clone();
-            }
+            let mut progress = self.progress.lock().await;
+            progress.committed_position = committed_position;
         }
 
         self.monitor.set_counter(
@@ -669,16 +663,27 @@ impl BasePipeline {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{atomic::AtomicBool, Arc},
+    };
 
+    use async_trait::async_trait;
     use dt_common::meta::{
         dt_data::{DtData, DtItem},
-        position::Position,
+        dt_queue::DtQueue,
+        position::{aggregator::redis::RedisPositionAggregator, Position, Progress},
         redis::redis_entry::RedisEntry,
     };
-    use dt_connector::extractor::resumer::utils::ResumerUtil;
+    use dt_connector::{
+        extractor::resumer::{recorder::Recorder, utils::ResumerUtil},
+        Sinker,
+    };
+    use dt_parallelizer::{DataSize, Parallelizer};
+    use tokio::sync::Mutex;
 
     use super::BasePipeline;
+    use crate::Pipeline;
 
     fn redis_node_position(node_id: &str, repl_offset: u64) -> Position {
         Position::Redis {
@@ -688,7 +693,7 @@ mod tests {
             repl_port: 10008,
             repl_offset,
             now_db_id: 0,
-            timestamp: String::new(),
+            timestamp: Default::default(),
         }
     }
 
@@ -724,5 +729,219 @@ mod tests {
             .collect();
         assert_eq!(by_key.get("redis-node-node-1"), Some(&node_1_new));
         assert_eq!(by_key.get("redis-node-node-2"), Some(&node_2));
+    }
+
+    struct RawTestParallelizer {
+        fail_after: Option<usize>,
+        sinks: usize,
+        started: Option<Arc<tokio::sync::Notify>>,
+    }
+
+    #[async_trait]
+    impl Parallelizer for RawTestParallelizer {
+        fn get_name(&self) -> String {
+            "RawTestParallelizer".to_string()
+        }
+
+        async fn drain(&mut self, buffer: &DtQueue) -> anyhow::Result<Vec<DtItem>> {
+            Ok(vec![buffer.pop().await?])
+        }
+
+        async fn sink_raw(
+            &mut self,
+            _data: Vec<DtItem>,
+            _sinkers: &[Arc<async_mutex::Mutex<Box<dyn Sinker + Send>>>],
+        ) -> anyhow::Result<DataSize> {
+            if self.fail_after == Some(self.sinks) {
+                anyhow::bail!("injected sink failure");
+            }
+            if let Some(started) = &self.started {
+                started.notify_one();
+                std::future::pending::<()>().await;
+            }
+            self.sinks += 1;
+            Ok(DataSize::default())
+        }
+    }
+
+    fn raw_test_pipeline(
+        progress: Arc<Mutex<Progress>>,
+        buffer: Arc<DtQueue>,
+        parallelizer: RawTestParallelizer,
+    ) -> BasePipeline {
+        BasePipeline {
+            buffer,
+            parallelizer: Box::new(parallelizer),
+            sinker_config: dt_common::config::sinker_config::SinkerConfig::Dummy,
+            sinkers: Vec::new(),
+            shut_down: Arc::new(AtomicBool::new(true)),
+            checkpoint_interval_secs: 0,
+            batch_sink_interval_secs: 0,
+            progress,
+            monitor: Default::default(),
+            pending_snapshot_finished: HashMap::new(),
+            data_marker: None,
+            lua_processor: None,
+            recorder: None,
+            propagate_checkpoint_to_sinker: false,
+        }
+    }
+
+    fn redis_progress(node_ids: &[&str]) -> Arc<Mutex<Progress>> {
+        let mut progress = Progress::new(Box::new(RedisPositionAggregator));
+        RedisPositionAggregator::register_nodes(
+            &mut progress.committed_positions,
+            node_ids.iter().copied(),
+        );
+        Arc::new(Mutex::new(progress))
+    }
+
+    #[tokio::test]
+    async fn redis_timestamp_advances_only_after_successful_batches() {
+        for fail_after in [None, Some(0), Some(2)] {
+            let progress = redis_progress(&["fast", "slow"]);
+            let buffer = Arc::new(DtQueue::new(3, 0, None, None));
+            for (node_id, millis) in [("fast", 14_000), ("slow", 12_000), ("fast", 15_000)] {
+                let mut position = redis_node_position(node_id, millis);
+                if let Position::Redis { timestamp, .. } = &mut position {
+                    *timestamp = Position::format_timestamp_millis(millis as i64);
+                }
+                buffer.push(redis_item(position)).await.unwrap();
+            }
+            let mut pipeline = raw_test_pipeline(
+                progress.clone(),
+                buffer,
+                RawTestParallelizer {
+                    fail_after,
+                    sinks: 0,
+                    started: None,
+                },
+            );
+            let result = pipeline.start().await;
+            let progress = progress.lock().await;
+            if fail_after.is_some() {
+                assert!(format!("{:#}", result.unwrap_err()).contains("injected sink failure"));
+                if fail_after == Some(0) {
+                    assert!(progress
+                        .committed_positions
+                        .values()
+                        .all(|value| matches!(value, Position::None)));
+                    assert_eq!(progress.received_position, Position::None);
+                    assert_eq!(progress.committed_positions.len(), 2);
+                } else {
+                    assert_eq!(progress.received_position.to_timestamp(), 12_000);
+                    assert_eq!(
+                        progress.committed_positions["redis-node-fast"].to_timestamp(),
+                        14_000
+                    );
+                    let Position::Redis { repl_offset, .. } =
+                        &progress.committed_positions["redis-node-fast"]
+                    else {
+                        panic!("expected node offset");
+                    };
+                    assert_eq!(*repl_offset, 14_000);
+                }
+            } else {
+                result.unwrap();
+                assert_eq!(progress.received_position.to_timestamp(), 12_000);
+                assert_eq!(
+                    progress.committed_positions["redis-node-fast"].to_timestamp(),
+                    15_000
+                );
+                assert_eq!(progress.committed_positions.len(), 2);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn redis_timestamp_cancellation_during_sink_does_not_publish_progress() {
+        let progress = redis_progress(&["node"]);
+        let buffer = Arc::new(DtQueue::new(1, 0, None, None));
+        let mut position = redis_node_position("node", 14_000);
+        if let Position::Redis { timestamp, .. } = &mut position {
+            *timestamp = Position::format_timestamp_millis(14_000);
+        }
+        buffer.push(redis_item(position)).await.unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let mut pipeline = raw_test_pipeline(
+            progress.clone(),
+            buffer,
+            RawTestParallelizer {
+                fail_after: None,
+                sinks: 0,
+                started: Some(started.clone()),
+            },
+        );
+        let worker = tokio::spawn(async move { pipeline.start().await });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        let progress = progress.lock().await;
+        assert_eq!(
+            progress.committed_positions["redis-node-node"],
+            Position::None
+        );
+        assert_eq!(progress.received_position, Position::None);
+        assert_eq!(progress.committed_positions.len(), 1);
+    }
+
+    struct RecordingRecorder {
+        positions: Arc<Mutex<Vec<Position>>>,
+        progress: Arc<Mutex<Progress>>,
+    }
+
+    #[async_trait]
+    impl Recorder for RecordingRecorder {
+        async fn record_position(&self, position: &Position) -> anyhow::Result<()> {
+            assert!(
+                self.progress.try_lock().is_ok(),
+                "progress must be unlocked during checkpoint I/O"
+            );
+            self.positions.lock().await.push(position.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn redis_checkpoint_skips_unreported_slots_and_keeps_node_offsets() {
+        let progress = redis_progress(&["z", "a", "unreported"]);
+        let buffer = Arc::new(DtQueue::new(2, 0, None, None));
+        let mut expected = Vec::new();
+        for (node, offset, millis) in [("z", 100, 14_000), ("a", 200, 12_000)] {
+            let mut position = redis_node_position(node, offset);
+            if let Position::Redis { timestamp, .. } = &mut position {
+                *timestamp = Position::format_timestamp_millis(millis);
+            }
+            buffer.push(redis_item(position.clone())).await.unwrap();
+            expected.push(position);
+        }
+        expected.reverse();
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let mut pipeline = raw_test_pipeline(
+            progress.clone(),
+            buffer,
+            RawTestParallelizer {
+                fail_after: None,
+                sinks: 0,
+                started: None,
+            },
+        );
+        pipeline.checkpoint_interval_secs = 60;
+        pipeline.recorder = Some(Arc::new(RecordingRecorder {
+            positions: recorded.clone(),
+            progress: progress.clone(),
+        }));
+        pipeline.start().await.unwrap();
+
+        assert_eq!(*recorded.lock().await, expected);
+        let progress = progress.lock().await;
+        assert_eq!(
+            progress.committed_positions["redis-node-unreported"],
+            Position::None
+        );
+        assert_eq!(progress.received_position.to_timestamp(), 0);
+        assert_eq!(progress.committed_position.to_timestamp(), 0);
     }
 }

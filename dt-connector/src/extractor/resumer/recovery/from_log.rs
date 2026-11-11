@@ -298,7 +298,7 @@ mod tests {
             repl_port: 10008,
             repl_offset,
             now_db_id: 0,
-            timestamp: String::new(),
+            timestamp: Default::default(),
         }
     }
 
@@ -306,7 +306,10 @@ mod tests {
     async fn cdc_log_recovery_keeps_cluster_checkpoint_positions_by_node() {
         let recovery = new_log_recovery();
         let node_1_old = redis_position("node-1", 10);
-        let node_1_new = redis_position("node-1", 30);
+        let mut node_1_new = redis_position("node-1", 30);
+        if let Position::Redis { timestamp, .. } = &mut node_1_new {
+            *timestamp = Position::format_timestamp_millis(1_794_312_000_000);
+        }
         let node_2 = redis_position("node-2", 20);
 
         recovery
@@ -326,16 +329,59 @@ mod tests {
     #[tokio::test]
     async fn cdc_log_recovery_prefers_checkpoints_over_current_positions() {
         let recovery = new_log_recovery();
-        let current = redis_position("node-1", 10);
+        let current = redis_position("node-1", 30);
         let checkpoint = redis_position("node-1", 20);
 
         recovery
-            .parse_cdc_line(&format!("current_position | {}", current))
+            .parse_cdc_line(&format!(
+                "2026-11-11 12:00:00 | checkpoint_position | {}",
+                checkpoint.clone()
+            ))
             .unwrap();
         recovery
-            .parse_cdc_line(&format!("checkpoint_position | {}", checkpoint.clone()))
+            .parse_cdc_line(&format!(
+                "2026-11-11 12:00:01 | current_position | {}",
+                current
+            ))
             .unwrap();
 
         assert_eq!(recovery.get_cdc_resume_positions().await, vec![checkpoint]);
+    }
+
+    #[tokio::test]
+    async fn cdc_log_recovery_interrupted_checkpoint_keeps_last_applied_node_offsets() {
+        let recovery = new_log_recovery();
+        let node_1_old = redis_position("node-1", 10);
+        let node_2_old = redis_position("node-2", 20);
+        let mut node_1_new = redis_position("node-1", 30);
+        if let Position::Redis { timestamp, .. } = &mut node_1_new {
+            *timestamp = Position::format_timestamp_millis(14_000);
+        }
+        for position in [&node_1_old, &node_2_old, &node_1_new] {
+            recovery
+                .parse_cdc_line(&format!(
+                    "2026-11-11 12:00:00 | checkpoint_position | {position}"
+                ))
+                .unwrap();
+        }
+        let mut current = redis_position("node-2", 40);
+        if let Position::Redis { timestamp, .. } = &mut current {
+            *timestamp = Position::format_timestamp_millis(13_000);
+        }
+        recovery
+            .parse_cdc_line(&format!(
+                "2026-11-11 12:00:01 | current_position | {current}"
+            ))
+            .unwrap();
+        recovery
+            .parse_cdc_line(
+                r#"2026-11-11 12:00:01 | checkpoint_position | {"type":"Redis","node_id":"node-2""#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            recovery.get_cdc_resume_positions().await,
+            vec![node_1_new, node_2_old]
+        );
     }
 }

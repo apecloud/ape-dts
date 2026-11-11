@@ -10,7 +10,10 @@ use dt_common::{
     error::DtError,
     filter::DtFilter,
     log_info, log_warn,
-    meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
+    meta::{
+        position::{aggregator::redis::RedisPositionAggregator, Position, Progress},
+        redis::cluster_node::ClusterNode,
+    },
     utils::redis_util::RedisUtil,
 };
 use tokio::{sync::Mutex, task::JoinSet};
@@ -37,7 +40,7 @@ pub struct RedisClusterPsyncExtractor {
     pub keepalive_interval_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_key: String,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub filter: DtFilter,
     pub extract_type: ExtractType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
@@ -49,6 +52,10 @@ impl Extractor for RedisClusterPsyncExtractor {
         log_info!("RedisClusterPsyncExtractor starts");
 
         let nodes = self.get_cluster_master_nodes().await?;
+        RedisPositionAggregator::register_nodes(
+            &mut self.progress.lock().await.committed_positions,
+            nodes.iter().map(|node| node.id.as_str()),
+        );
         let recovery_positions = self.get_recovery_positions().await;
         let recovered_positions = Self::matched_recovery_positions(&nodes, &recovery_positions);
 
@@ -206,7 +213,7 @@ impl RedisClusterPsyncExtractor {
 
         Ok(RedisPsyncExtractor {
             conn: RedisClient::new(&node_url, &self.connection_auth).await?,
-            syncer: self.syncer.clone(),
+            progress: self.progress.clone(),
             repl_port: self.repl_port,
             filter: self.filter.clone(),
             base_extractor: self.base_extractor.clone(),
@@ -281,7 +288,7 @@ mod tests {
             repl_port: 10008,
             repl_offset,
             now_db_id: 0,
-            timestamp: String::new(),
+            timestamp: Default::default(),
         }
     }
 
