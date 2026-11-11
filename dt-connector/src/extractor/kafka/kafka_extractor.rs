@@ -17,7 +17,10 @@ use crate::{
 };
 use dt_common::{
     log_info, log_warn,
-    meta::{avro::avro_converter::AvroConverter, position::Position, syncer::Syncer},
+    meta::{
+        avro::avro_converter::AvroConverter,
+        position::{Position, Progress},
+    },
 };
 
 pub struct KafkaExtractor {
@@ -30,7 +33,7 @@ pub struct KafkaExtractor {
     pub offset: i64,
     pub ack_interval_secs: u64,
     pub avro_converter: AvroConverter,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 

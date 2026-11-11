@@ -5,8 +5,13 @@ use chrono::{DateTime, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::log_error;
-use crate::meta::order_key::OrderKey;
+use crate::{log_error, meta::order_key::OrderKey};
+
+pub mod aggregator;
+pub mod progress;
+
+pub use self::aggregator::PositionAggregator;
+pub use self::progress::Progress;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "type")]
@@ -110,22 +115,19 @@ impl Position {
             Position::MysqlCdc { timestamp, .. }
             | Position::PgCdc { timestamp, .. }
             | Position::MongoCdc { timestamp, .. }
-            | Position::Redis { timestamp, .. } => {
-                if timestamp.is_empty() {
-                    return 0;
-                }
-
-                if let Ok(ts) = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.3f") {
-                    return ts.and_utc().timestamp_millis() as u64;
-                }
-                if let Ok(ts) = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S") {
-                    return ts.and_utc().timestamp_millis() as u64;
-                }
-                0
-            }
+            | Position::Redis { timestamp, .. } => parse_timestamp(timestamp),
             _ => 0,
         }
     }
+}
+
+fn parse_timestamp(timestamp: &str) -> u64 {
+    for format in ["%Y-%m-%d %H:%M:%S%.3f", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(ts) = NaiveDateTime::parse_from_str(timestamp, format) {
+            return ts.and_utc().timestamp_millis() as u64;
+        }
+    }
+    0
 }
 
 #[cfg(test)]
