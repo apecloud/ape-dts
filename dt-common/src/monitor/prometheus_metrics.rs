@@ -385,4 +385,30 @@ mod tests {
         assert!(output.contains("sinker_workers_per_drain_max 8"));
         assert!(output.contains("sinker_workers_per_drain_avg 6"));
     }
+
+    #[test]
+    fn timestamp_gauge_exports_the_supplied_value_including_zero() {
+        use crate::config::config_enums::{TaskKind, TaskType};
+
+        let prometheus = PrometheusMetrics::new(
+            Some(TaskType::new(TaskKind::Cdc, None)),
+            MetricsConfig {
+                http_host: "127.0.0.1".into(),
+                http_port: 0,
+                workers: 1,
+                metrics_labels: HashMap::new(),
+            },
+        );
+        prometheus.initialization();
+        for timestamp in [12_000, 0, 8_000] {
+            prometheus.set_metrics(&BTreeMap::from([(TaskMetricsType::Timestamp, timestamp)]));
+            let mut output = String::new();
+            TextEncoder::new()
+                .encode_utf8(&prometheus.registry.gather(), &mut output)
+                .unwrap();
+            assert!(output
+                .lines()
+                .any(|line| line == format!("timestamp {timestamp}")));
+        }
+    }
 }

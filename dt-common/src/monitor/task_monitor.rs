@@ -966,4 +966,89 @@ mod sinker_worker_tests {
         assert_eq!(metrics[&TaskMetricsType::SinkerWorkersPerDrainMax], 4);
         assert_eq!(metrics[&TaskMetricsType::SinkerWorkersPerDrainAvg], 3);
     }
+
+    #[tokio::test]
+    async fn redis_timestamp_min_before_monitor_max_preserves_watermark() {
+        use crate::{
+            meta::position::{aggregator::redis::RedisPositionAggregator, Position, Progress},
+            monitor::FlushableMonitor,
+        };
+
+        let task_monitor = build_task_monitor();
+        #[cfg(feature = "metrics")]
+        task_monitor.prometheus_metrics.initialization();
+        let pipeline = Arc::new(Monitor::new("pipeline", "task", 60, 1000, 10));
+        task_monitor.register("task", vec![(MonitorType::Pipeline, pipeline.clone())]);
+        let mut progress = Progress::new(Box::new(RedisPositionAggregator));
+        RedisPositionAggregator::register_nodes(
+            &mut progress.committed_positions,
+            ["fast", "slow"],
+        );
+        for (node, timestamp, expected) in [
+            ("fast", 14_000, 0),
+            ("slow", 12_000, 12_000),
+            ("fast", 15_000, 12_000),
+            ("slow", 13_000, 13_000),
+            ("slow", 0, 13_000),
+        ] {
+            let commit = Position::Redis {
+                node_id: Some(node.to_string()),
+                address: None,
+                repl_id: "repl".into(),
+                repl_port: 10008,
+                repl_offset: timestamp,
+                now_db_id: 0,
+                timestamp: if timestamp == 0 {
+                    String::new()
+                } else {
+                    Position::format_timestamp_millis(timestamp as i64)
+                },
+            };
+            progress.update(
+                Some(commit.clone()),
+                [(RedisPositionAggregator::node_key(node), commit)],
+            );
+            pipeline.set_counter(
+                CounterType::Timestamp,
+                progress.received_position.to_timestamp(),
+            );
+            task_monitor.flush().await;
+            let metrics = task_monitor.calc().await.unwrap();
+            assert_eq!(metrics[&TaskMetricsType::Timestamp], expected);
+            let json = serde_json::to_value(&metrics).unwrap();
+            assert_eq!(json["timestamp"].as_u64(), Some(expected));
+        }
+    }
+
+    #[tokio::test]
+    async fn timestamp_restart_requires_a_fresh_task_monitor() {
+        let old = build_task_monitor();
+        let pipeline = Arc::new(Monitor::new("pipeline", "task", 60, 1000, 10));
+        old.register("task", vec![(MonitorType::Pipeline, pipeline.clone())]);
+        for (timestamp, expected) in [(12_000, 12_000), (0, 12_000), (8_000, 12_000)] {
+            pipeline.set_counter(CounterType::Timestamp, timestamp);
+            assert_eq!(
+                old.calc().await.unwrap()[&TaskMetricsType::Timestamp],
+                expected
+            );
+        }
+
+        let new_pipeline = Arc::new(Monitor::new("pipeline", "task", 60, 1000, 10));
+        new_pipeline.set_counter(CounterType::Timestamp, 0);
+        old.register("task", vec![(MonitorType::Pipeline, new_pipeline.clone())]);
+        assert_eq!(
+            old.calc().await.unwrap()[&TaskMetricsType::Timestamp],
+            12_000
+        );
+
+        let restarted = build_task_monitor();
+        restarted.register("task", vec![(MonitorType::Pipeline, new_pipeline.clone())]);
+        for timestamp in [0, 8_000] {
+            new_pipeline.set_counter(CounterType::Timestamp, timestamp);
+            assert_eq!(
+                restarted.calc().await.unwrap()[&TaskMetricsType::Timestamp],
+                timestamp
+            );
+        }
+    }
 }

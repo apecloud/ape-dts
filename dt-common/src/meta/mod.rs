@@ -20,6 +20,5 @@ pub mod redis;
 pub mod row_data;
 pub mod row_type;
 pub mod struct_meta;
-pub mod syncer;
 pub mod tagged_col_value_map;
 pub mod time;

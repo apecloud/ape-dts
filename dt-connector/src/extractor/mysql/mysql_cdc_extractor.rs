@@ -36,9 +36,13 @@ use dt_common::{
     error::Error,
     log_debug, log_error, log_info, log_warn,
     meta::{
-        adaptor::mysql_col_value_convertor::MysqlColValueConvertor, col_value::ColValue,
-        dt_data::DtData, mysql::mysql_meta_manager::MysqlMetaManager, position::Position,
-        row_data::RowData, row_type::RowType, syncer::Syncer,
+        adaptor::mysql_col_value_convertor::MysqlColValueConvertor,
+        col_value::ColValue,
+        dt_data::DtData,
+        mysql::mysql_meta_manager::MysqlMetaManager,
+        position::{Position, Progress},
+        row_data::RowData,
+        row_type::RowType,
     },
     rdb_filter::RdbFilter,
     utils::time_util::TimeUtil,
@@ -63,7 +67,7 @@ pub struct MysqlCdcExtractor {
     pub heartbeat_tb: String,
     pub keepalive_idle_secs: u64,
     pub keepalive_interval_secs: u64,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -474,10 +478,10 @@ impl MysqlCdcExtractor {
 
         self.filter.add_ignore_tb(&db_tb[0], &db_tb[1]);
 
-        let (server_id, heartbeat_interval_secs, syncer, conn_pool) = (
+        let (server_id, heartbeat_interval_secs, progress, conn_pool) = (
             self.server_id,
             self.heartbeat_interval_secs,
-            self.syncer.clone(),
+            self.progress.clone(),
             self.conn_pool.clone(),
         );
 
@@ -485,7 +489,7 @@ impl MysqlCdcExtractor {
             let mut start_time = Instant::now();
             while !shut_down.load(Ordering::Acquire) {
                 if start_time.elapsed().as_secs() >= heartbeat_interval_secs {
-                    Self::heartbeat(server_id, &db_tb[0], &db_tb[1], &syncer, &conn_pool)
+                    Self::heartbeat(server_id, &db_tb[0], &db_tb[1], &progress, &conn_pool)
                         .await
                         .unwrap();
                     start_time = Instant::now();
@@ -501,7 +505,7 @@ impl MysqlCdcExtractor {
         server_id: u64,
         db: &str,
         tb: &str,
-        syncer: &Arc<Mutex<Syncer>>,
+        progress: &Arc<Mutex<Progress>>,
         conn_pool: &Pool<MySql>,
     ) -> anyhow::Result<()> {
         let (received_binlog_filename, received_next_event_position, received_timestamp) =
@@ -510,7 +514,7 @@ impl MysqlCdcExtractor {
                 next_event_position,
                 timestamp,
                 ..
-            } = &syncer.lock().await.received_position
+            } = &progress.lock().await.received_position
             {
                 (
                     binlog_filename.to_owned(),
@@ -527,7 +531,7 @@ impl MysqlCdcExtractor {
                 next_event_position,
                 timestamp,
                 ..
-            } = &syncer.lock().await.committed_position
+            } = &progress.lock().await.committed_position
             {
                 (
                     binlog_filename.to_owned(),
