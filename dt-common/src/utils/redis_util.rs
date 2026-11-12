@@ -253,7 +253,6 @@ impl RedisUtil {
     }
 
     fn parse_cluster_nodes(nodes_str: &str) -> anyhow::Result<Vec<ClusterNode>> {
-        // refer: https://github.com/tair-opensource/RedisShake/blob/v4/internal/utils/cluster_nodes.go
         let mut all_slots_count = 0;
         let mut parsed_nodes = Vec::new();
         let all_slot_hash_tag_map = Self::get_slot_hash_tag_map();

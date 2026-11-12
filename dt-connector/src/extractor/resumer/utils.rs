@@ -8,7 +8,7 @@ use dt_common::{
     meta::{
         mssql::{mssql_connection_pool::MssqlConnectionPool, MSSQL_DEFAULT_SCHEMA},
         position::{aggregator::redis::RedisPositionAggregator, Position},
-        redis::cluster_node::ClusterNode,
+        redis::{cluster_node::ClusterNode, command::key_parser::KeyParser},
     },
     utils::redis_util::RedisUtil,
 };
@@ -76,6 +76,7 @@ impl ResumerUtil {
     }
 
     pub async fn create_pool(
+        task_id: &str,
         url: &str,
         connection_auth: &ConnectionAuthConfig,
         db_type: &DbType,
@@ -159,16 +160,7 @@ impl ResumerUtil {
                 if is_cluster {
                     let nodes = RedisUtil::get_cluster_master_nodes(&mut conn)
                         .context("failed to get Redis cluster master nodes for resumer")?;
-                    let node = nodes
-                        .iter()
-                        .find(|node| !node.slot_hash_tag_map.is_empty())
-                        .context("failed to find Redis cluster master with owned slots")?;
-                    let hash_tag = node
-                        .slot_hash_tag_map
-                        .values()
-                        .next()
-                        .cloned()
-                        .context("failed to pick Redis cluster hash tag for resumer")?;
+                    let (node, hash_tag) = Self::redis_resumer_node(&nodes, task_id)?;
                     let node_url = Self::redis_node_url(url, node)?;
 
                     log_info!(
@@ -181,7 +173,7 @@ impl ResumerUtil {
                         url: node_url,
                         connection_auth: connection_auth.clone(),
                         is_cluster: true,
-                        hash_tag: Some(hash_tag),
+                        hash_tag: Some(hash_tag.to_string()),
                     }))
                 } else {
                     log_info!("Redis resumer uses standalone Redis connection");
@@ -199,6 +191,24 @@ impl ResumerUtil {
                 ),))
             }
         }
+    }
+
+    // Derive the slot from the task so checkpoint keys remain stable across restarts.
+    fn redis_resumer_node<'a>(
+        nodes: &'a [ClusterNode],
+        task_id: &str,
+    ) -> Result<(&'a ClusterNode, &'a str)> {
+        let slot = KeyParser::calc_slot(task_id.as_bytes());
+        nodes
+            .iter()
+            .find_map(|node| {
+                node.slot_hash_tag_map
+                    .get(&slot)
+                    .map(|hash_tag| (node, hash_tag.as_str()))
+            })
+            .with_context(|| {
+                format!("failed to find Redis cluster master owning resumer slot: {slot}")
+            })
     }
 
     fn redis_node_url(base_url: &str, node: &ClusterNode) -> Result<String> {
@@ -313,7 +323,76 @@ impl ResumerUtil {
 
 #[cfg(test)]
 mod tests {
-    use dt_common::meta::position::Position;
+    use dt_common::meta::{
+        position::Position,
+        redis::{cluster_node::ClusterNode, command::key_parser::KeyParser},
+    };
+
+    fn redis_node(id: &str, slots: &[(u16, &str)]) -> ClusterNode {
+        ClusterNode {
+            is_master: true,
+            id: id.to_string(),
+            master_id: String::new(),
+            host: "127.0.0.1".to_string(),
+            port: "6379".to_string(),
+            address: "127.0.0.1:6379".to_string(),
+            slots: slots.iter().map(|(slot, _)| *slot).collect(),
+            slot_hash_tag_map: slots
+                .iter()
+                .map(|(slot, tag)| (*slot, tag.to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn redis_resumer_selection_is_stable_across_node_and_map_order() {
+        for _ in 0..16 {
+            let mut nodes = vec![
+                redis_node("node-a", &[(5195, "24658"), (13907, "0")]),
+                redis_node("node-b", &[(9256, "17698"), (9842, "1")]),
+            ];
+            for _ in 0..2 {
+                for (task_id, expected_node, expected_tag) in
+                    [("task-1", "node-a", "24658"), ("task-2", "node-b", "17698")]
+                {
+                    let (node, tag) = ResumerUtil::redis_resumer_node(&nodes, task_id).unwrap();
+                    assert_eq!(node.id, expected_node);
+                    assert_eq!(tag, expected_tag);
+                    let key = ResumerUtil::get_redis_resumer_key(
+                        task_id,
+                        "CdcDoing",
+                        "redis-node-source",
+                        Some(tag),
+                    );
+                    assert_eq!(
+                        KeyParser::calc_slot(key.as_bytes()),
+                        KeyParser::calc_slot(task_id.as_bytes())
+                    );
+                }
+                nodes.reverse();
+            }
+        }
+    }
+
+    #[test]
+    fn redis_resumer_selection_follows_slot_owner() {
+        for owner in ["old-master", "new-master"] {
+            let nodes = vec![
+                redis_node("other-master", &[(9256, "17698")]),
+                redis_node(owner, &[(5195, "24658")]),
+            ];
+            let (node, tag) = ResumerUtil::redis_resumer_node(&nodes, "task-1").unwrap();
+            assert_eq!(node.id, owner);
+            assert_eq!(tag, "24658");
+        }
+    }
+
+    #[test]
+    fn redis_resumer_selection_requires_slot_owner() {
+        let nodes = vec![redis_node("other-master", &[(9256, "17698")])];
+        assert!(ResumerUtil::redis_resumer_node(&nodes, "task-1").is_err());
+        assert!(ResumerUtil::redis_resumer_node(&[], "task-1").is_err());
+    }
 
     use crate::extractor::resumer::{
         utils::ResumerUtil, ResumerType, DEFAULT_RESUMER_SCHEMA, DEFAULT_RESUMER_TABLE,
