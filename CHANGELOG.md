@@ -9,43 +9,45 @@ Versions follow the project-specific numbering scheme described in the 2.0.27 re
 
 ## [2.0.27] - ?
 
-This is another maintenance release based on `release-2.0.26`. To comply with Cargo's three-component package version format, future releases will follow `<super_major_version>.<major_version>.<minor_version>`. Under this scheme, moving from `2.0.26` to `2.0.27` is a minor update. Releases with substantial new features will use `2.1.xx`, while releases with major architectural changes will use `3.0.xx`. Subsequent releases will follow the same convention.
+Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible `<super_major_version>.<major_version>.<minor_version>` numbering: `2.0.27` for a minor update, `2.1.xx` for substantial new features, and `3.0.xx` for major architectural changes.
 
 ### Added
 
 #### MySQL
 
-- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - support MySQL 8.4 binlog status queries, tagged GTID events and GTID-based resume, and newer heartbeat events by upgrading `mysql-binlog-connector-rust` to 0.3.5
-- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - support empty-password accounts for binlog connections using `mysql_native_password` or `caching_sha2_password` authentication
+- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - upgrade `mysql-binlog-connector-rust` to 0.3.5 for MySQL 8.4 binlog status queries, tagged GTID events/resume, and newer heartbeat events
+- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - support empty-password binlog connections with `mysql_native_password` and `caching_sha2_password`
 
 ### Changed
 
 #### MySQL
 
-- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - reduce redundant binlog event-body and decoded-value copies through the connector upgrade
+- [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - reduce binlog event-body and decoded-value copies
 
 ### Fixed
 
 #### General and Platform
 
-- [[619]](https://github.com/apecloud/ape-dts/pull/619) - treat MySQL/PostgreSQL tables without a primary key and with expression unique indexes as unkeyed for CDC row matching and snapshot extraction, including when ordinary unique keys coexist; preserve the original DML sequence in `rdb_merge` and retain primary-key behavior for tables with a primary key
-  - CDC requires complete before images (`binlog_row_image=FULL` for MySQL; `REPLICA IDENTITY FULL` for PostgreSQL). Restart affected snapshots from the beginning if their old checkpoints used an incomplete expression-index key. The unkeyed fallback can reduce throughput.
-- [[621]](https://github.com/apecloud/ape-dts/pull/621) - return an error with database/schema and table context instead of panicking when MySQL/PostgreSQL table metadata contains no columns
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - treat MySQL/PostgreSQL tables without a primary key as unkeyed when any unique index contains expressions; preserve DML order in `rdb_merge`
+  - Requires `binlog_row_image=FULL` (MySQL) or `REPLICA IDENTITY FULL` (PostgreSQL) for CDC. Restart snapshots whose old checkpoints used incomplete expression-index keys. Unkeyed processing may reduce throughput.
+- [[621]](https://github.com/apecloud/ape-dts/pull/621) - report contextual errors instead of panicking on empty MySQL/PostgreSQL column metadata
 
 #### MySQL
 
-- [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve expression key parts in indexes during structure migration instead of omitting them from generated DDL
-- [[619]](https://github.com/apecloud/ape-dts/pull/619) - apply the configured sinker transaction isolation level to the connection session so it remains effective across transactions on reused pool connections
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve expression index key parts during structure migration
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - keep the configured sinker isolation level effective across transactions on reused connections
 
 #### PostgreSQL
 
-- [[619]](https://github.com/apecloud/ape-dts/pull/619) - avoid invalid replace conflict targets for derived inserts on unkeyed expression-index tables; `sinker.replace=true` uses `ON CONFLICT DO NOTHING` for these tables and does not update existing conflicting rows
-- [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve empty string values during CDC decoding instead of converting them to `NULL`
-- [[627]](https://github.com/apecloud/ape-dts/pull/627) - compare `json` and `xml` columns by their text representation with `C` collation when matching unkeyed rows for UPDATE/DELETE, avoiding missing equality-operator errors
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - use `ON CONFLICT DO NOTHING` for derived inserts on unkeyed expression-index tables with `sinker.replace=true`; conflicting rows are not updated
+- [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve empty strings instead of decoding them as `NULL` in CDC
+- [[627]](https://github.com/apecloud/ape-dts/pull/627) - fix unkeyed UPDATE/DELETE matching on `json` and `xml` columns using text comparison with `C` collation
 
 #### Redis
 
-- [[615]](https://github.com/apecloud/ape-dts/pull/615) - restore metrics collection for `snapshot_and_cdc` tasks by classifying them as CDC tasks
+- [[615]](https://github.com/apecloud/ape-dts/pull/615) - restore metrics collection for `snapshot_and_cdc` tasks
+- [[630]](https://github.com/apecloud/ape-dts/pull/630) - report Redis Cluster progress using the slowest node's heartbeat timestamp while retaining per-node checkpoints
+- [[631]](https://github.com/apecloud/ape-dts/pull/631) - stabilize Redis Cluster checkpoint and heartbeat keys across restarts to prevent missing resume keys
 
 ---
 
