@@ -26,15 +26,15 @@ Snapshot 任务同时输出 `pipeline | global` 汇总；task JSON / Prometheus 
 - 吞吐量和响应时间指标使用 `[pipeline] counter_time_window_secs` 配置的滚动窗口。
 - 时间窗口 counter 最多保留 `[pipeline] counter_max_sub_count` 个样本；事件频率较高时，
   指标统计当前窗口内最近保留的这些样本。
-- 吞吐量和响应时间指标后缀 `max`、`min` 和 `avg` 分别表示当前窗口内有采样数据的
+- 吞吐量指标后缀 `max`、`min` 和 `avg` 分别表示当前窗口内有采样数据的
   单秒值的最大值、最小值和算术平均值；没有采样的秒不会参与平均值计算。
 - 原有指标使用整数，除法舍弃小数部分；新增利用率、batch 和 partitioner 秒数保留小数。
-- 窗口指标沿用既有聚合逻辑：各 monitor 先计算自身统计，task 对各 monitor 的
-  min/max 取极值，avg 使用 `(previous + current) / 2` 逐次合并。
-  Sinker RPS/BPS 分别使用 `RecordsPerQuery`/`DataBytes`，RT 使用 `RtPerQuery`。
-- global 窗口日志直接相加各 monitor 的统计值，包括平均值和最大值；窗口 min_by_sec
-  保持原有的零值输出。已完成表的未过期样本仍参与 global 日志，task 则过滤已完成
-  monitor，因此两者统计口径不同。
+- 样本平均值先合并各 monitor 的总和与计数再相除；吞吐量先按采样秒对齐求和，
+  再计算最小、最大和平均值。Sinker RT 使用 `RtPerQuery` 的样本总耗时和请求数计算平均值，
+  最小值和最大值取已记录样本的极值。Kafka 只记录批次耗时和消息数，因此极值代表批次，
+  不能视作单条消息的延迟极值。
+- global 窗口日志也合并样本与对齐的秒级桶；已完成的 monitor 不再参与窗口聚合，task 也过滤已完成
+  monitor。已注销 monitor 的累计计数另行结算。
 - 样本时间戳为提交指标的时刻；批量提交时可能与实际提取或数据库请求完成时刻不同。
 - 对应 counter 尚未产生数据时，字段不会出现在 task 日志中；已注册的 Prometheus
   Gauge 在首次发布数值前为 `0`。旧 Gauge 在字段缺失时仍可能保留上次值。
@@ -102,9 +102,9 @@ Snapshot 任务同时输出 `pipeline | global` 汇总；task JSON / Prometheus 
 | `sinker_bps_max` | `sinker_bps_max` | bytes/s | 窗口内单个采样秒的目标端写入字节速率最大值。 |
 | `sinker_bps_min` | `sinker_bps_min` | bytes/s | 窗口内单个采样秒的目标端写入字节速率最小值。 |
 | `sinker_bps_avg` | `sinker_bps_avg` | bytes/s | 窗口内各采样秒的目标端写入字节速率平均值。 |
-| `sinker_rt_max` | `sinker_rt_max` | 毫秒 | 窗口内单秒累计 sinker 操作响应时间的最大值，不是单次请求延迟分位数。 |
-| `sinker_rt_min` | `sinker_rt_min` | 毫秒 | 窗口内单秒累计 sinker 操作响应时间的最小值。 |
-| `sinker_rt_avg` | `sinker_rt_avg` | 毫秒 | 窗口内各采样秒累计 sinker 操作响应时间的平均值。 |
+| `sinker_rt_max` | `sinker_rt_max` | 毫秒 | 窗口内已记录 sinker 操作耗时的最大值。 |
+| `sinker_rt_min` | `sinker_rt_min` | 毫秒 | 窗口内已记录 sinker 操作耗时的最小值。 |
+| `sinker_rt_avg` | `sinker_rt_avg` | 毫秒 | 已记录总耗时除以请求数。 |
 | `sinker_workers_configured` | `sinker_workers_configured` | workers | 当前任务注册的 sinker 实例数量。 |
 | `sinker_workers_busy` | `sinker_workers_busy` | workers | 刷新时正在执行受监控 sinker 操作的已注册 sinker 数量。受监控操作包括数据写入、metadata 刷新，以及表完成处理等 control item 操作；不包含 `close`。这是一个瞬时采样值。 |
 | `sinker_workers_per_drain_max` | `sinker_workers_per_drain_max` | workers/drain | 当前窗口内，单次 pipeline drain 将非空业务数据分发到的 distinct sinker 数量最大值。 |
