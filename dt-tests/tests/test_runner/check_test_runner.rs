@@ -193,6 +193,7 @@ impl CheckTestRunner {
             anyhow::bail!("checker state store requires ResumerConfig::FromDB");
         };
         let pool = ResumerUtil::create_pool(
+            &self.base.config.global.task_id,
             url,
             connection_auth,
             db_type,
@@ -216,6 +217,7 @@ impl CheckTestRunner {
             anyhow::bail!("resumer tables require ResumerConfig::FromDB");
         };
         let pool = ResumerUtil::create_pool(
+            &self.base.config.global.task_id,
             url,
             connection_auth,
             db_type,
