@@ -30,9 +30,12 @@ use dt_common::{
     log_filter::parse_size_limit,
     log_finished, log_info, log_summary, log_warn,
     meta::{
-        dt_queue::DtQueue, mssql::mssql_connection_pool::MssqlConnectionPool,
-        mysql::mysql_meta_manager::MysqlMetaManager, pg::pg_meta_manager::PgMetaManager,
-        position::Position, row_type::RowType, syncer::Syncer,
+        dt_queue::DtQueue,
+        mssql::mssql_connection_pool::MssqlConnectionPool,
+        mysql::mysql_meta_manager::MysqlMetaManager,
+        pg::pg_meta_manager::PgMetaManager,
+        position::{aggregator::position_aggregator, Progress},
+        row_type::RowType,
     },
     monitor::{
         runtime_trace_monitor::RuntimeTraceMonitor,
@@ -416,11 +419,9 @@ impl TaskRunner {
         ));
 
         let shut_down = Arc::new(AtomicBool::new(false));
-        let syncer = Arc::new(Mutex::new(Syncer {
-            received_position: Position::None,
-            committed_position: Position::None,
-            committed_positions: HashMap::new(),
-        }));
+        let progress = Arc::new(Mutex::new(Progress::new(position_aggregator(
+            &self.config.extractor_basic.db_type,
+        ))));
 
         let (extractor_data_marker, sinker_data_marker) = if let Some(data_marker_config) =
             &self.config.data_marker
@@ -464,7 +465,7 @@ impl TaskRunner {
             extractor_client.clone(),
             buffer.clone(),
             shut_down.clone(),
-            syncer.clone(),
+            progress.clone(),
             extractor_monitor_handle,
             task_id.clone(),
             extractor_data_marker,
@@ -533,7 +534,7 @@ impl TaskRunner {
             .create_pipeline(
                 buffer,
                 shut_down.clone(),
-                syncer,
+                progress,
                 sinkers,
                 pipeline_monitor_handle.clone(),
                 rw_sinker_data_marker.clone(),
@@ -761,7 +762,7 @@ impl TaskRunner {
         &self,
         buffer: Arc<DtQueue>,
         shut_down: Arc<AtomicBool>,
-        syncer: Arc<Mutex<Syncer>>,
+        progress: Arc<Mutex<Progress>>,
         sinkers: Vec<Arc<AsyncMutex<Box<dyn Sinker + Send>>>>,
         monitor: TaskMonitorHandle,
         data_marker: Option<Arc<RwLock<DataMarker>>>,
@@ -788,7 +789,7 @@ impl TaskRunner {
             shut_down,
             checkpoint_interval_secs: self.config.pipeline.checkpoint_interval_secs,
             batch_sink_interval_secs: self.config.pipeline.batch_sink_interval_secs,
-            syncer,
+            progress,
             monitor,
             pending_snapshot_finished: HashMap::new(),
             data_marker,

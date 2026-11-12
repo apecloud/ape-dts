@@ -895,6 +895,7 @@ WHERE
                 ..
             } => {
                 let pool = ResumerUtil::create_pool(
+                    &global_config.task_id,
                     url,
                     connection_auth,
                     db_type,

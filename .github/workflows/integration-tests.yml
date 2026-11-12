@@ -63,6 +63,17 @@ jobs:
         with:
           submodules: true
 
+      - name: Use classic Docker image store for Redis 2.8
+        if: matrix.suite == 'redis_to_redis_2_8'
+        uses: docker/setup-docker-action@v5
+        with:
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": false
+              }
+            }
+
       - name: Start required services
         working-directory: dt-tests
         run: ./scripts/run-integration-tests.sh --suite "${{ matrix.suite }}" --up --wait --keep-docker

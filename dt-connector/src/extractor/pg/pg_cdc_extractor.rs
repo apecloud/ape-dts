@@ -30,11 +30,10 @@ use dt_common::{
         },
         dt_data::DtData,
         pg::{pg_meta_manager::PgMetaManager, pg_tb_meta::PgTbMeta},
-        position::Position,
+        position::{Position, Progress},
         rdb_tb_meta::RdbTbMeta,
         row_data::RowData,
         row_type::RowType,
-        syncer::Syncer,
     },
     resource::RID,
     utils::time_util::TimeUtil,
@@ -79,7 +78,7 @@ pub struct PgCdcExtractor {
     pub heartbeat_interval_secs: u64,
     pub heartbeat_tb: String,
     pub ddl_meta_tb: String,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
 }
 
@@ -269,7 +268,7 @@ impl PgCdcExtractor {
         start_lsn: &str,
     ) -> anyhow::Result<()> {
         let lsn_value =
-            if let Position::PgCdc { lsn, .. } = &self.syncer.lock().await.committed_position {
+            if let Position::PgCdc { lsn, .. } = &self.progress.lock().await.committed_position {
                 if lsn.is_empty() {
                     start_lsn.to_string()
                 } else {
@@ -711,10 +710,10 @@ impl PgCdcExtractor {
 
         self.filter.add_exclude(rid!(schema_tb[0], schema_tb[1]))?;
 
-        let (slot_name, heartbeat_interval_secs, syncer, conn_pool) = (
+        let (slot_name, heartbeat_interval_secs, progress, conn_pool) = (
             self.slot_name.clone(),
             self.heartbeat_interval_secs,
-            self.syncer.clone(),
+            self.progress.clone(),
             self.conn_pool.clone(),
         );
         tokio::spawn(async move {
@@ -725,7 +724,7 @@ impl PgCdcExtractor {
                         &slot_name,
                         &schema_tb[0],
                         &schema_tb[1],
-                        &syncer,
+                        &progress,
                         &conn_pool,
                     )
                     .await
@@ -746,18 +745,18 @@ impl PgCdcExtractor {
         slot_name: &str,
         schema: &str,
         tb: &str,
-        syncer: &Arc<Mutex<Syncer>>,
+        progress: &Arc<Mutex<Progress>>,
         conn_pool: &Pool<Postgres>,
     ) -> anyhow::Result<()> {
         let (received_lsn, received_timestamp) =
-            if let Position::PgCdc { lsn, timestamp } = &syncer.lock().await.received_position {
+            if let Position::PgCdc { lsn, timestamp } = &progress.lock().await.received_position {
                 (lsn.clone(), timestamp.clone())
             } else {
                 (String::new(), String::new())
             };
 
         let (flushed_lsn, flushed_timetimestamp) =
-            if let Position::PgCdc { lsn, timestamp } = &syncer.lock().await.committed_position {
+            if let Position::PgCdc { lsn, timestamp } = &progress.lock().await.committed_position {
                 (lsn.clone(), timestamp.clone())
             } else {
                 (String::new(), String::new())

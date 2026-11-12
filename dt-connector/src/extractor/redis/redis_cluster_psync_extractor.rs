@@ -10,7 +10,10 @@ use dt_common::{
     error::DtError,
     filter::DtFilter,
     log_info, log_warn,
-    meta::{position::Position, redis::cluster_node::ClusterNode, syncer::Syncer},
+    meta::{
+        position::{aggregator::redis::RedisPositionAggregator, Position, Progress},
+        redis::cluster_node::ClusterNode,
+    },
     utils::redis_util::RedisUtil,
 };
 use tokio::{sync::Mutex, task::JoinSet};
@@ -37,7 +40,7 @@ pub struct RedisClusterPsyncExtractor {
     pub keepalive_interval_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub heartbeat_key: String,
-    pub syncer: Arc<Mutex<Syncer>>,
+    pub progress: Arc<Mutex<Progress>>,
     pub filter: DtFilter,
     pub extract_type: ExtractType,
     pub recovery: Option<Arc<dyn Recovery + Send + Sync>>,
@@ -49,6 +52,10 @@ impl Extractor for RedisClusterPsyncExtractor {
         log_info!("RedisClusterPsyncExtractor starts");
 
         let nodes = self.get_cluster_master_nodes().await?;
+        RedisPositionAggregator::register_nodes(
+            &mut self.progress.lock().await.committed_positions,
+            nodes.iter().map(|node| node.id.as_str()),
+        );
         let recovery_positions = self.get_recovery_positions().await;
         let recovered_positions = Self::matched_recovery_positions(&nodes, &recovery_positions);
 
@@ -202,11 +209,11 @@ impl RedisClusterPsyncExtractor {
             (String::new(), 0, 0)
         };
 
-        let heartbeat_hash_tag = node.slot_hash_tag_map.values().next().cloned();
+        let heartbeat_hash_tag = Self::heartbeat_hash_tag(&node);
 
         Ok(RedisPsyncExtractor {
             conn: RedisClient::new(&node_url, &self.connection_auth).await?,
-            syncer: self.syncer.clone(),
+            progress: self.progress.clone(),
             repl_port: self.repl_port,
             filter: self.filter.clone(),
             base_extractor: self.base_extractor.clone(),
@@ -226,6 +233,13 @@ impl RedisClusterPsyncExtractor {
             }),
             wait_task_finish: false,
         })
+    }
+
+    fn heartbeat_hash_tag(node: &ClusterNode) -> Option<String> {
+        node.slot_hash_tag_map
+            .iter()
+            .min_by_key(|(slot, _)| **slot)
+            .map(|(_, hash_tag)| hash_tag.clone())
     }
 
     async fn derive_node_state(&self) -> ExtractState {
@@ -281,7 +295,31 @@ mod tests {
             repl_port: 10008,
             repl_offset,
             now_db_id: 0,
-            timestamp: String::new(),
+            timestamp: Default::default(),
+        }
+    }
+
+    #[test]
+    fn heartbeat_hash_tag_is_stable_across_map_order() {
+        let mut source = node("node-1", "127.0.0.1:6371");
+        assert_eq!(
+            RedisClusterPsyncExtractor::heartbeat_hash_tag(&source),
+            None
+        );
+        for _ in 0..16 {
+            for entries in [
+                [(5195, "24658"), (13907, "0")],
+                [(13907, "0"), (5195, "24658")],
+            ] {
+                source.slot_hash_tag_map = entries
+                    .into_iter()
+                    .map(|(slot, tag)| (slot, tag.to_string()))
+                    .collect();
+                assert_eq!(
+                    RedisClusterPsyncExtractor::heartbeat_hash_tag(&source),
+                    Some("24658".to_string())
+                );
+            }
         }
     }
 
