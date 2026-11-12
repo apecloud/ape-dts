@@ -32,7 +32,6 @@ impl KeyParser {
         &self,
         argv: &[String],
     ) -> anyhow::Result<(String, String, Vec<String>, Vec<usize>)> {
-        // refer: https://github.com/tair-opensource/RedisShake/blob/v4/internal/commands/keys.go
         let mut cmd_name = argv[0].to_uppercase();
         if self.container_cmds.contains(&cmd_name) {
             cmd_name = format!("{}-{}", cmd_name, argv[1].to_uppercase());
