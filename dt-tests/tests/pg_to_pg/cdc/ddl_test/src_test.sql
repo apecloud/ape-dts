@@ -71,3 +71,50 @@ CREATE TABLE test_db_2.match (select_id SERIAL PRIMARY KEY, "table" VARCHAR(255)
 CREATE INDEX idx_index_on_index ON test_db_2.match("offset");
 CREATE INDEX idx_key_col ON test_db_2.match("match");
 CREATE UNIQUE INDEX uniq_unique_col ON test_db_2.match(unique_col);
+
+-- Raw blocks preserve comment markers and line breaks for the DDL parser.
+```
+CREATE TABLE test_db_1.ddl_comment_literals (
+    id integer PRIMARY KEY,
+    plain_note text DEFAULT 'it''s /* literal */ -- # text'
+        CHECK (plain_note = 'it''s /* literal */ -- # text'),
+    path_note text DEFAULT 'C:\' CHECK (path_note = 'C:\'),
+    escape_note text DEFAULT E'it\'s /* literal */ -- # text\nnext line'
+        CHECK (escape_note = E'it\'s /* literal */ -- # text\nnext line'),
+    continued_note text DEFAULT E'first '
+        -- continuation keeps E-string escapes
+        'it\'s /* literal */ -- # text'
+        CHECK (continued_note = E'first it\'s /* literal */ -- # text'),
+    "note/*--#" text DEFAULT 'quoted /* literal */ -- #'
+        CHECK ("note/*--#" = 'quoted /* literal */ -- #')
+);
+```
+INSERT INTO test_db_1.ddl_comment_literals (id) VALUES (1);
+
+```
+CREATE TABLE test_db_1.ddl_comment_dollar (
+    id integer PRIMARY KEY,
+    plain_note text DEFAULT $$it's /* literal */ -- #; text$$
+        CHECK (plain_note = $$it's /* literal */ -- #; text$$),
+    tagged_note text DEFAULT $Tag_1$中文 /* literal */ -- #
+$inner$nested$inner$ $$ $tag_1$ text$Tag_1$
+        CHECK (tagged_note = $Tag_1$中文 /* literal */ -- #
+$inner$nested$inner$ $$ $tag_1$ text$Tag_1$)
+);
+```
+INSERT INTO test_db_1.ddl_comment_dollar (id) VALUES (1);
+
+```
+CREATE/* outer /* nested */ tail */TABLE test_db_1.ddl_comment_nested (
+    id/* type */integer PRIMARY KEY,
+    value integer DEFAULT (8 # 3) CHECK (value = 11) --no space required
+); -- trailing comment
+```
+```
+ALTER--no space required
+TABLE test_db_1.ddl_comment_nested
+ADD/* outer /* nested */ tail */COLUMN note text
+DEFAULT $note$keep /* literal */ -- #$note$
+CHECK (note = $note$keep /* literal */ -- #$note$);
+```
+INSERT INTO test_db_1.ddl_comment_nested (id) VALUES (1);
