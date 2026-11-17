@@ -346,8 +346,18 @@ impl BasePipeline {
                     last_received_position = Some(i.position.clone());
                     continue;
                 }
-                DtData::Heartbeat {} | DtData::Ddl { .. } => {
+                DtData::Heartbeat {} => {
                     Self::collect_commit_position(&mut commit_positions, &i.position);
+                    last_received_position = Some(i.position.clone());
+                    continue;
+                }
+                DtData::Ddl {
+                    commit_position, ..
+                } => {
+                    Self::collect_commit_position(
+                        &mut commit_positions,
+                        commit_position.as_deref().unwrap_or(&i.position),
+                    );
                     last_received_position = Some(i.position.clone());
                     continue;
                 }
@@ -452,9 +462,16 @@ impl BasePipeline {
                     continue;
                 }
 
-                DtData::Ddl { ddl_data } => {
-                    last_commit_position = Some(i.position);
-                    last_received_position = last_commit_position.clone();
+                DtData::Ddl {
+                    ddl_data,
+                    commit_position,
+                } => {
+                    last_commit_position = Some(
+                        commit_position
+                            .map(|position| *position)
+                            .unwrap_or_else(|| i.position.clone()),
+                    );
+                    last_received_position = Some(i.position);
                     result.push(ddl_data);
                 }
 
@@ -684,6 +701,111 @@ mod tests {
 
     use super::BasePipeline;
     use crate::Pipeline;
+
+    fn mysql_position(gtid: u64, offset: u32) -> Position {
+        Position::MysqlCdc {
+            server_id: "1".into(),
+            binlog_filename: "mysql-bin.000001".into(),
+            next_event_position: offset,
+            gtid_set: format!("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1-{gtid}"),
+            timestamp: Position::format_timestamp_millis(offset.into()),
+        }
+    }
+
+    fn ddl_item(received: Position, committed: Option<Position>) -> DtItem {
+        DtItem {
+            dt_data: DtData::Ddl {
+                ddl_data: Default::default(),
+                commit_position: committed.map(Box::new),
+            },
+            position: received,
+            data_origin_node: String::new(),
+        }
+    }
+
+    #[test]
+    fn ddl_received_and_commit_positions_are_independent() {
+        let current = mysql_position(101, 1300);
+        let safe = mysql_position(100, 1000);
+        for override_position in [None, Some(safe)] {
+            let expected_commit = override_position.as_ref().unwrap_or(&current).clone();
+            let item = ddl_item(current.clone(), override_position);
+            let mut pending = HashMap::new();
+            let (_, received, commits) = BasePipeline::fetch_raw(&[item.clone()], &mut pending);
+            assert_eq!(received, Some(current.clone()));
+            assert_eq!(commits, vec![expected_commit.clone()]);
+
+            let (ddls, received, committed) = BasePipeline::fetch_ddl(vec![item], &mut pending);
+            assert_eq!(ddls.len(), 1);
+            assert_eq!(received, Some(current.clone()));
+            assert_eq!(committed, Some(expected_commit));
+        }
+    }
+
+    #[test]
+    fn mysql_received_progress_advances_while_transaction_checkpoint_stays_safe() {
+        use dt_common::meta::{row_data::RowData, row_type::RowType};
+
+        let mut progress = Progress::default();
+        let mut pending = HashMap::new();
+        let safe = mysql_position(100, 1000);
+        let ddl_position = mysql_position(101, 1300);
+        let (_, received, committed) = BasePipeline::fetch_ddl(
+            vec![ddl_item(ddl_position.clone(), Some(safe.clone()))],
+            &mut pending,
+        );
+        progress.update(
+            received,
+            committed
+                .into_iter()
+                .map(|position| (ResumerUtil::get_key_from_position(&position), position)),
+        );
+        assert_eq!(progress.received_position, ddl_position);
+        assert_eq!(progress.aggregate_committed_position(), safe);
+
+        for offset in [1400, 1700] {
+            let current = mysql_position(101, offset);
+            let row = RowData::new(
+                String::new(),
+                "test_db".into(),
+                "t".into(),
+                0,
+                RowType::Insert,
+                None,
+                Some(HashMap::new()),
+            );
+            let (_, received, committed) = BasePipeline::fetch_dml(
+                vec![DtItem {
+                    dt_data: DtData::Dml { row_data: row },
+                    position: current.clone(),
+                    data_origin_node: String::new(),
+                }],
+                &mut pending,
+            );
+            assert_eq!(committed, None);
+            progress.update(received, std::iter::empty());
+            assert_eq!(progress.received_position, current);
+            assert_eq!(progress.aggregate_committed_position(), safe);
+        }
+
+        let end = mysql_position(101, 1800);
+        let (_, received, committed) = BasePipeline::fetch_dml(
+            vec![DtItem {
+                dt_data: DtData::Commit { xid: "1".into() },
+                position: end.clone(),
+                data_origin_node: String::new(),
+            }],
+            &mut pending,
+        );
+        progress.update(
+            received,
+            committed
+                .into_iter()
+                .map(|position| (ResumerUtil::get_key_from_position(&position), position)),
+        );
+        assert_eq!(progress.received_position, end);
+        assert_eq!(progress.aggregate_committed_position(), end);
+    }
 
     fn redis_node_position(node_id: &str, repl_offset: u64) -> Position {
         Position::Redis {

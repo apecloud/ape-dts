@@ -266,7 +266,10 @@ impl AvroConverter {
             ddl_data.default_schema = schema;
             ddl_data.query = query;
             ddl_data.ddl_type = DdlType::from_str(&ddl_type)?;
-            Ok(DtData::Ddl { ddl_data })
+            Ok(DtData::Ddl {
+                ddl_data,
+                commit_position: None,
+            })
         } else {
             let _fields = self.avro_to_fields(avro_map.remove(FIELDS))?;
             let before = self.avro_to_col_values(avro_map.remove(BEFORE));
@@ -562,6 +565,7 @@ mod tests {
         let dt_data = avro_converter.avro_value_to_dt_data(payload).unwrap();
         if let DtData::Ddl {
             ddl_data: decoded_ddl_data,
+            ..
         } = dt_data
         {
             let mut expected = ddl_data.clone();

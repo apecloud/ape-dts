@@ -76,6 +76,8 @@ struct Context {
     binlog_filename: String,
     table_map_event_map: HashMap<u64, TableMapEvent>,
     gtid_set: Option<GtidSet>,
+    commit_position: Option<Position>,
+    in_transaction: bool,
 }
 
 const QUERY_BEGIN: &str = "BEGIN";
@@ -172,6 +174,8 @@ impl MysqlCdcExtractor {
             binlog_filename: self.binlog_filename.clone(),
             table_map_event_map: HashMap::new(),
             gtid_set: None,
+            commit_position: None,
+            in_transaction: false,
         };
         if self.gtid_enabled {
             ctx.gtid_set = Some(GtidSet::new(self.gtid_set.as_str())?);
@@ -212,23 +216,37 @@ impl MysqlCdcExtractor {
             data
         );
 
-        let timestamp = Position::format_timestamp_millis(header.timestamp as i64 * 1000);
-        let mut gtid_set_str = String::new();
-        if let Some(gtid_set) = &ctx.gtid_set {
-            gtid_set_str = gtid_set.to_string();
-        }
-        let position = Position::MysqlCdc {
-            server_id: self.server_id.to_string(),
+        let server_id = self.server_id;
+        let get_position = |ctx: &Context, next_event_position| Position::MysqlCdc {
+            server_id: server_id.to_string(),
             binlog_filename: ctx.binlog_filename.clone(),
-            next_event_position: header.next_event_position,
-            gtid_set: gtid_set_str,
-            timestamp,
+            next_event_position,
+            gtid_set: ctx
+                .gtid_set
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            timestamp: Position::format_timestamp_millis(header.timestamp as i64 * 1000),
         };
-
+        let event_start_position = header.next_event_position.checked_sub(header.event_length);
+        let position = get_position(ctx, header.next_event_position);
         match data {
-            EventData::Gtid(g) => {
-                if let Some(gtid_set) = ctx.gtid_set.as_mut() {
-                    gtid_set.add(&g.gtid)?;
+            EventData::Gtid(gtid) => {
+                if ctx.in_transaction || ctx.commit_position.is_none() {
+                    let mut start = position;
+                    if let Position::MysqlCdc {
+                        next_event_position,
+                        ..
+                    } = &mut start
+                    {
+                        *next_event_position = event_start_position
+                            .context("invalid MySQL binlog event start position")?;
+                    }
+                    ctx.commit_position = Some(start);
+                }
+                ctx.in_transaction = false;
+                if let Some(set) = ctx.gtid_set.as_mut() {
+                    set.add(&gtid.gtid)?;
                 }
             }
 
@@ -237,9 +255,15 @@ impl MysqlCdcExtractor {
             }
 
             EventData::TransactionPayload(event) => {
+                if ctx.in_transaction || ctx.commit_position.is_none() {
+                    ctx.commit_position = Some(get_position(
+                        ctx,
+                        event_start_position
+                            .context("invalid MySQL binlog event start position")?,
+                    ));
+                }
+                ctx.in_transaction = false;
                 for (mut inner_header, data) in event.uncompressed_events {
-                    // headers of uncompressed events have no next_event_position,
-                    // use header of TransactionPayload instead
                     inner_header.next_event_position = header.next_event_position;
                     self.parse_events(inner_header, data, ctx).await?;
                 }
@@ -346,22 +370,49 @@ impl MysqlCdcExtractor {
 
             EventData::Query(query) => {
                 if query.query == QUERY_BEGIN {
+                    if ctx.in_transaction || ctx.commit_position.is_none() {
+                        ctx.commit_position = Some(get_position(
+                            ctx,
+                            event_start_position
+                                .context("invalid MySQL binlog event start position")?,
+                        ));
+                    }
+                    ctx.in_transaction = true;
                     BaseExtractor::update_time_filter(
                         &mut self.extract_state.time_filter,
                         header.timestamp,
                         &position,
                     );
+                    return Ok(());
                 }
 
-                self.handle_query_event(query, position.clone()).await?;
+                let commit_position = if ctx.in_transaction {
+                    Some(
+                        ctx.commit_position
+                            .as_ref()
+                            .context("missing MySQL transaction commit position")?,
+                    )
+                } else {
+                    None
+                };
+                self.handle_query_event(query, &position, commit_position)
+                    .await?;
+                if !ctx.in_transaction {
+                    ctx.commit_position = Some(position);
+                }
             }
 
             EventData::Xid(xid) => {
-                let commit = DtData::Commit {
-                    xid: xid.xid.to_string(),
-                };
+                ctx.in_transaction = false;
+                ctx.commit_position = Some(position.clone());
                 self.base_extractor
-                    .push_dt_data(&mut self.extract_state, commit, position.clone())
+                    .push_dt_data(
+                        &mut self.extract_state,
+                        DtData::Commit {
+                            xid: xid.xid.to_string(),
+                        },
+                        position,
+                    )
                     .await?;
             }
 
@@ -443,15 +494,12 @@ impl MysqlCdcExtractor {
     async fn handle_query_event(
         &mut self,
         query: QueryEvent,
-        position: Position,
+        position: &Position,
+        commit_position: Option<&Position>,
     ) -> anyhow::Result<()> {
         // TODO, currently we do not parse ddl if filtered,
         // but we should always try to parse ddl in the future
         if self.filter.filter_all_ddl() && self.filter.filter_all_dcl() {
-            return Ok(());
-        }
-
-        if query.query == QUERY_BEGIN {
             return Ok(());
         }
 
@@ -482,10 +530,11 @@ impl MysqlCdcExtractor {
                     let id: RID = sub_ddl_data.get_id();
                     if !self.filter.filter_ddl(&id, &sub_ddl_data.ddl_type)? {
                         self.base_extractor
-                            .push_ddl(
+                            .push_ddl_with_commit_position(
                                 &mut self.extract_state,
                                 sub_ddl_data.clone(),
                                 position.clone(),
+                                commit_position,
                             )
                             .await?;
                     }

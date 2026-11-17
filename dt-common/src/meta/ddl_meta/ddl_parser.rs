@@ -6,13 +6,13 @@ use std::{
 use anyhow::bail;
 use nom::{
     branch::alt,
-    bytes::complete::{tag, tag_no_case, take_while1},
+    bytes::complete::{is_not, tag, tag_no_case, take, take_till, take_until, take_while1},
     character::{
         complete::{multispace0, multispace1},
         is_alphanumeric,
     },
     combinator::{map, not, opt, peek, recognize},
-    multi::many1,
+    multi::{many0, many1},
     sequence::{delimited, pair, preceded, tuple},
     IResult,
 };
@@ -53,7 +53,7 @@ impl DdlParser {
     }
 
     pub fn parse(&self, sql: &str) -> anyhow::Result<Option<DdlData>> {
-        let sql = Self::remove_comments(sql);
+        let sql = self.remove_comments(sql)?;
 
         // In some cases, non-ddl statements may also enter this parse logic, such as heartbeat connections when mysql binlog_format=mix
         if !Self::ddl_simple_judgment(&sql) {
@@ -78,12 +78,47 @@ impl DdlParser {
         }
     }
 
-    fn remove_comments(sql: &str) -> Cow<str> {
-        // "create /*some comments,*/table/*some comments*/ `aaa`.`bbb`"
-        match Regex::new(r"(/\*([^*]|\*+[^*/*])*\*+/)|(--[^\n]*\n)") {
-            Ok(regex) => regex.replace_all(sql, ""),
-            Err(_) => Cow::Borrowed(sql),
+    fn remove_comments<'a>(&self, sql: &'a str) -> anyhow::Result<Cow<'a, str>> {
+        let sql_token: fn(&[u8]) -> IResult<&[u8], SqlToken<'_>> = match self.db_type {
+            DbType::Mysql => mysql_sql_token,
+            DbType::Pg => pg_sql_token,
+            _ => {
+                return Ok(
+                    match Regex::new(r"(/\*([^*]|\*+[^*/*])*\*+/)|(--[^\n]*\n)") {
+                        Ok(regex) => regex.replace_all(sql, ""),
+                        Err(_) => Cow::Borrowed(sql),
+                    },
+                )
+            }
+        };
+
+        let mut remaining = sql.as_bytes();
+        let mut copied = 0;
+        let mut output = None;
+        while !remaining.is_empty() {
+            let (next, token) = sql_token(remaining).map_err(|_| {
+                DtError::UnsupportedStatement(format!(
+                    "failed to parse sql: {sql}, error: unclosed {} quote or comment",
+                    self.db_type
+                ))
+            })?;
+            if let SqlToken::Comment(comment) = token {
+                let offset = sql.len() - remaining.len();
+                let buffer = output.get_or_insert_with(|| String::with_capacity(sql.len()));
+                buffer.push_str(&sql[copied..offset]);
+                // Keep tokens separated and leave line endings outside comments intact.
+                buffer.push(' ');
+                copied = offset + comment.len();
+            }
+            remaining = next;
         }
+        Ok(match output {
+            Some(mut buffer) => {
+                buffer.push_str(&sql[copied..]);
+                Cow::Owned(buffer)
+            }
+            None => Cow::Borrowed(sql),
+        })
     }
 
     fn ddl_simple_judgment(sql: &str) -> bool {
@@ -344,11 +379,12 @@ impl DdlParser {
 
         // temporary tables won't be in binlog
         let (schema, tb) = self.parse_table(table);
+        let (_, unparsed) = mysql_create_table_tail(remaining_input)?;
         let statement = MysqlCreateTableStatement {
             db: schema,
             tb,
             if_not_exists: if_not_exists.is_some(),
-            unparsed: to_string(remaining_input),
+            unparsed,
         };
 
         let ddl = DdlData {
@@ -1228,6 +1264,199 @@ impl DdlParser {
     }
 }
 
+enum SqlToken<'a> {
+    Text(&'a [u8]),
+    Comment(&'a [u8]),
+}
+
+fn mysql_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || byte >= 0x80
+}
+
+// Consume quoted values as a whole so table options never match inside literals.
+fn mysql_sql_token(i: &[u8]) -> IResult<&[u8], SqlToken<'_>> {
+    if i.starts_with(b"`") {
+        return map(
+            |i| recognize_doubled_delimited_identifier(i, b'`', b'`'),
+            SqlToken::Text,
+        )(i);
+    }
+    if let Some(&quote @ (b'\'' | b'"')) = i.first() {
+        let doubled = [quote, quote];
+        let excluded = [quote, b'\\'];
+        return map(
+            recognize(tuple((
+                take(1usize),
+                many0(alt((
+                    recognize(pair(tag(b"\\"), take(1usize))),
+                    tag(doubled.as_slice()),
+                    is_not(excluded.as_slice()),
+                ))),
+                tag([quote].as_slice()),
+            ))),
+            SqlToken::Text,
+        )(i);
+    }
+    if i.starts_with(b"/*") {
+        return map(
+            recognize(tuple((tag(b"/*"), take_until(&b"*/"[..]), tag(b"*/")))),
+            SqlToken::Comment,
+        )(i);
+    }
+    if i.starts_with(b"#")
+        || (i.starts_with(b"--")
+            && (i.len() == 2 || i[2].is_ascii_whitespace() || i[2].is_ascii_control()))
+    {
+        return map(
+            take_till(|byte| byte == b'\n' || byte == b'\r'),
+            SqlToken::Comment,
+        )(i);
+    }
+    map(
+        alt((take_while1(mysql_word_byte), take(1usize))),
+        SqlToken::Text,
+    )(i)
+}
+
+// START TRANSACTION can precede ENGINE and other table options in the binlog.
+fn mysql_create_table_tail(i: &[u8]) -> IResult<&[u8], String> {
+    let mut remaining = i;
+    let mut depth = 0usize;
+    let mut definition_finished = false;
+    let mut copied = 0;
+    let mut output = Vec::new();
+    while !remaining.is_empty() {
+        if definition_finished && depth == 0 {
+            let clause: IResult<&[u8], &[u8]> = recognize(tuple((
+                tag_no_case(&b"START"[..]),
+                multispace1,
+                tag_no_case(&b"TRANSACTION"[..]),
+                not(peek(take_while1(mysql_word_byte))),
+                multispace0,
+            )))(remaining);
+            if let Ok((next, _)) = clause {
+                let offset = i.len() - remaining.len();
+                output.extend_from_slice(&i[copied..offset]);
+                if next.is_empty() || next.starts_with(b";") {
+                    while output.last().is_some_and(u8::is_ascii_whitespace) {
+                        output.pop();
+                    }
+                }
+                copied = i.len() - next.len();
+                remaining = next;
+                continue;
+            }
+        }
+        let (next, token) = mysql_sql_token(remaining)?;
+        match token {
+            SqlToken::Text(b"(") => depth += 1,
+            SqlToken::Text(b")") if depth > 0 => {
+                depth -= 1;
+                definition_finished |= depth == 0;
+            }
+            SqlToken::Text(token)
+                if depth == 0
+                    && (token.eq_ignore_ascii_case(b"AS")
+                        || token.eq_ignore_ascii_case(b"SELECT")) =>
+            {
+                break;
+            }
+            _ => {}
+        }
+        remaining = next;
+    }
+    output.extend_from_slice(&i[copied..]);
+    let mut output = to_string(&output);
+    output.truncate(output.trim_end().len());
+    Ok((&i[i.len()..], output))
+}
+
+// Assumes standard_conforming_strings=on; E strings retain backslash escapes.
+fn pg_sql_token(i: &[u8]) -> IResult<&[u8], SqlToken<'_>> {
+    if i.starts_with(b"--") {
+        return map(
+            take_till(|byte| byte == b'\n' || byte == b'\r'),
+            SqlToken::Comment,
+        )(i);
+    }
+    if i.starts_with(b"/*") {
+        let mut depth = 1usize;
+        let mut index = 2;
+        while index < i.len() {
+            if i[index..].starts_with(b"/*") {
+                depth += 1;
+                index += 2;
+            } else if i[index..].starts_with(b"*/") {
+                depth -= 1;
+                index += 2;
+                if depth == 0 {
+                    return Ok((&i[index..], SqlToken::Comment(&i[..index])));
+                }
+            } else {
+                index += 1;
+            }
+        }
+        return Err(nom::Err::Failure(nom::error::Error::new(
+            i,
+            nom::error::ErrorKind::TakeUntil,
+        )));
+    }
+    if i.starts_with(b"E'") || i.starts_with(b"e'") {
+        let (mut remaining, _) = recognize(pair(take(1usize), mysql_sql_token))(i)?;
+        // Newline continuations retain E-string escapes, including across line comments.
+        loop {
+            let mut next = remaining;
+            let mut newline = false;
+            loop {
+                let (rest, whitespace) =
+                    take_till(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | 0x0c))(next)?;
+                newline |= whitespace.contains(&b'\r') || whitespace.contains(&b'\n');
+                next = rest;
+                if !next.starts_with(b"--") {
+                    break;
+                }
+                next = take_till(|byte| byte == b'\r' || byte == b'\n')(next)?.0;
+            }
+            if !newline || !next.starts_with(b"'") {
+                break;
+            }
+            remaining = mysql_sql_token(next)?.0;
+        }
+        return Ok((remaining, SqlToken::Text(&i[..i.len() - remaining.len()])));
+    }
+    if let Some(&quote @ (b'\'' | b'"')) = i.first() {
+        return map(
+            |i| recognize_doubled_delimited_identifier(i, quote, quote),
+            SqlToken::Text,
+        )(i);
+    }
+    if i.starts_with(b"$") {
+        let tag_end = i[1..]
+            .iter()
+            .position(|&byte| !(is_sql_identifier(byte) || byte >= 0x80));
+        if let Some(end) = tag_end {
+            if i[end + 1] == b'$' && (end == 0 || !i[1].is_ascii_digit()) {
+                let delimiter = &i[..end + 2];
+                return map(
+                    recognize(tuple((
+                        tag(delimiter),
+                        take_until(delimiter),
+                        tag(delimiter),
+                    ))),
+                    SqlToken::Text,
+                )(i);
+            }
+        }
+    }
+    map(
+        alt((
+            take_while1(|byte| is_sql_identifier(byte) || byte == b'$' || byte >= 0x80),
+            take(1usize),
+        )),
+        SqlToken::Text,
+    )(i)
+}
+
 #[inline]
 fn is_sql_identifier(chr: u8) -> bool {
     is_alphanumeric(chr) || chr == b'_'
@@ -1303,6 +1532,60 @@ mod test_mysql {
 
     use super::*;
     use crate::{config::config_enums::DbType, meta::ddl_meta::ddl_parser::DdlParser};
+
+    #[test]
+    fn preserves_backslashes_in_backtick_identifiers() {
+        let parser = DdlParser::new(DbType::Mysql);
+        for (sql, expected) in [
+            (
+                r#"ALTER TABLE t ADD COLUMN `a\` INT"#,
+                r#"ALTER TABLE `t` ADD COLUMN `a\` INT"#,
+            ),
+            (
+                r#"ALTER TABLE t ADD COLUMN `a\``b/* literal */--#` INT /* removed */"#,
+                r#"ALTER TABLE `t` ADD COLUMN `a\``b/* literal */--#` INT"#,
+            ),
+            (
+                r#"CREATE TABLE `a\` (id INT)"#,
+                r#"CREATE TABLE `a\` (id INT)"#,
+            ),
+            (
+                r#"CREATE TABLE t (`a\` INT) START TRANSACTION"#,
+                r#"CREATE TABLE `t` (`a\` INT)"#,
+            ),
+        ] {
+            assert_eq!(
+                parser.parse(sql).unwrap().unwrap().to_sql(),
+                expected,
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_mysql_line_comments_after_control_characters() {
+        let parser = DdlParser::new(DbType::Mysql);
+        for byte in (1u8..=b' ').chain(std::iter::once(0x7f)) {
+            // CR and LF terminate a line comment, so its body must not follow them.
+            if matches!(byte, b'\r' | b'\n') {
+                continue;
+            }
+            let sql = format!(
+                "ALTER TABLE t ADD COLUMN v INT --{} 'comment /* fake */\r\n",
+                char::from(byte)
+            );
+            assert_eq!(
+                parser.remove_comments(&sql).unwrap(),
+                "ALTER TABLE t ADD COLUMN v INT  \r\n",
+                "byte: {byte}"
+            );
+            assert_eq!(
+                parser.parse(&sql).unwrap().unwrap().to_sql(),
+                "ALTER TABLE `t` ADD COLUMN v INT",
+                "byte: {byte}"
+            );
+        }
+    }
 
     #[test]
     fn test_create_table_with_schema_mysql() {
@@ -1917,14 +2200,215 @@ mod test_mysql {
             assert_eq!(r.to_sql(), expect_sqls[i]);
         }
     }
+
+    #[test]
+    fn normalizes_start_transaction_table_options() {
+        for (tail, expected) in [
+            ("(id INT) START TRANSACTION", "(id INT)"),
+            ("(id INT) start\ntransaction;", "(id INT);"),
+            (
+                "(id INT) START TRANSACTION ENGINE=InnoDB",
+                "(id INT) ENGINE=InnoDB",
+            ),
+            (
+                "(id INT) ENGINE=InnoDB START TRANSACTION",
+                "(id INT) ENGINE=InnoDB",
+            ),
+            (
+                "(note TEXT DEFAULT 'START TRANSACTION')",
+                "(note TEXT DEFAULT 'START TRANSACTION')",
+            ),
+            (
+                "(id INT) COMMENT='START TRANSACTION'",
+                "(id INT) COMMENT='START TRANSACTION'",
+            ),
+            (
+                "(id INT) AS SELECT start transaction FROM source",
+                "(id INT) AS SELECT start transaction FROM source",
+            ),
+        ] {
+            let (_, actual) = mysql_create_table_tail(tail.as_bytes()).unwrap();
+            assert_eq!(actual, expected, "{tail}");
+        }
+    }
+
+    #[test]
+    fn removes_only_the_internal_table_option() {
+        let parser = DdlParser::new(DbType::Mysql);
+        for (sql, expected) in [
+            (
+                "CREATE TABLE t (id INT) START TRANSACTION",
+                "CREATE TABLE `t` (id INT)",
+            ),
+            (
+                "CREATE TABLE t (id INT) start\ntransaction;",
+                "CREATE TABLE `t` (id INT);",
+            ),
+            (
+                "CREATE TABLE t (id INT) START TRANSACTION ENGINE=InnoDB",
+                "CREATE TABLE `t` (id INT) ENGINE=InnoDB",
+            ),
+            (
+                "CREATE TABLE t (id INT) ENGINE=InnoDB START TRANSACTION",
+                "CREATE TABLE `t` (id INT) ENGINE=InnoDB",
+            ),
+            (
+                "CREATE/* header */TABLE t (id INT) START/* gap */TRANSACTION /* tail */",
+                "CREATE TABLE `t` (id INT)",
+            ),
+            (
+                "CREATE TABLE t (id INT) START TRANSACTION -- tail START TRANSACTION",
+                "CREATE TABLE `t` (id INT)",
+            ),
+            (
+                "CREATE TABLE t (id INT) START TRANSACTION # tail START TRANSACTION\n",
+                "CREATE TABLE `t` (id INT)",
+            ),
+            (
+                "CREATE TABLE t (id INT DEFAULT (1)) START TRANSACTION",
+                "CREATE TABLE `t` (id INT DEFAULT (1))",
+            ),
+        ] {
+            let ddl = parser.parse(sql).unwrap().unwrap();
+            assert_eq!(ddl.to_sql(), expected, "{sql}");
+        }
+    }
+
+    #[test]
+    fn preserves_literals_identifiers_and_select_queries() {
+        let parser = DdlParser::new(DbType::Mysql);
+        for tail in [
+            "(id INT) COMMENT='START TRANSACTION'",
+            "(`START TRANSACTION` INT, note TEXT DEFAULT '/* START TRANSACTION */')",
+            "(id INT, note TEXT COMMENT 'keep -- START TRANSACTION') COMMENT='keep # START TRANSACTION'",
+            "(id INT, note TEXT DEFAULT 'literal ''START TRANSACTION''')",
+            r#"(id INT, note TEXT COMMENT 'escaped \' START TRANSACTION')"#,
+            "(id INT, note TEXT DEFAULT \"START TRANSACTION\")",
+            "(id INT) START TRANSACTIONAL",
+            "(id INT) AS SELECT start transaction FROM source",
+            "AS SELECT start transaction FROM source",
+        ] {
+            let sql = format!("CREATE TABLE t {tail}");
+            let ddl = parser.parse(&sql).unwrap().unwrap();
+            assert_eq!(ddl.to_sql(), format!("CREATE TABLE `t` {tail}"));
+        }
+        let sql = "CREATE TABLE t (id INT, note TEXT DEFAULT '/* START TRANSACTION */' COMMENT 'keep -- START TRANSACTION') START TRANSACTION COMMENT='table ''START TRANSACTION'''";
+        let ddl = parser.parse(sql).unwrap().unwrap();
+        assert_eq!(ddl.to_sql(), "CREATE TABLE `t` (id INT, note TEXT DEFAULT '/* START TRANSACTION */' COMMENT 'keep -- START TRANSACTION') COMMENT='table ''START TRANSACTION'''");
+    }
+
+    #[test]
+    fn preserves_original_text_with_unicode_and_line_endings() {
+        let parser = DdlParser::new(DbType::Mysql);
+        let sql = "CREATE TABLE `中文表` (\r\n  note TEXT DEFAULT '中文\r\n/* literal */' COMMENT 'it''s # text'\r\n) ENGINE=InnoDB";
+        assert_eq!(parser.remove_comments(sql).unwrap(), sql);
+        let commented = format!("{sql} START\tTRANSACTION --\t尾部注释\r\n");
+        let ddl = DdlParser::new(DbType::Mysql)
+            .parse(&commented)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ddl.to_sql(), sql);
+        assert_eq!(
+            parser.remove_comments("SELECT 1--2 # comment\r\n").unwrap(),
+            "SELECT 1--2  \r\n"
+        );
+    }
+
+    #[test]
+    fn distinguishes_comments_from_operators_and_rejects_unclosed_quotes() {
+        let parser = DdlParser::new(DbType::Mysql);
+        assert_eq!(
+            parser.remove_comments("SELECT 1--2 # comment\n").unwrap(),
+            "SELECT 1--2  \n"
+        );
+        for sql in [
+            "CREATE TABLE t (note TEXT DEFAULT 'unfinished)",
+            "CREATE TABLE t (id INT) /* unfinished",
+        ] {
+            assert!(parser.parse(sql).is_err(), "{sql}");
+        }
+    }
 }
 
 #[cfg(test)]
 mod test_pg {
+    use std::borrow::Cow;
+
     use crate::{
         config::config_enums::DbType,
         meta::ddl_meta::{ddl_parser::DdlParser, ddl_type::DdlType},
     };
+
+    #[test]
+    fn preserves_quoted_comment_markers() {
+        let parser = DdlParser::new(DbType::Pg);
+        for definition in [
+            "(note text DEFAULT 'it''s /* literal */ -- # text')",
+            r#"("note""/*--#" text DEFAULT 'C:\')"#,
+            r#"(note text DEFAULT E'it\'s /* literal */ -- # text')"#,
+            "(note text DEFAULT E'first '\n-- continuation\n'it\\'s /* literal */ -- # text')",
+            "(note text DEFAULT $$it's /* literal */ -- #; $inner$nested$inner$ $$)",
+            "(note text DEFAULT $Tag_1$/* literal */ -- $$ $tag_1$$Tag_1$)",
+            "(note text DEFAULT $中文$/* 中文 */ -- #$中文$)",
+            "(note$tag$ text DEFAULT U&'\\4E2D /* literal */ -- #')",
+        ] {
+            let sql = format!("CREATE TABLE t {definition}");
+            assert!(matches!(
+                parser.remove_comments(&sql).unwrap(),
+                Cow::Borrowed(_)
+            ));
+            let ddl = parser.parse(&sql).unwrap().unwrap();
+            assert_eq!(ddl.to_sql(), format!("CREATE TABLE \"t\" {definition}"));
+        }
+    }
+
+    #[test]
+    fn removes_nested_and_line_comments() {
+        let parser = DdlParser::new(DbType::Pg);
+        for (sql, expected) in [
+            (
+                "CREATE/* outer /* inner */ tail */TABLE t (id int)",
+                "CREATE TABLE t (id int)",
+            ),
+            ("SELECT 8 # 3--no space\r\n", "SELECT 8 # 3 \r\n"),
+            ("SELECT $1 /* comment */", "SELECT $1  "),
+            ("SELECT foo$tag$ /* comment */", "SELECT foo$tag$  "),
+            ("SELECT E'first' -- removed\r\n;", "SELECT E'first'  \r\n;"),
+            (
+                "SELECT '中文\r\n/* literal */' /* outer /* 内层 */ tail */\r\n",
+                "SELECT '中文\r\n/* literal */'  \r\n",
+            ),
+        ] {
+            assert_eq!(parser.remove_comments(sql).unwrap(), expected, "{sql}");
+        }
+        let ddl = parser
+            .parse("CREATE/* outer /* inner */ tail */TABLE t (id int)--tail")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ddl.to_sql().trim_end(), "CREATE TABLE \"t\" (id int)");
+        assert_eq!(
+            DdlParser::new(DbType::Mssql)
+                .remove_comments("CREATE/* comment */TABLE t (id int)")
+                .unwrap(),
+            "CREATETABLE t (id int)"
+        );
+    }
+
+    #[test]
+    fn rejects_unclosed_quotes_and_nested_comments() {
+        let parser = DdlParser::new(DbType::Pg);
+        for tail in [
+            "'unfinished",
+            "\"unfinished",
+            "E'unfinished\\'",
+            "$$unfinished",
+            "$tag$unfinished$TAG$",
+            "/* outer /* inner */",
+        ] {
+            let sql = format!("CREATE TABLE t (note text DEFAULT {tail}");
+            assert!(parser.parse(&sql).is_err(), "{sql}");
+        }
+    }
 
     #[test]
     fn test_create_table_multi_lines_pg() {

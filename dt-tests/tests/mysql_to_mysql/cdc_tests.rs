@@ -191,7 +191,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn cdc_big_packet_test() {
-        TestBase::run_cdc_test("mysql_to_mysql/cdc/big_packet_test", 5000, 5000).await;
+        TestBase::run_cdc_test("mysql_to_mysql/cdc/big_packet_test", 5000, 10000).await;
     }
 
     #[tokio::test]

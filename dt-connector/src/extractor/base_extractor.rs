@@ -188,6 +188,17 @@ impl BaseExtractor {
         ddl_data: DdlData,
         position: Position,
     ) -> anyhow::Result<()> {
+        self.push_ddl_with_commit_position(state, ddl_data, position, None)
+            .await
+    }
+
+    pub async fn push_ddl_with_commit_position(
+        &self,
+        state: &mut ExtractState,
+        ddl_data: DdlData,
+        position: Position,
+        commit_position: Option<&Position>,
+    ) -> anyhow::Result<()> {
         let ddl_data = if let Some(router) = &self.router {
             router.route_ddl(ddl_data)?
         } else {
@@ -201,8 +212,15 @@ impl BaseExtractor {
             )
             .await;
         }
-        self.push_dt_data(state, DtData::Ddl { ddl_data }, position)
-            .await
+        self.push_dt_data(
+            state,
+            DtData::Ddl {
+                ddl_data,
+                commit_position: commit_position.map(|position| Box::new(position.clone())),
+            },
+            position,
+        )
+        .await
     }
 
     pub async fn push_dcl(
