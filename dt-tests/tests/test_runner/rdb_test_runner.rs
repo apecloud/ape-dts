@@ -3,6 +3,7 @@ use std::{
     str::FromStr,
 };
 
+use anyhow::{bail, ensure};
 use chrono::{Duration, Utc};
 use dt_common::{
     config::{
@@ -28,7 +29,7 @@ use dt_connector::{
 };
 use dt_task::{task_runner::TaskRunner, task_util::TaskUtil};
 
-use sqlx::{query, types::BigDecimal, MySql, Pool, Postgres, Row};
+use sqlx::{query, query_scalar, types::BigDecimal, MySql, Pool, Postgres, Row};
 use tokio::{sync::Semaphore, task::JoinHandle};
 
 use crate::{
@@ -38,7 +39,10 @@ use crate::{
     },
 };
 
-use super::{base_test_runner::BaseTestRunner, rdb_util::RdbUtil};
+use super::{
+    base_test_runner::{BaseTestRunner, SqlLoadStrategy},
+    rdb_util::RdbUtil,
+};
 
 #[derive(Clone)]
 pub struct RdbTestRunner {
@@ -581,6 +585,7 @@ impl RdbTestRunner {
         let task = self.spawn_cdc_task(start_millis, parse_millis).await?;
 
         self.execute_test_sqls_and_compare(parse_millis).await?;
+        self.execute_extra_sqls_and_assert(parse_millis).await?;
 
         self.base.wait_task_finish(&task).await
     }
@@ -658,9 +663,36 @@ impl RdbTestRunner {
         // parse_millis * 2 for: time to parse binlog + time to compare data
         (!src_insert_sqls.is_empty() as u64
             + !src_update_sqls.is_empty() as u64
-            + !src_delete_sqls.is_empty() as u64)
+            + !src_delete_sqls.is_empty() as u64
+            + BaseTestRunner::check_path_exists(&format!("{}/src_extra.sql", self.base.test_dir))
+                as u64)
             * parse_millis
             * 2
+    }
+
+    async fn execute_extra_sqls_and_assert(&self, parse_millis: u64) -> anyhow::Result<()> {
+        let file = format!("{}/src_extra.sql", self.base.test_dir);
+        if !BaseTestRunner::check_path_exists(&file) {
+            return Ok(());
+        }
+        let sqls = BaseTestRunner::load_sql_file(&file, SqlLoadStrategy::Semicolon);
+        self.execute_src_sqls(&sqls).await?;
+        TimeUtil::sleep_millis(parse_millis).await;
+
+        let file = format!("{}/dst_assert.sql", self.base.test_dir);
+        let sqls = BaseTestRunner::load_sql_file(&file, SqlLoadStrategy::Semicolon);
+        ensure!(!sqls.is_empty(), "empty assertions: {file}");
+        for sql in sqls {
+            let result: String = if let Some(pool) = &self.dst_conn_pool_mysql {
+                query_scalar(&sql).fetch_one(pool).await?
+            } else if let Some(pool) = &self.dst_conn_pool_pg {
+                query_scalar(&sql).fetch_one(pool).await?
+            } else {
+                bail!("SQL assertions require a MySQL or PostgreSQL destination");
+            };
+            ensure!(result == "ok", "{file}: {sql}\nactual: {result}");
+        }
+        Ok(())
     }
 
     pub async fn execute_test_sqls_and_compare(&self, parse_millis: u64) -> anyhow::Result<()> {

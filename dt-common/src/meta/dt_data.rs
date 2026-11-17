@@ -42,6 +42,8 @@ pub enum DtData {
     },
     Ddl {
         ddl_data: DdlData,
+        #[serde(skip)]
+        commit_position: Option<Box<Position>>,
     },
     Dcl {
         dcl_data: DclData,
@@ -81,7 +83,7 @@ impl DtData {
         match &self {
             DtData::Dml { row_data } => row_data.data_size as u64,
             DtData::Dcl { dcl_data } => dcl_data.get_malloc_size(),
-            DtData::Ddl { ddl_data } => ddl_data.get_malloc_size(),
+            DtData::Ddl { ddl_data, .. } => ddl_data.get_malloc_size(),
             DtData::Redis { entry } => entry.get_data_malloc_size() as u64,
             // ignore other item types
             _ => 0,
@@ -99,5 +101,35 @@ impl DtData {
 impl std::fmt::Display for DtData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", json!(self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ddl_checkpoint_metadata_preserves_the_serialized_format() {
+        let legacy = json!({"Ddl": {"ddl_data": DdlData::default()}});
+        let decoded: DtData = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(matches!(
+            decoded,
+            DtData::Ddl {
+                commit_position: None,
+                ..
+            }
+        ));
+
+        let ddl = DtData::Ddl {
+            ddl_data: DdlData::default(),
+            commit_position: Some(Box::new(Position::MysqlCdc {
+                server_id: "1".into(),
+                binlog_filename: "mysql-bin.000001".into(),
+                next_event_position: 1000,
+                gtid_set: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1-100".into(),
+                timestamp: Position::format_timestamp_millis(1000),
+            })),
+        };
+        assert_eq!(serde_json::to_value(ddl).unwrap(), legacy);
     }
 }
