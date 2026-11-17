@@ -31,11 +31,13 @@ Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible
 - [[619]](https://github.com/apecloud/ape-dts/pull/619) - treat MySQL/PostgreSQL tables without a primary key as unkeyed when any unique index contains expressions; preserve DML order in `rdb_merge`
   - Requires `binlog_row_image=FULL` (MySQL) or `REPLICA IDENTITY FULL` (PostgreSQL) for CDC. Restart snapshots whose old checkpoints used incomplete expression-index keys. Unkeyed processing may reduce throughput.
 - [[621]](https://github.com/apecloud/ape-dts/pull/621) - report contextual errors instead of panicking on empty MySQL/PostgreSQL column metadata
+- [[634]](https://github.com/apecloud/ape-dts/pull/634) - fix MySQL/PostgreSQL DDL comment filtering to preserve quoted literals and identifiers and correctly handle PostgreSQL dollar quoting and nested block comments
 
 #### MySQL
 
 - [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve expression index key parts during structure migration
 - [[619]](https://github.com/apecloud/ape-dts/pull/619) - keep the configured sinker isolation level effective across transactions on reused connections
+- [[634]](https://github.com/apecloud/ape-dts/pull/634) - fix CDC replication of `CREATE TABLE ... AS SELECT` by removing the internal `START TRANSACTION` table option and deferring transactional DDL checkpoint advancement until commit
 
 #### PostgreSQL
 

@@ -217,6 +217,7 @@ impl AvroConverter {
                     ddl_type: DdlType::from_str(&ddl_type)?,
                     ..Default::default()
                 },
+                commit_position: None,
             })
         } else {
             let _fields = self.avro_to_fields(avro_map.remove(FIELDS));
@@ -489,6 +490,7 @@ mod tests {
         let dt_data = avro_converter.avro_value_to_dt_data(payload).unwrap();
         if let DtData::Ddl {
             ddl_data: decoded_ddl_data,
+            ..
         } = dt_data
         {
             assert_eq!(ddl_data.to_owned(), decoded_ddl_data)
