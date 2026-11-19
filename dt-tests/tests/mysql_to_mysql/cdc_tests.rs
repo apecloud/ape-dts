@@ -205,4 +205,10 @@ mod test {
     async fn cdc_rules_router_test() {
         TestBase::run_cdc_test("mysql_to_mysql/cdc/rules_router_test", 3000, 5000).await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn cdc_deadlock_test() {
+        TestBase::run_cdc_test("mysql_to_mysql/cdc/deadlock_test", 3000, 10000).await;
+    }
 }
