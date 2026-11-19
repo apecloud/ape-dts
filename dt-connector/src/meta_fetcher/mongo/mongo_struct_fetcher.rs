@@ -43,10 +43,11 @@ impl MongoStructFetcher {
 
     pub async fn get_create_collection_statements(
         &self,
+        with_indexs: bool,
     ) -> anyhow::Result<Vec<MongoCreateCollectionStatement>> {
         let mut statements = Vec::new();
         for db in &self.dbs {
-            let collections = self.get_collections(db).await?;
+            let collections = self.get_collections(db, with_indexs).await?;
             statements.extend(collections);
         }
         Ok(statements)
@@ -55,6 +56,7 @@ impl MongoStructFetcher {
     async fn get_collections(
         &self,
         db: &str,
+        with_indexes: bool,
     ) -> anyhow::Result<Vec<MongoCreateCollectionStatement>> {
         let collections = self
             .run_cursor_command(
@@ -82,9 +84,13 @@ impl MongoStructFetcher {
 
             let options = collection_doc
                 .get_document("options")
-                .cloned()
-                .unwrap_or_default();
-            let indexes = self.get_indexes(db, name).await?;
+                .context("MongoDB listCollections result missing options")?
+                .clone();
+            let indexes = if with_indexes {
+                self.get_indexes(db, name).await?
+            } else {
+                Vec::default()
+            };
             statements.push(MongoCreateCollectionStatement {
                 database_name: db.to_string(),
                 collection_name: name.to_string(),
@@ -147,7 +153,7 @@ impl MongoStructFetcher {
 
             for item in batch {
                 let Bson::Document(document) = item else {
-                    continue;
+                    anyhow::bail!("MongoDB metadata cursor batch contains a non-document value");
                 };
                 results.push(document.clone());
             }
