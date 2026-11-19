@@ -60,7 +60,12 @@ impl MongoStructExtractor {
         };
 
         if !self.filter.filter_structure(&StructureType::Collection) {
-            for statement in fetcher.get_create_collection_statements().await? {
+            for statement in fetcher
+                .get_create_collection_statements(
+                    !self.filter.filter_structure(&StructureType::Index),
+                )
+                .await?
+            {
                 self.push_dt_data(StructStatement::MongoCreateCollection(statement))
                     .await?;
             }
