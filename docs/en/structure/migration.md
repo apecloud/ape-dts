@@ -74,7 +74,8 @@ do_structures=collection,shardkey
 ```
 
 MongoDB does not use a separate `database` structure type. `collection` creates selected
-collections and copies collection options, `shardkey` copies source
+collections and copies collection options. Use `collection,index` to also migrate
+secondary indexes, or `*` to select all structure types. `shardkey` copies source
 sharding definitions. For sharded targets, connect through `mongos`; DTS runs `enableSharding`
 before `shardCollection` when needed. If the target is not `mongos`, shard key statements are
 ignored.

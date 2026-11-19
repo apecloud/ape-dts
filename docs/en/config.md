@@ -78,14 +78,14 @@ task SSL settings override URL, ADO.NET and JDBC encryption/trust settings.
 This matrix describes the five engines covered by these TLS settings on this branch.
 The driver-specific limits for `verify_ca` are described above.
 
-| Engine     | ssl_mode                                         | struct | snapshot | CDC                              | checker |
-| ---------- | ------------------------------------------------ | ------ | -------- | -------------------------------- | ------- |
-| MySQL      | `disable`, `require`                             | Yes    | Yes      | Yes                              | Yes     |
-| MySQL      | `verify_ca`, `verify_full`                       | Yes    | Yes      | No (binlog driver limitation)    | Yes     |
-| PostgreSQL | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes     |
+| Engine     | ssl_mode                                         | struct | snapshot | CDC                              | checker        |
+| ---------- | ------------------------------------------------ | ------ | -------- | -------------------------------- | -------------- |
+| MySQL      | `disable`, `require`                             | Yes    | Yes      | Yes                              | Yes            |
+| MySQL      | `verify_ca`, `verify_full`                       | Yes    | Yes      | No (binlog driver limitation)    | Yes            |
+| PostgreSQL | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes            |
 | MSSQL      | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | No                               | Structure only |
-| Redis      | `disable`, `require`, `verify_ca`, `verify_full` | No     | Yes      | Yes (including snapshot-and-CDC) | No      |
-| MongoDB    | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes     |
+| Redis      | `disable`, `require`, `verify_ca`, `verify_full` | No     | Yes      | Yes (including snapshot-and-CDC) | No             |
+| MongoDB    | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes            |
 
 TLS tests and fixtures share `dt-tests/tests/tls/`, with sibling engine/topology/version
 directories (for example, `mongo_shard` and `redis_cluster_6_2`). Each directory groups
@@ -218,7 +218,7 @@ Notes:
   row/change and applies deterministic key-hash sampling before target fetch.
 - Standalone snapshot check supports MySQL, PostgreSQL, and MongoDB targets. Standalone struct check
   supports MySQL and PostgreSQL.
-- Inline snapshot check supports MySQL, PostgreSQL, and MongoDB write targets.
+- Inline snapshot check supports MySQL, PostgreSQL and MongoDB write targets.
 - `recheck_count` and `recheck_interval_secs` are not used by inline CDC reconciliation.
 - When either retry-buffer limit is reached, the checker does not drop the result; newly found
   inconsistencies skip retry and are finalized immediately.

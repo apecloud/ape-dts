@@ -134,6 +134,32 @@ impl StructKey {
         self.key_type.is_table_scoped()
     }
 
+    pub fn parent_table_key(&self) -> Option<Self> {
+        let parent = match (&self.db_type, self.key_type) {
+            (
+                DbType::Mysql | DbType::Pg | DbType::Mssql,
+                StructKeyType::Index
+                | StructKeyType::Constraint
+                | StructKeyType::SequenceOwner
+                | StructKeyType::ColumnComment
+                | StructKeyType::TableComment,
+            ) => StructKeyType::Table,
+            _ => return None,
+        };
+        if matches!(self.db_type, DbType::Mssql) {
+            return Some(Self::new(
+                DbType::Mssql,
+                parent,
+                [self.database()?, self.schema(), self.table()],
+            ));
+        }
+        Some(Self::new(
+            self.db_type.clone(),
+            parent,
+            [self.schema(), self.table()],
+        ))
+    }
+
     pub fn is_sequence(&self) -> bool {
         matches!(
             self.key_type,

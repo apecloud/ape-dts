@@ -73,7 +73,8 @@ do_structures=collection,shardkey
 ```
 
 MongoDB 不使用独立的 `database` 结构类型。`collection` 会创建选中的 collection 并同步
-collection options，`shardkey` 会同步源端 sharded collection 的分片定义。
+collection options。需要迁移二级索引时使用 `collection,index`，选择全部结构类型时使用
+`*`。`shardkey` 会同步源端 sharded collection 的分片定义。
 如果目标端是 sharded cluster，应通过 `mongos` 连接；DTS 会在需要时先执行 `enableSharding`，
 再执行 `shardCollection`。如果目标端不是 `mongos`，shardkey 语句会被忽略。
 

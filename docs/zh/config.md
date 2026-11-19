@@ -74,14 +74,14 @@ URL、ADO.NET、JDBC 中的加密和证书信任选项。
 
 下表描述当前分支中本次涉及的五个引擎；`verify_ca` 的驱动限制见上文。
 
-| 引擎       | ssl_mode                                         | struct | snapshot | CDC                         | checker |
-| ---------- | ------------------------------------------------ | ------ | -------- | --------------------------- | ------- |
-| MySQL      | `disable`、`require`                             | 支持   | 支持     | 支持                        | 支持    |
-| MySQL      | `verify_ca`、`verify_full`                       | 支持   | 支持     | 不支持（binlog 驱动限制）   | 支持    |
-| PostgreSQL | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持    |
+| 引擎       | ssl_mode                                         | struct | snapshot | CDC                         | checker    |
+| ---------- | ------------------------------------------------ | ------ | -------- | --------------------------- | ---------- |
+| MySQL      | `disable`、`require`                             | 支持   | 支持     | 支持                        | 支持       |
+| MySQL      | `verify_ca`、`verify_full`                       | 支持   | 支持     | 不支持（binlog 驱动限制）   | 支持       |
+| PostgreSQL | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持       |
 | MSSQL      | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 不支持                      | 仅结构校验 |
-| Redis      | `disable`、`require`、`verify_ca`、`verify_full` | 不支持 | 支持     | 支持（含 snapshot-and-CDC） | 不支持  |
-| MongoDB    | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持    |
+| Redis      | `disable`、`require`、`verify_ca`、`verify_full` | 不支持 | 支持     | 支持（含 snapshot-and-CDC） | 不支持     |
+| MongoDB    | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持       |
 
 TLS 测试和 fixture 统一放在 `dt-tests/tests/tls/`，引擎、架构和版本目录同级排列
 （如 `mongo_shard`、`redis_cluster_6_2`），目录内按任务类型组织 fixture；公共测试 harness

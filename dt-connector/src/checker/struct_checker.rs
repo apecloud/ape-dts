@@ -416,6 +416,14 @@ impl StructCheckerHandle {
         )
     }
 
+    fn source_contains_parent_table(
+        src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
+        key: &StructKey,
+    ) -> bool {
+        key.parent_table_key()
+            .is_some_and(|parent_key| src_sql_map.contains_key(&parent_key))
+    }
+
     fn compare_sql_maps(
         src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
         mut dst_map: BTreeMap<StructKey, String>,
@@ -472,6 +480,10 @@ impl StructCheckerHandle {
         }
 
         for (key, dst_sql) in dst_map {
+            if !Self::source_contains_parent_table(src_sql_map, &key) {
+                continue;
+            }
+
             summary.diff_count += 1;
             let target_key = StructCheckKey::new("", key);
             let source_key = Self::source_key_from_target(&target_key, router)?;
