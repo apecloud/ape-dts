@@ -41,6 +41,13 @@ pub async fn is_mongos(client: &Client) -> anyhow::Result<bool> {
 pub async fn list_shard_collections(
     client: &Client,
 ) -> anyhow::Result<(bool, HashMap<String, MongoShardCollection>)> {
+    list_shard_collections_in_namespaces(client, None).await
+}
+
+pub async fn list_shard_collections_in_namespaces(
+    client: &Client,
+    namespaces: Option<&[String]>,
+) -> anyhow::Result<(bool, HashMap<String, MongoShardCollection>)> {
     if !is_mongos(client).await? {
         return Ok((false, HashMap::new()));
     }
@@ -48,28 +55,38 @@ pub async fn list_shard_collections(
     let collection = client
         .database("config")
         .collection::<Document>("collections");
-    let mut cursor = collection.find(doc! { "dropped": { "$ne": true } }).await?;
+    let batches: Vec<_> = match namespaces {
+        Some(names) => names.chunks(1000).map(Some).collect(),
+        None => vec![None],
+    };
 
     let mut result = HashMap::new();
-    while let Some(doc) = cursor.try_next().await? {
-        let Some(Bson::String(ns)) = doc.get("_id") else {
-            continue;
-        };
-        let Some(Bson::Document(key)) = doc.get("key") else {
-            continue;
-        };
-        if key.is_empty() {
-            continue;
+    for batch in batches {
+        let mut filter = doc! { "dropped": { "$ne": true } };
+        if let Some(names) = batch {
+            filter.insert("_id", doc! { "$in": names.to_vec() });
         }
-        let unique = doc.get_bool("unique").unwrap_or(false);
-        result.insert(
-            ns.clone(),
-            MongoShardCollection {
-                ns: ns.clone(),
-                key: key.clone(),
-                unique,
-            },
-        );
+        let mut cursor = collection.find(filter).await?;
+        while let Some(doc) = cursor.try_next().await? {
+            let Some(Bson::String(ns)) = doc.get("_id") else {
+                continue;
+            };
+            let Some(Bson::Document(key)) = doc.get("key") else {
+                continue;
+            };
+            if key.is_empty() {
+                continue;
+            }
+            let unique = doc.get_bool("unique").unwrap_or(false);
+            result.insert(
+                ns.clone(),
+                MongoShardCollection {
+                    ns: ns.clone(),
+                    key: key.clone(),
+                    unique,
+                },
+            );
+        }
     }
     Ok((true, result))
 }

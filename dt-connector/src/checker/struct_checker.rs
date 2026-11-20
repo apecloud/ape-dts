@@ -28,6 +28,7 @@ use dt_common::{
         task_monitor_handle::TaskMonitorHandle,
     },
 };
+use mongodb::Client;
 use sqlx::{MySql, Pool, Postgres};
 use tokio::time::sleep;
 
@@ -36,6 +37,7 @@ use crate::{
         to_json_line, CheckSummaryLog, CheckTableSummaryLog, StructCheckKey, StructCheckLog,
     },
     meta_fetcher::{
+        mongo::mongo_struct_fetcher::MongoStructFetcher,
         mssql::mssql_struct_fetcher::MssqlStructFetcher,
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
@@ -47,6 +49,7 @@ pub struct StructCheckerHandle {
     conn_pool_mysql: Option<Pool<MySql>>,
     conn_pool_pg: Option<Pool<Postgres>>,
     conn_pool_mssql: Option<MssqlConnectionPool>,
+    mongo_client: Option<Client>,
     filter: DtFilter,
     router: Option<DtRouter>,
     output_revise_sql: bool,
@@ -128,6 +131,7 @@ impl StructCheckerHandle {
             conn_pool_mysql,
             conn_pool_pg,
             conn_pool_mssql,
+            mongo_client: None,
             filter,
             router,
             output_revise_sql,
@@ -142,24 +146,41 @@ impl StructCheckerHandle {
         }
     }
 
+    pub fn with_mongo_client(mut self, client: Client) -> Self {
+        self.mongo_client = Some(client);
+        self
+    }
+
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
         let source_db = struct_data.db.clone();
-        let mut source_statement = struct_data.statement.clone();
-        let source_sqls = source_statement.to_sqls(&self.filter)?;
-        let routed = if let Some(router) = &self.router {
-            router.route_struct(struct_data)?
+        let (source_keys, target_db, target_sqls) = if self.db_type == DbType::Mongo {
+            let mut statement = struct_data.statement;
+            let target_sqls = statement.to_sqls(&self.filter)?;
+            let source_keys = target_sqls
+                .iter()
+                .map(|(key, _)| key.with_location("", &struct_data.schema, &struct_data.tb))
+                .collect::<Vec<_>>();
+            (source_keys, struct_data.db, target_sqls)
         } else {
-            struct_data
+            let mut source_statement = struct_data.statement.clone();
+            let source_sqls = source_statement.to_sqls(&self.filter)?;
+            let routed = if let Some(router) = &self.router {
+                router.route_struct(struct_data)?
+            } else {
+                struct_data
+            };
+            let target_db = routed.db.clone();
+            let mut statement = routed.statement;
+            let target_sqls = statement.to_sqls(&self.filter)?;
+            ensure!(
+                source_sqls.len() == target_sqls.len(),
+                "source and routed structure SQL counts differ: source={}, target={}",
+                source_sqls.len(),
+                target_sqls.len()
+            );
+            let source_keys = source_sqls.into_iter().map(|(key, _)| key).collect();
+            (source_keys, target_db, target_sqls)
         };
-        let target_db = routed.db.clone();
-        let mut statement = routed.statement;
-        let target_sqls = statement.to_sqls(&self.filter)?;
-        ensure!(
-            source_sqls.len() == target_sqls.len(),
-            "source and routed structure SQL counts differ: source={}, target={}",
-            source_sqls.len(),
-            target_sqls.len()
-        );
         if !target_sqls.is_empty() {
             self.monitor
                 .add_counter(
@@ -170,7 +191,7 @@ impl StructCheckerHandle {
                 .await;
         }
 
-        for ((source_key, _), (target_key, sql)) in source_sqls.into_iter().zip(target_sqls) {
+        for (source_key, (target_key, sql)) in source_keys.into_iter().zip(target_sqls) {
             let source_key = StructCheckKey::new(&source_db, source_key);
             let target_check_key = StructCheckKey::new(&target_db, target_key.clone());
             let namespace = if matches!(self.db_type, DbType::Mssql) {
@@ -390,11 +411,69 @@ impl StructCheckerHandle {
                     }
                 }
             }
+            DbType::Mongo => return self.build_mongo_dst_map().await,
             _ => bail!(DtError::InvalidConfig(format!(
                 "structure checking is not supported for database type: {}",
                 self.db_type
             ))
             .stage(Stage::Bootstrap)),
+        }
+        Ok(dst_map)
+    }
+
+    async fn build_mongo_dst_map(&self) -> anyhow::Result<BTreeMap<StructKey, String>> {
+        let mongo_client = self
+            .mongo_client
+            .as_ref()
+            .ok_or(DtError::MissingTaskClient(DbType::Mongo))?
+            .clone();
+        let fetcher = MongoStructFetcher {
+            mongo_client,
+            dbs: HashSet::new(),
+            filter: self.filter.clone(),
+        };
+
+        let compare_shard_keys = !self.filter.filter_structure(&StructureType::ShardKey);
+        let mut selected_collections: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let mut namespaces = HashSet::new();
+        for key in self.src_sql_map.keys() {
+            if key.is_collection() {
+                selected_collections
+                    .entry(key.schema())
+                    .or_default()
+                    .push(key.table().to_string());
+            }
+            if compare_shard_keys && (key.is_collection() || key.is_shard_key()) {
+                namespaces.insert(format!("{}.{}", key.schema(), key.table()));
+            }
+        }
+        let compare_indexes = !self.filter.filter_structure(&StructureType::Index);
+        let mut dst_map = BTreeMap::new();
+        for (db, names) in selected_collections {
+            for batch in names.chunks(1000) {
+                for stmt in fetcher
+                    .get_collections(db, compare_indexes, Some(batch))
+                    .await?
+                {
+                    Self::insert_statement(
+                        &mut dst_map,
+                        StructStatement::MongoCreateCollection(stmt),
+                        &self.filter,
+                        "target",
+                    )?;
+                }
+            }
+        }
+        if !namespaces.is_empty() {
+            let namespaces: Vec<_> = namespaces.into_iter().collect();
+            for stmt in fetcher.get_shard_key_statements(Some(&namespaces)).await? {
+                Self::insert_statement(
+                    &mut dst_map,
+                    StructStatement::MongoShardKey(stmt),
+                    &self.filter,
+                    "target",
+                )?;
+            }
         }
         Ok(dst_map)
     }
@@ -414,14 +493,6 @@ impl StructCheckerHandle {
             log_enabled,
             self.output_revise_sql,
         )
-    }
-
-    fn source_contains_parent_table(
-        src_sql_map: &BTreeMap<StructKey, StructCheckItem>,
-        key: &StructKey,
-    ) -> bool {
-        key.parent_table_key()
-            .is_some_and(|parent_key| src_sql_map.contains_key(&parent_key))
     }
 
     fn compare_sql_maps(
@@ -480,13 +551,21 @@ impl StructCheckerHandle {
         }
 
         for (key, dst_sql) in dst_map {
-            if !Self::source_contains_parent_table(src_sql_map, &key) {
+            let Some(parent) = key
+                .parent_table_key()
+                .and_then(|parent_key| src_sql_map.get(&parent_key))
+            else {
                 continue;
-            }
+            };
 
             summary.diff_count += 1;
             let target_key = StructCheckKey::new("", key);
-            let source_key = Self::source_key_from_target(&target_key, router)?;
+            let source_key = if parent.source_key.key.is_collection() {
+                let source = &parent.source_key;
+                target_key.with_location(&source.db, &source.schema, &source.tb)
+            } else {
+                Self::source_key_from_target(&target_key, router)?
+            };
             if let Some(table) = struct_table_summary(&source_key, &target_key, 0, false, true) {
                 summary.merge_table(table);
             }
