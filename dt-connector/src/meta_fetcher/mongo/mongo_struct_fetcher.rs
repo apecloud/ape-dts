@@ -7,7 +7,7 @@ use dt_common::{
     error::{DtError, DtErrorContextExt},
     filter::DtFilter,
     meta::{
-        mongo::mongo_shard::list_shard_collections,
+        mongo::mongo_shard::list_shard_collections_in_namespaces,
         struct_meta::statement::{
             mongo_create_collection_statement::MongoCreateCollectionStatement,
             mongo_shard_key_statement::MongoShardKeyStatement,
@@ -28,14 +28,23 @@ pub struct MongoStructFetcher {
 }
 
 impl MongoStructFetcher {
-    pub async fn get_shard_key_statements(&self) -> anyhow::Result<Vec<MongoShardKeyStatement>> {
-        let (_, shard_collections) = list_shard_collections(&self.mongo_client).await?;
+    pub async fn get_shard_key_statements(
+        &self,
+        namespaces: Option<&[String]>,
+    ) -> anyhow::Result<Vec<MongoShardKeyStatement>> {
+        if namespaces.is_some_and(|names| names.is_empty()) {
+            return Ok(Vec::new());
+        }
+        let (_, shard_collections) =
+            list_shard_collections_in_namespaces(&self.mongo_client, namespaces).await?;
         let mut statements = Vec::new();
         for shard_collection in shard_collections.into_values() {
             let Some((db, collection)) = shard_collection.ns.split_once('.') else {
                 continue;
             };
-            if !self.dbs.contains(db) || self.filter.filter(rid!(db, collection))? {
+            if namespaces.is_none()
+                && (!self.dbs.contains(db) || self.filter.filter(rid!(db, collection))?)
+            {
                 continue;
             }
             statements.push(MongoShardKeyStatement { shard_collection });
@@ -49,23 +58,28 @@ impl MongoStructFetcher {
     ) -> anyhow::Result<Vec<MongoCreateCollectionStatement>> {
         let mut statements = Vec::new();
         for db in &self.dbs {
-            let collections = self.get_collections(db, with_indexs).await?;
+            let collections = self.get_collections(db, with_indexs, None).await?;
             statements.extend(collections);
         }
         Ok(statements)
     }
 
-    async fn get_collections(
+    pub async fn get_collections(
         &self,
         db: &str,
         with_indexes: bool,
+        names: Option<&[String]>,
     ) -> anyhow::Result<Vec<MongoCreateCollectionStatement>> {
+        let mut filter = doc! { "type": "collection" };
+        if let Some(names) = names {
+            filter.insert("name", doc! { "$in": names.to_vec() });
+        }
         let collections = self
             .run_cursor_command(
                 db,
                 doc! {
                     "listCollections": 1,
-                    "filter": { "type": "collection" },
+                    "filter": filter,
                     "cursor": { "batchSize": STRUCT_CURSOR_BATCH_SIZE },
                 },
                 &format!("failed to list MongoDB collections for database [{}]", db),
@@ -80,7 +94,9 @@ impl MongoStructFetcher {
                     collection_doc
                 )
             })?;
-            if Self::is_system_collection(name) || self.filter.filter(rid!(db, name))? {
+            if Self::is_system_collection(name)
+                || (names.is_none() && self.filter.filter(rid!(db, name))?)
+            {
                 continue;
             }
 

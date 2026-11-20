@@ -52,4 +52,16 @@ mod test {
     async fn check_recheck_recover_test() {
         TestBase::run_mongo_recheck_test("mongo_to_mongo/check/recheck_recover").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_basic_struct_test() {
+        TestBase::run_mongo_check_test("mongo_to_mongo/check/basic_struct_test").await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn check_sharding_struct_test() {
+        TestBase::run_mongo_check_test("mongo_to_mongo/check/sharding_struct_test").await;
+    }
 }

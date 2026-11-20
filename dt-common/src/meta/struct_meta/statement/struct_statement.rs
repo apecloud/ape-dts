@@ -34,6 +34,10 @@ pub enum StructKeyType {
     Schema,
     #[strum(serialize = "table")]
     Table,
+    #[strum(serialize = "collection")]
+    Collection,
+    #[strum(serialize = "shardkey")]
+    ShardKey,
     #[strum(serialize = "index")]
     Index,
     #[strum(serialize = "constraint")]
@@ -134,6 +138,14 @@ impl StructKey {
         self.key_type.is_table_scoped()
     }
 
+    pub fn is_collection(&self) -> bool {
+        self.key_type == StructKeyType::Collection
+    }
+
+    pub fn is_shard_key(&self) -> bool {
+        self.key_type == StructKeyType::ShardKey
+    }
+
     pub fn parent_table_key(&self) -> Option<Self> {
         let parent = match (&self.db_type, self.key_type) {
             (
@@ -144,6 +156,9 @@ impl StructKey {
                 | StructKeyType::ColumnComment
                 | StructKeyType::TableComment,
             ) => StructKeyType::Table,
+            (DbType::Mongo, StructKeyType::Index | StructKeyType::ShardKey) => {
+                StructKeyType::Collection
+            }
             _ => return None,
         };
         if matches!(self.db_type, DbType::Mssql) {
@@ -229,6 +244,8 @@ impl StructKeyType {
         matches!(
             self,
             Self::Table
+                | Self::Collection
+                | Self::ShardKey
                 | Self::Index
                 | Self::Constraint
                 | Self::SequenceOwner
@@ -270,8 +287,8 @@ impl StructStatement {
             Self::MysqlCreateDatabase(s) => s.to_sqls(filter),
             Self::PgCreateSchema(s) => s.to_sqls(filter),
             Self::MysqlCreateTable(s) => s.to_sqls(filter),
-            Self::MongoCreateCollection(_) => Ok(vec![]),
-            Self::MongoShardKey(_) => Ok(vec![]),
+            Self::MongoCreateCollection(s) => s.to_sqls(filter),
+            Self::MongoShardKey(s) => s.to_sqls(filter),
             Self::PgCreateTable(s) => s.to_sqls(filter),
             Self::PgCreateRbac(s) => s.to_sqls(filter),
             Self::PgCreateUdf(s) => s.to_sqls(filter),
