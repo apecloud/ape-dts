@@ -15,6 +15,7 @@ db.createCollection("resume_binary_tb_1");
 db.createCollection("resume_decimal_tb_1");
 db.createCollection("resume_document_tb_1");
 db.createCollection("resume_minmax_in_log_tb_1");
+db.createCollection("resume_dollar_string_tb_1");
 
 use apecloud_resumer_test
 
@@ -94,5 +95,11 @@ db.ape_task_position.insertMany([
     "resumer_type": "SnapshotDoing",
     "position_key": "test_db_1-resume_minmax_in_log_tb_1",
     "position_data": "{\"type\":\"RdbSnapshot\",\"db_type\":\"mongo\",\"schema\":\"test_db_1\",\"tb\":\"resume_minmax_in_log_tb_1\",\"order_key\":{\"single\":[\"_id\",\"{\\\"ObjectId\\\":\\\"648195af9aa9cadd41a9dcc2\\\"}\"]}}"
+  },
+  {
+    "task_id": "resume_db_test_1",
+    "resumer_type": "SnapshotDoing",
+    "position_key": "test_db_1-resume_dollar_string_tb_1",
+    "position_data": "{\"type\":\"RdbSnapshot\",\"db_type\":\"mongo\",\"schema\":\"test_db_1\",\"tb\":\"resume_dollar_string_tb_1\",\"order_key\":{\"single\":[\"_id\",\"{\\\"String\\\":\\\"$first\\\"}\"]}}"
   }
 ]);

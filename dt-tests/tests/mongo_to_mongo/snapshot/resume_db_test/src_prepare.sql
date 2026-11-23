@@ -15,3 +15,8 @@ db.createCollection("resume_binary_tb_1");
 db.createCollection("resume_decimal_tb_1");
 db.createCollection("resume_document_tb_1");
 db.createCollection("resume_minmax_in_log_tb_1");
+db.createCollection("resume_dollar_string_tb_1");
+
+db.resume_dollar_string_tb_1.insertOne({ "_id": "$first" });
+db.resume_dollar_string_tb_1.insertOne({ "_id": "$second" });
+db.resume_dollar_string_tb_1.insertOne({ "_id": "a" });
