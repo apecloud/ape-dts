@@ -3,8 +3,6 @@ use std::collections::HashSet;
 use anyhow::Context;
 use dt_common::rid;
 use dt_common::{
-    config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt},
     filter::DtFilter,
     meta::{
         mongo::mongo_shard::list_shard_collections_in_namespaces,
@@ -14,8 +12,9 @@ use dt_common::{
         },
     },
 };
+use futures::TryStreamExt;
 use mongodb::{
-    bson::{doc, Bson, Document},
+    bson::{doc, Document},
     Client,
 };
 
@@ -153,73 +152,16 @@ impl MongoStructFetcher {
         command: Document,
         error_context: &str,
     ) -> anyhow::Result<Vec<Document>> {
-        let database = self.mongo_client.database(db);
-        let mut response = database
-            .run_command(command)
+        let cursor = self
+            .mongo_client
+            .database(db)
+            .run_cursor_command(command)
             .await
             .with_context(|| error_context.to_string())?;
-        let mut results = Vec::new();
-
-        loop {
-            let cursor = response
-                .get_document("cursor")
-                .context("MongoDB cursor command response missing cursor")?;
-            let batch = cursor
-                .get_array("firstBatch")
-                .or_else(|_| cursor.get_array("nextBatch"))
-                .context("MongoDB cursor command response missing batch")?;
-
-            for item in batch {
-                let Bson::Document(document) = item else {
-                    anyhow::bail!("MongoDB metadata cursor batch contains a non-document value");
-                };
-                results.push(document.clone());
-            }
-
-            let cursor_id = cursor
-                .get_i64("id")
-                .or_else(|_| cursor.get_i32("id").map(i64::from))
-                .context("MongoDB cursor command response missing cursor id")?;
-            if cursor_id == 0 {
-                break;
-            }
-
-            let ns = cursor
-                .get_str("ns")
-                .context("MongoDB cursor command response missing namespace")?;
-            let cursor_collection = Self::cursor_collection_from_ns(db, ns)
-                .with_context(|| format!("invalid MongoDB cursor namespace [{}]", ns))?;
-
-            response = database
-                .run_command(doc! {
-                    "getMore": cursor_id,
-                    "collection": cursor_collection,
-                })
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to getMore MongoDB cursor [{}] for namespace [{}]",
-                        cursor_id, ns
-                    )
-                })?;
-        }
-
-        Ok(results)
-    }
-
-    fn cursor_collection_from_ns<'a>(db: &str, ns: &'a str) -> anyhow::Result<&'a str> {
-        let prefix = format!("{}.", db);
-        if let Some(collection) = ns.strip_prefix(&prefix) {
-            return Ok(collection);
-        }
-        anyhow::bail!(DtError::DatabaseInvalidConfig(
-            DbType::Mongo,
-            format!(
-                "the returned MongoDB namespace does not belong to the configured database {db}"
-            )
-        )
-        .message("MongoDB returned data for a database other than the configured source")
-        .hint("Check the database name in the MongoDB source URL and task routing, then retry."))
+        cursor
+            .try_collect()
+            .await
+            .with_context(|| error_context.to_string())
     }
 
     fn is_system_collection(collection: &str) -> bool {

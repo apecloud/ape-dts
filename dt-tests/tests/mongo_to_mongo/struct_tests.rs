@@ -3,7 +3,7 @@ mod test {
     use mongodb::bson::doc;
     use serial_test::serial;
 
-    use crate::test_runner::mongo_test_runner::MongoTestRunner;
+    use crate::test_runner::mongo_test_runner::{MongoTestRunner, DST};
 
     #[tokio::test]
     #[serial]
@@ -61,12 +61,9 @@ mod test {
             .await
             .unwrap();
         runner.run_struct_test().await.unwrap();
-        runner
-            .assert_dst_collection_exists("mongo_struct_cursor_batch_db", "coll_000")
-            .await;
-        runner
-            .assert_dst_collection_exists("mongo_struct_cursor_batch_db", "coll_100")
-            .await;
+
+        let collections = runner.list_tb("mongo_struct_cursor_batch_db", DST).await;
+        assert_eq!(collections.len(), 102);
     }
 
     #[tokio::test]
