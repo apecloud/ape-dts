@@ -81,14 +81,14 @@ impl MongoStructExtractor {
     }
 
     pub async fn push_dt_data(&mut self, statement: StructStatement) -> anyhow::Result<()> {
-        // The statement is routed downstream of this point. Keep the source location.
         let (schema, tb) = match &statement {
             StructStatement::MongoCreateCollection(stmt) => {
                 (stmt.database_name.as_str(), stmt.collection_name.as_str())
             }
-            StructStatement::MongoShardKey(stmt) => {
-                stmt.shard_collection.ns.split_once('.').unwrap_or_default()
-            }
+            StructStatement::MongoShardKey(stmt) => (
+                stmt.shard_collection.database_name.as_str(),
+                stmt.shard_collection.collection_name.as_str(),
+            ),
             _ => ("", ""),
         };
         let struct_data = StructData {

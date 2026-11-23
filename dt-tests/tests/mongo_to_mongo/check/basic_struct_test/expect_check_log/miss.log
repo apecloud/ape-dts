@@ -1,2 +1,2 @@
-{"key":"collection.mongo_struct_check_src.missing_empty","schema":"mongo_struct_check_src","tb":"missing_empty","target_schema":"mongo_struct_check_absent","target_tb":"missing_empty","src_sql":"{}"}
-{"key":"index.mongo_struct_check_src.orders.missing_index","schema":"mongo_struct_check_src","tb":"orders","target_schema":"mongo_struct_check_dst","target_tb":"routed_orders","src_sql":"{\"key\":{\"amount\":{\"$numberInt\":\"1\"}},\"name\":\"missing_index\"}"}
+{"key":"collection.mongo_struct_check_absent.missing_empty","schema":"mongo_struct_check_absent","tb":"missing_empty","src_sql":"{}"}
+{"key":"index.mongo_struct_check_dst.routed_orders.missing_index","schema":"mongo_struct_check_dst","tb":"routed_orders","src_sql":"{\"key\":{\"amount\":{\"$numberInt\":\"1\"}},\"name\":\"missing_index\"}"}

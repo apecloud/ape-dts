@@ -38,9 +38,8 @@ impl MongoStructFetcher {
             list_shard_collections_in_namespaces(&self.mongo_client, namespaces).await?;
         let mut statements = Vec::new();
         for shard_collection in shard_collections.into_values() {
-            let Some((db, collection)) = shard_collection.ns.split_once('.') else {
-                continue;
-            };
+            let db = &shard_collection.database_name;
+            let collection = &shard_collection.collection_name;
             if namespaces.is_none()
                 && (!self.dbs.contains(db) || self.filter.filter(rid!(db, collection))?)
             {

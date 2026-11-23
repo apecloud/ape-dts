@@ -23,41 +23,29 @@ impl MongoShardKeyStatement {
         if filter.filter_structure(&StructureType::ShardKey) {
             return Ok(Vec::new());
         }
-        let (db, collection) = self
-            .shard_collection
-            .ns
-            .split_once('.')
-            .filter(|(db, collection)| !db.is_empty() && !collection.is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "invalid MongoDB shard namespace: {}",
-                    self.shard_collection.ns
-                )
-            })?;
+        let shard_collection = &self.shard_collection;
         anyhow::ensure!(
-            !self.shard_collection.key.is_empty(),
+            !shard_collection.key.is_empty(),
             "empty MongoDB shard key: {}",
-            self.shard_collection.ns
+            shard_collection.get_ns()
         );
         Ok(vec![(
-            StructKey::new(DbType::Mongo, StructKeyType::ShardKey, [db, collection]),
+            StructKey::new(
+                DbType::Mongo,
+                StructKeyType::ShardKey,
+                [
+                    &shard_collection.database_name,
+                    &shard_collection.collection_name,
+                ],
+            ),
             check_definition(
-                doc! { "key": self.shard_collection.key.clone(), "unique": self.shard_collection.unique },
+                doc! { "key": shard_collection.key.clone(), "unique": shard_collection.unique },
             )?,
         )])
     }
 
-    pub fn route(
-        &mut self,
-        src_db: &str,
-        src_collection: &str,
-        dst_db: &str,
-        dst_collection: &str,
-    ) {
-        let src_ns = format!("{}.{}", src_db, src_collection);
-        let dst_ns = format!("{}.{}", dst_db, dst_collection);
-        if self.shard_collection.ns == src_ns {
-            self.shard_collection.ns = dst_ns;
-        }
+    pub fn route(&mut self, dst_db: String, dst_collection: String) {
+        self.shard_collection.database_name = dst_db;
+        self.shard_collection.collection_name = dst_collection;
     }
 }

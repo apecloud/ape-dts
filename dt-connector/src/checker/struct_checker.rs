@@ -152,35 +152,25 @@ impl StructCheckerHandle {
     }
 
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
+        // TODO: Carry the original database, schema, and table names from before extractor
+        // routing into the source check key so diff logs can show the source location.
         let source_db = struct_data.db.clone();
-        let (source_keys, target_db, target_sqls) = if self.db_type == DbType::Mongo {
-            let mut statement = struct_data.statement;
-            let target_sqls = statement.to_sqls(&self.filter)?;
-            let source_keys = target_sqls
-                .iter()
-                .map(|(key, _)| key.with_location("", &struct_data.schema, &struct_data.tb))
-                .collect::<Vec<_>>();
-            (source_keys, struct_data.db, target_sqls)
+        let mut source_statement = struct_data.statement.clone();
+        let source_sqls = source_statement.to_sqls(&self.filter)?;
+        let routed = if let Some(router) = &self.router {
+            router.route_struct(struct_data)?
         } else {
-            let mut source_statement = struct_data.statement.clone();
-            let source_sqls = source_statement.to_sqls(&self.filter)?;
-            let routed = if let Some(router) = &self.router {
-                router.route_struct(struct_data)?
-            } else {
-                struct_data
-            };
-            let target_db = routed.db.clone();
-            let mut statement = routed.statement;
-            let target_sqls = statement.to_sqls(&self.filter)?;
-            ensure!(
-                source_sqls.len() == target_sqls.len(),
-                "source and routed structure SQL counts differ: source={}, target={}",
-                source_sqls.len(),
-                target_sqls.len()
-            );
-            let source_keys = source_sqls.into_iter().map(|(key, _)| key).collect();
-            (source_keys, target_db, target_sqls)
+            struct_data
         };
+        let target_db = routed.db.clone();
+        let mut statement = routed.statement;
+        let target_sqls = statement.to_sqls(&self.filter)?;
+        ensure!(
+            source_sqls.len() == target_sqls.len(),
+            "source and routed structure SQL counts differ: source={}, target={}",
+            source_sqls.len(),
+            target_sqls.len()
+        );
         if !target_sqls.is_empty() {
             self.monitor
                 .add_counter(
@@ -191,7 +181,7 @@ impl StructCheckerHandle {
                 .await;
         }
 
-        for (source_key, (target_key, sql)) in source_keys.into_iter().zip(target_sqls) {
+        for ((source_key, _), (target_key, sql)) in source_sqls.into_iter().zip(target_sqls) {
             let source_key = StructCheckKey::new(&source_db, source_key);
             let target_check_key = StructCheckKey::new(&target_db, target_key.clone());
             let namespace = if matches!(self.db_type, DbType::Mssql) {

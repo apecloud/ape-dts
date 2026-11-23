@@ -101,13 +101,14 @@ impl DtRouter {
             }
 
             StructStatement::MongoShardKey(s) => {
-                let ns = s.shard_collection.ns.clone();
-                if let Some((schema, tb)) = ns.split_once('.') {
-                    let (mapped_db, dst_schema, dst_tb): (String, String, String) =
-                        self.forward(rid!(src_db, schema, tb))?;
-                    dst_db = mapped_db;
-                    s.route(schema, tb, &dst_schema, &dst_tb)
-                }
+                let (mapped_db, dst_schema, dst_tb): (String, String, String) =
+                    self.forward(rid!(
+                        src_db,
+                        &s.shard_collection.database_name,
+                        &s.shard_collection.collection_name
+                    ))?;
+                dst_db = mapped_db;
+                s.route(dst_schema, dst_tb)
             }
 
             StructStatement::PgCreateTable(s) => {
