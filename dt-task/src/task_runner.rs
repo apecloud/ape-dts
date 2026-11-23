@@ -978,6 +978,31 @@ impl TaskRunner {
                         task_id.to_string(),
                     )
                 }
+                DbType::Mongo => {
+                    let client = TaskUtil::create_mongo_client(
+                        &checker_url,
+                        &checker_auth,
+                        checker_target.is_direct_connection,
+                        checker_target.app_name,
+                        Some(max_connections),
+                    )
+                    .await?;
+                    StructCheckerHandle::new(
+                        checker_db_type,
+                        None,
+                        None,
+                        None,
+                        filter,
+                        router,
+                        false,
+                        retry_interval_secs,
+                        max_retries,
+                        check_summary,
+                        monitor.clone(),
+                        task_id.to_string(),
+                    )
+                    .with_mongo_client(client)
+                }
                 _ => bail!(
                     "struct check not supported for db_type: {}",
                     checker_db_type

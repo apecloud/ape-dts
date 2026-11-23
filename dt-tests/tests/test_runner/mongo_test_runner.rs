@@ -865,7 +865,7 @@ impl MongoTestRunner {
         }
     }
 
-    async fn list_tb(&self, db: &str, from: &str) -> Vec<String> {
+    pub async fn list_tb(&self, db: &str, from: &str) -> Vec<String> {
         let client = if from == SRC {
             self.src_mongo_client.as_ref().unwrap()
         } else {

@@ -3,19 +3,18 @@ use std::collections::HashSet;
 use anyhow::Context;
 use dt_common::rid;
 use dt_common::{
-    config::config_enums::DbType,
-    error::{DtError, DtErrorContextExt},
     filter::DtFilter,
     meta::{
-        mongo::mongo_shard::list_shard_collections,
+        mongo::mongo_shard::list_shard_collections_in_namespaces,
         struct_meta::statement::{
             mongo_create_collection_statement::MongoCreateCollectionStatement,
             mongo_shard_key_statement::MongoShardKeyStatement,
         },
     },
 };
+use futures::TryStreamExt;
 use mongodb::{
-    bson::{doc, Bson, Document},
+    bson::{doc, Document},
     Client,
 };
 
@@ -28,14 +27,22 @@ pub struct MongoStructFetcher {
 }
 
 impl MongoStructFetcher {
-    pub async fn get_shard_key_statements(&self) -> anyhow::Result<Vec<MongoShardKeyStatement>> {
-        let (_, shard_collections) = list_shard_collections(&self.mongo_client).await?;
+    pub async fn get_shard_key_statements(
+        &self,
+        namespaces: Option<&[String]>,
+    ) -> anyhow::Result<Vec<MongoShardKeyStatement>> {
+        if namespaces.is_some_and(|names| names.is_empty()) {
+            return Ok(Vec::new());
+        }
+        let (_, shard_collections) =
+            list_shard_collections_in_namespaces(&self.mongo_client, namespaces).await?;
         let mut statements = Vec::new();
         for shard_collection in shard_collections.into_values() {
-            let Some((db, collection)) = shard_collection.ns.split_once('.') else {
-                continue;
-            };
-            if !self.dbs.contains(db) || self.filter.filter(rid!(db, collection))? {
+            let db = &shard_collection.database_name;
+            let collection = &shard_collection.collection_name;
+            if namespaces.is_none()
+                && (!self.dbs.contains(db) || self.filter.filter(rid!(db, collection))?)
+            {
                 continue;
             }
             statements.push(MongoShardKeyStatement { shard_collection });
@@ -49,23 +56,28 @@ impl MongoStructFetcher {
     ) -> anyhow::Result<Vec<MongoCreateCollectionStatement>> {
         let mut statements = Vec::new();
         for db in &self.dbs {
-            let collections = self.get_collections(db, with_indexs).await?;
+            let collections = self.get_collections(db, with_indexs, None).await?;
             statements.extend(collections);
         }
         Ok(statements)
     }
 
-    async fn get_collections(
+    pub async fn get_collections(
         &self,
         db: &str,
         with_indexes: bool,
+        names: Option<&[String]>,
     ) -> anyhow::Result<Vec<MongoCreateCollectionStatement>> {
+        let mut filter = doc! { "type": "collection" };
+        if let Some(names) = names {
+            filter.insert("name", doc! { "$in": names.to_vec() });
+        }
         let collections = self
             .run_cursor_command(
                 db,
                 doc! {
                     "listCollections": 1,
-                    "filter": { "type": "collection" },
+                    "filter": filter,
                     "cursor": { "batchSize": STRUCT_CURSOR_BATCH_SIZE },
                 },
                 &format!("failed to list MongoDB collections for database [{}]", db),
@@ -80,7 +92,9 @@ impl MongoStructFetcher {
                     collection_doc
                 )
             })?;
-            if Self::is_system_collection(name) || self.filter.filter(rid!(db, name))? {
+            if Self::is_system_collection(name)
+                || (names.is_none() && self.filter.filter(rid!(db, name))?)
+            {
                 continue;
             }
 
@@ -137,73 +151,16 @@ impl MongoStructFetcher {
         command: Document,
         error_context: &str,
     ) -> anyhow::Result<Vec<Document>> {
-        let database = self.mongo_client.database(db);
-        let mut response = database
-            .run_command(command)
+        let cursor = self
+            .mongo_client
+            .database(db)
+            .run_cursor_command(command)
             .await
             .with_context(|| error_context.to_string())?;
-        let mut results = Vec::new();
-
-        loop {
-            let cursor = response
-                .get_document("cursor")
-                .context("MongoDB cursor command response missing cursor")?;
-            let batch = cursor
-                .get_array("firstBatch")
-                .or_else(|_| cursor.get_array("nextBatch"))
-                .context("MongoDB cursor command response missing batch")?;
-
-            for item in batch {
-                let Bson::Document(document) = item else {
-                    anyhow::bail!("MongoDB metadata cursor batch contains a non-document value");
-                };
-                results.push(document.clone());
-            }
-
-            let cursor_id = cursor
-                .get_i64("id")
-                .or_else(|_| cursor.get_i32("id").map(i64::from))
-                .context("MongoDB cursor command response missing cursor id")?;
-            if cursor_id == 0 {
-                break;
-            }
-
-            let ns = cursor
-                .get_str("ns")
-                .context("MongoDB cursor command response missing namespace")?;
-            let cursor_collection = Self::cursor_collection_from_ns(db, ns)
-                .with_context(|| format!("invalid MongoDB cursor namespace [{}]", ns))?;
-
-            response = database
-                .run_command(doc! {
-                    "getMore": cursor_id,
-                    "collection": cursor_collection,
-                })
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to getMore MongoDB cursor [{}] for namespace [{}]",
-                        cursor_id, ns
-                    )
-                })?;
-        }
-
-        Ok(results)
-    }
-
-    fn cursor_collection_from_ns<'a>(db: &str, ns: &'a str) -> anyhow::Result<&'a str> {
-        let prefix = format!("{}.", db);
-        if let Some(collection) = ns.strip_prefix(&prefix) {
-            return Ok(collection);
-        }
-        anyhow::bail!(DtError::DatabaseInvalidConfig(
-            DbType::Mongo,
-            format!(
-                "the returned MongoDB namespace does not belong to the configured database {db}"
-            )
-        )
-        .message("MongoDB returned data for a database other than the configured source")
-        .hint("Check the database name in the MongoDB source URL and task routing, then retry."))
+        cursor
+            .try_collect()
+            .await
+            .with_context(|| error_context.to_string())
     }
 
     fn is_system_collection(collection: &str) -> bool {

@@ -217,7 +217,7 @@ Notes:
   Standalone snapshot applies sampling during extraction. Inline snapshot/CDC writes every
   row/change and applies deterministic key-hash sampling before target fetch.
 - Standalone snapshot check supports MySQL, PostgreSQL, and MongoDB targets. Standalone struct check
-  supports MySQL and PostgreSQL.
+  supports MySQL, PostgreSQL, and MongoDB.
 - Inline snapshot check supports MySQL, PostgreSQL and MongoDB write targets.
 - `recheck_count` and `recheck_interval_secs` are not used by inline CDC reconciliation.
 - When either retry-buffer limit is reached, the checker does not drop the result; newly found

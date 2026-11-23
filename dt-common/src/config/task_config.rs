@@ -296,9 +296,11 @@ impl TaskConfig {
             }
         } else {
             match (kind, sink_type, target_db_type) {
-                (TaskKind::Struct, SinkType::Check, DbType::Mysql | DbType::Pg | DbType::Mssql) => {
-                    Some(CheckMode::Standalone)
-                }
+                (
+                    TaskKind::Struct,
+                    SinkType::Check,
+                    DbType::Mysql | DbType::Pg | DbType::Mssql | DbType::Mongo,
+                ) => Some(CheckMode::Standalone),
                 (
                     TaskKind::Snapshot,
                     SinkType::Check,
