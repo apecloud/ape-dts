@@ -1,0 +1,1 @@
+{"key":"shardkey.mongo_struct_check_sharding.orders","schema":"mongo_struct_check_sharding","tb":"orders","src_sql":"{\"key\":{\"a\":{\"$numberInt\":\"1\"},\"b\":{\"$numberInt\":\"1\"}},\"unique\":false}","dst_sql":"{\"key\":{\"b\":{\"$numberInt\":\"1\"},\"a\":{\"$numberInt\":\"1\"}},\"unique\":false}"}

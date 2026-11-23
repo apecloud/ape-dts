@@ -156,7 +156,7 @@ UPDATE/DELETE 匹配完整 before image，最多影响一行。因此 CDC 需要
   Standalone snapshot 在抽取阶段采样；inline snapshot/CDC 会完整写入，再在 fetch 目标数据前按
   key hash 确定性采样。
 - Standalone snapshot check 支持 MySQL、PostgreSQL、MongoDB；standalone struct check
-  支持 MySQL、PostgreSQL。
+  支持 MySQL、PostgreSQL、MongoDB。
 - Inline snapshot check 支持 MySQL、PostgreSQL、MongoDB 写入目标。
 - inline CDC reconciliation 不使用 `recheck_count` 和 `recheck_interval_secs`。
 - Retry buffer 达到行数或内存上限时，不会丢弃检查结果；新发现的不一致会跳过重试并立即输出。

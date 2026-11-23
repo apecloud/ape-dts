@@ -72,7 +72,7 @@ impl MongoStructExtractor {
         }
 
         if !self.filter.filter_structure(&StructureType::ShardKey) {
-            for statement in fetcher.get_shard_key_statements().await? {
+            for statement in fetcher.get_shard_key_statements(None).await? {
                 self.push_dt_data(StructStatement::MongoShardKey(statement))
                     .await?;
             }
@@ -81,8 +81,13 @@ impl MongoStructExtractor {
     }
 
     pub async fn push_dt_data(&mut self, statement: StructStatement) -> anyhow::Result<()> {
+        let schema = match &statement {
+            StructStatement::MongoCreateCollection(stmt) => stmt.database_name.as_str(),
+            StructStatement::MongoShardKey(stmt) => stmt.shard_collection.database_name.as_str(),
+            _ => "",
+        };
         let struct_data = StructData {
-            schema: String::new(),
+            schema: schema.to_string(),
             statement,
         };
         self.base_extractor
