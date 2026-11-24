@@ -16,3 +16,8 @@ db.upsert_accounts.insertMany([
   { "_id": "upsert_1", "tenant_id": "tenant_u", "account_id": 1, "status": "new", "balance": 101, "profile": { "score": 1 } },
   { "_id": "upsert_2", "tenant_id": "tenant_u", "account_id": 2, "status": "new", "balance": 202, "profile": { "score": 2 } }
 ]);
+
+db.duplicate_ids.insertMany([
+  { "_id": 42, "tenant": "A", "bucket": 1 },
+  { "_id": 42, "tenant": "B", "bucket": 1 }
+]);

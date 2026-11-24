@@ -867,7 +867,22 @@ services:
     hostname: mongo-sharding-src-shard
     ports:
       - "37018:37018"
-    command: mongod --shardsvr --replSet source-shard-rs --port 37018 --bind_ip_all
+    # Advance the change stream even when the other source shard is idle.
+    command: mongod --shardsvr --replSet source-shard-rs --port 37018 --bind_ip_all --setParameter periodicNoopIntervalSecs=1
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37018/admin" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
+  mongo-sharding-src-shard2:
+    image: mongo:7.0
+    container_name: mongo-sharding-src-shard2-it
+    hostname: mongo-sharding-src-shard2
+    command: mongod --shardsvr --replSet source-shard2-rs --port 37018 --bind_ip_all --setParameter periodicNoopIntervalSecs=1
     healthcheck:
       test:
         - CMD-SHELL
@@ -885,6 +900,8 @@ services:
         condition: service_healthy
       mongo-sharding-src-shard:
         condition: service_healthy
+      mongo-sharding-src-shard2:
+        condition: service_healthy
     entrypoint:
       - bash
       - -lc
@@ -892,7 +909,8 @@ services:
         set -euo pipefail
         mongosh "mongodb://mongo-sharding-src-config:37019/admin" --quiet --eval "rs.initiate({ _id: 'source-config-rs', configsvr: true, members: [{ _id: 0, host: 'mongo-sharding-src-config:37019' }] })" >/dev/null || true
         mongosh "mongodb://mongo-sharding-src-shard:37018/admin" --quiet --eval "rs.initiate({ _id: 'source-shard-rs', members: [{ _id: 0, host: 'mongo-sharding-src-shard:37018' }] })" >/dev/null || true
-        for target in "mongo-sharding-src-config:37019" "mongo-sharding-src-shard:37018"; do
+        mongosh "mongodb://mongo-sharding-src-shard2:37018/admin" --quiet --eval "rs.initiate({ _id: 'source-shard2-rs', members: [{ _id: 0, host: 'mongo-sharding-src-shard2:37018' }] })" >/dev/null || true
+        for target in "mongo-sharding-src-config:37019" "mongo-sharding-src-shard:37018" "mongo-sharding-src-shard2:37018"; do
           for _ in $$(seq 1 60); do
             if mongosh "mongodb://$${target}/admin" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)" >/dev/null 2>&1; then
               break
@@ -931,7 +949,12 @@ services:
       - -lc
       - |
         set -euo pipefail
-        mongosh "mongodb://mongo-sharding-src-mongos:37017/admin" --quiet --eval "sh.addShard('source-shard-rs/mongo-sharding-src-shard:37018')" >/dev/null || true
+        mongosh "mongodb://mongo-sharding-src-mongos:37017/admin" --quiet --eval \
+          "for (const addShard of ['source-shard-rs/mongo-sharding-src-shard:37018',
+                                   'source-shard2-rs/mongo-sharding-src-shard2:37018']) {
+             const result = db.adminCommand({ addShard });
+             if (!result.ok) throw new Error(EJSON.stringify(result));
+           }" >/dev/null
 
   mongo-sharding-dst-config:
     image: mongo:7.0
@@ -965,6 +988,22 @@ services:
       start_period: 20s
       interval: 5s
 
+  mongo-sharding-dst-shard2:
+    image: mongo:7.0
+    container_name: mongo-sharding-dst-shard2-it
+    hostname: mongo-sharding-dst-shard2
+    ports:
+      - "37128:37018"
+    command: mongod --shardsvr --replSet target-shard2-rs --port 37018 --bind_ip_all
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh "mongodb://127.0.0.1:37018/admin" --quiet --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"'
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      interval: 5s
+
   mongo-sharding-dst-init:
     image: mongo:7.0
     container_name: mongo-sharding-dst-init-it
@@ -973,6 +1012,8 @@ services:
         condition: service_healthy
       mongo-sharding-dst-shard:
         condition: service_healthy
+      mongo-sharding-dst-shard2:
+        condition: service_healthy
     entrypoint:
       - bash
       - -lc
@@ -980,7 +1021,8 @@ services:
         set -euo pipefail
         mongosh "mongodb://mongo-sharding-dst-config:37019/admin" --quiet --eval "rs.initiate({ _id: 'target-config-rs', configsvr: true, members: [{ _id: 0, host: 'mongo-sharding-dst-config:37019' }] })" >/dev/null || true
         mongosh "mongodb://mongo-sharding-dst-shard:37018/admin" --quiet --eval "rs.initiate({ _id: 'target-shard-rs', members: [{ _id: 0, host: 'mongo-sharding-dst-shard:37018' }] })" >/dev/null || true
-        for target in "mongo-sharding-dst-config:37019" "mongo-sharding-dst-shard:37018"; do
+        mongosh "mongodb://mongo-sharding-dst-shard2:37018/admin" --quiet --eval "rs.initiate({ _id: 'target-shard2-rs', members: [{ _id: 0, host: 'mongo-sharding-dst-shard2:37018' }] })" >/dev/null || true
+        for target in "mongo-sharding-dst-config:37019" "mongo-sharding-dst-shard:37018" "mongo-sharding-dst-shard2:37018"; do
           for _ in $$(seq 1 60); do
             if mongosh "mongodb://$${target}/admin" --quiet --eval "quit(db.adminCommand({ hello: 1 }).isWritablePrimary ? 0 : 1)" >/dev/null 2>&1; then
               break
@@ -1019,7 +1061,12 @@ services:
       - -lc
       - |
         set -euo pipefail
-        mongosh "mongodb://mongo-sharding-dst-mongos:37017/admin" --quiet --eval "sh.addShard('target-shard-rs/mongo-sharding-dst-shard:37018')" >/dev/null || true
+        mongosh "mongodb://mongo-sharding-dst-mongos:37017/admin" --quiet --eval \
+          "for (const addShard of ['target-shard-rs/mongo-sharding-dst-shard:37018',
+                                   'target-shard2-rs/mongo-sharding-dst-shard2:37018']) {
+             const result = db.adminCommand({ addShard });
+             if (!result.ok) throw new Error(EJSON.stringify(result));
+           }" >/dev/null
 
   redis-src:
     image: redis:7.0

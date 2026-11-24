@@ -357,9 +357,9 @@ suite_services() {
     pg_to_pg_check) echo "postgres-src postgres-dst" ;;
     pg_to_pg_lua) echo "postgres-src postgres-dst" ;;
     pg_to_starrocks) echo "postgres-src starrocks-3-2-11" ;;
-    mongo_to_mongo) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
+    mongo_to_mongo) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-shard2 mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-shard2 mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
     mongo_to_mongo_tls) echo "mongo-tls-src mongo-tls-dst mongo-tls-sharding-src-config mongo-tls-sharding-src-shard mongo-tls-sharding-src-init mongo-tls-sharding-src-mongos mongo-tls-sharding-src-add-shard-init mongo-tls-sharding-dst-config mongo-tls-sharding-dst-shard mongo-tls-sharding-dst-init mongo-tls-sharding-dst-mongos mongo-tls-sharding-dst-add-shard-init" ;;
-    mongo_to_mongo_precheck) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
+    mongo_to_mongo_precheck) echo "mongo-src mongo-dst mongo-sharding-src-config mongo-sharding-src-shard mongo-sharding-src-shard2 mongo-sharding-src-init mongo-sharding-src-mongos mongo-sharding-src-add-shard-init mongo-sharding-dst-config mongo-sharding-dst-shard mongo-sharding-dst-shard2 mongo-sharding-dst-init mongo-sharding-dst-mongos mongo-sharding-dst-add-shard-init" ;;
     redis_to_redis_2_8) echo "redis-src-2-8 redis-dst-2-8" ;;
     redis_to_redis_4_0) echo "redis-src-4-0 redis-dst-4-0" ;;
     redis_to_redis_5_0) echo "redis-src-5-0 redis-dst-5-0" ;;
