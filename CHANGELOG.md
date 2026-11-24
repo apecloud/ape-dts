@@ -18,6 +18,10 @@ Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible
 - [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - upgrade `mysql-binlog-connector-rust` to 0.3.5 for MySQL 8.4 binlog status queries, tagged GTID events/resume, and newer heartbeat events
 - [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - support empty-password binlog connections with `mysql_native_password` and `caching_sha2_password`
 
+#### MongoDB
+
+- [[638]](https://github.com/apecloud/ape-dts/pull/638) - support standalone structure checks for collections, secondary indexes, and shard keys
+
 ### Changed
 
 #### MySQL
@@ -44,6 +48,11 @@ Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible
 - [[619]](https://github.com/apecloud/ape-dts/pull/619) - use `ON CONFLICT DO NOTHING` for derived inserts on unkeyed expression-index tables with `sinker.replace=true`; conflicting rows are not updated
 - [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve empty strings instead of decoding them as `NULL` in CDC
 - [[627]](https://github.com/apecloud/ape-dts/pull/627) - fix unkeyed UPDATE/DELETE matching on `json` and `xml` columns using text comparison with `C` collation
+
+#### MongoDB
+
+- [[637]](https://github.com/apecloud/ape-dts/pull/637) - honor `do_structures` when copying secondary indexes. Include `index` with `collection` to copy secondary indexes, or keep the default `*` to copy all structure types.
+- [[639]](https://github.com/apecloud/ape-dts/pull/639) - fix snapshot resume when a saved `_id` value begins with a dollar sign
 
 #### Redis
 
