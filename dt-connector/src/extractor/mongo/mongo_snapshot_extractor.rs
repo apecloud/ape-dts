@@ -247,7 +247,7 @@ impl MongoSnapshotExtractor {
             "$expr": {
                 "$gt": [
                     format!("${}", MongoConstants::ID),
-                    key.to_mongo_id(),
+                    doc! { "$literal": key.to_mongo_id() },
                 ],
             },
         }
