@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -6,7 +6,6 @@ use dashmap::DashMap;
 use super::counter::Counter;
 use super::counter_type::CounterType;
 use super::monitor::Monitor;
-use super::task_metrics::TaskMetricValue;
 use super::time_window_counter::WindowCounterStatistics;
 use super::FlushableMonitor;
 use crate::log_monitor;
@@ -56,8 +55,9 @@ impl GroupMonitor {
     }
 
     pub async fn flush(&self) {
-        let window_counter_statistics_map: DashMap<CounterType, Vec<WindowCounterStatistics>> =
-            DashMap::new();
+        let mut window_counter_statistics_map: HashMap<CounterType, WindowCounterStatistics> =
+            HashMap::new();
+        let now = Instant::now();
         let mut no_window_counter_statistics_map: HashMap<CounterType, Counter> = self
             .no_window_counter_statistics_map
             .iter()
@@ -71,6 +71,12 @@ impl GroupMonitor {
             .collect();
 
         for monitor in monitors {
+            // Tombstoned monitors have already settled their cumulative counters.
+            // Exclude them from the windowed aggregates, as TaskMonitor::calc does.
+            if monitor.is_tombstone() {
+                continue;
+            }
+
             let counter_types: Vec<CounterType> = monitor
                 .time_window_counters
                 .iter()
@@ -86,42 +92,37 @@ impl GroupMonitor {
                     if !counter.has_live_data().await {
                         continue;
                     }
-                    let statistics = counter.statistics().await;
+                    let statistics = counter.statistics_at(now).await;
                     window_counter_statistics_map
                         .entry(counter_type)
                         .or_default()
-                        .push(statistics);
+                        .merge(&statistics);
                 }
             }
 
-            // Completed monitors have already settled their cumulative counters.
-            if !monitor.is_tombstone() {
-                for counter in monitor.no_window_counters.iter() {
-                    no_window_counter_statistics_map
-                        .entry(counter.key().clone())
-                        .and_modify(|total| total.merge(counter.value()))
-                        .or_insert_with(|| counter.value().clone());
-                }
+            for counter in monitor.no_window_counters.iter() {
+                no_window_counter_statistics_map
+                    .entry(counter.key().clone())
+                    .and_modify(|total| total.merge(counter.value()))
+                    .or_insert_with(|| counter.value().clone());
             }
         }
 
-        for (counter_type, statistics_vec) in window_counter_statistics_map {
+        for (counter_type, mut statistics) in window_counter_statistics_map {
+            statistics.recalculate();
             let mut log = format!("{} | {} | {}", self.name, self.description, counter_type);
             for aggregate_type in counter_type.get_aggregate_types() {
-                let mut aggregate_value = TaskMetricValue::default();
-                for statistics in statistics_vec.iter() {
-                    aggregate_value += match aggregate_type {
-                        AggregateType::Latest => statistics.latest,
-                        AggregateType::AvgByCount => statistics.avg_by_count,
-                        AggregateType::AvgBySec => statistics.avg_by_sec,
-                        AggregateType::Sum => statistics.sum,
-                        AggregateType::MaxBySec => statistics.max_by_sec,
-                        AggregateType::MaxByCount => statistics.max,
-                        AggregateType::MinByCount => statistics.min,
-                        AggregateType::Count => statistics.count.into(),
-                        _ => continue,
-                    };
-                }
+                let aggregate_value = match aggregate_type {
+                    AggregateType::Latest => statistics.latest,
+                    AggregateType::AvgByCount => statistics.avg_by_count,
+                    AggregateType::AvgBySec => statistics.avg_by_sec,
+                    AggregateType::Sum => statistics.sum,
+                    AggregateType::MaxBySec => statistics.max_by_sec,
+                    AggregateType::MinBySec => statistics.min_by_sec,
+                    AggregateType::MaxByCount => statistics.max,
+                    AggregateType::MinByCount => statistics.min,
+                    AggregateType::Count => statistics.count.into(),
+                };
                 log = format!("{} | {}={}", log, aggregate_type, aggregate_value);
             }
             log_monitor!("{}", log);
