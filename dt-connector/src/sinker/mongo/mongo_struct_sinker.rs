@@ -1,6 +1,5 @@
 use std::{cmp, collections::HashMap};
 
-use anyhow::Context;
 use async_trait::async_trait;
 use mongodb::{bson::doc, Client};
 use tokio::time::Instant;
@@ -165,19 +164,17 @@ impl MongoStructSinker {
         }
 
         let shard_collection = &statement.shard_collection;
+        let ns = shard_collection.get_ns();
         if !self.is_target_mongos {
-            log_info!(
-                "mongo target is not mongos, skip shard key for {}",
-                shard_collection.ns
-            );
+            log_info!("mongo target is not mongos, skip shard key for {}", ns);
             return Ok(());
         }
 
-        if let Some(existing) = self.target_shard_collections.get(&shard_collection.ns) {
+        if let Some(existing) = self.target_shard_collections.get(&ns) {
             if existing.key != shard_collection.key || existing.unique != shard_collection.unique {
                 anyhow::bail!(
                     "mongo target collection [{}] shard key mismatch, source key: {:?}, source unique: {}, target key: {:?}, target unique: {}",
-                    shard_collection.ns,
+                    ns,
                     shard_collection.key,
                     shard_collection.unique,
                     existing.key,
@@ -187,22 +184,18 @@ impl MongoStructSinker {
             return Ok(());
         }
 
-        let (db, _) = shard_collection
-            .ns
-            .split_once('.')
-            .context("mongo shard collection namespace missing db")?;
         self.mongo_client
             .database("admin")
-            .run_command(doc! { "enableSharding": db })
+            .run_command(doc! { "enableSharding": &shard_collection.database_name })
             .await
             .map_err(Error::MongodbError)?;
 
         let command = doc! {
-            "shardCollection": shard_collection.ns.clone(),
+            "shardCollection": &ns,
             "key": shard_collection.key.clone(),
             "unique": shard_collection.unique,
         };
-        log_info!("mongo shard collection begin: {}", shard_collection.ns);
+        log_info!("mongo shard collection begin: {}", ns);
         self.mongo_client
             .database("admin")
             .run_command(command)

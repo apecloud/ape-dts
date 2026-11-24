@@ -156,7 +156,7 @@ UPDATE/DELETE 匹配完整 before image，最多影响一行。因此 CDC 需要
   Standalone snapshot 在抽取阶段采样；inline snapshot/CDC 会完整写入，再在 fetch 目标数据前按
   key hash 确定性采样。
 - Standalone snapshot check 支持 MySQL、PostgreSQL、MongoDB；standalone struct check
-  支持 MySQL、PostgreSQL。
+  支持 MySQL、PostgreSQL、MongoDB。
 - Inline snapshot check 支持 MySQL、PostgreSQL、MongoDB 写入目标。
 - inline CDC reconciliation 不使用 `recheck_count` 和 `recheck_interval_secs`。
 - Retry buffer 达到行数或内存上限时，不会丢弃检查结果；新发现的不一致会跳过重试并立即输出。
@@ -244,7 +244,7 @@ Checker 处理/输出失败只记录日志，不让主 CDC 写入链路失败。
 | do_events        | 需同步的事件                               | insert、update、delete                                                                                                               | \*   |
 | do_ddls          | 需同步的 ddl，适用于 mysql cdc 任务        | create_database,drop_database,alter_database,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index | -    |
 | do_dcls          | 需同步的 DCL，适用于支持的结构任务         | create_user,grant                                                                                                                    | -    |
-| do_structures    | 结构迁移任务中需同步的结构                 | mysql/pg: database,table,constraint,sequence,comment,index；mongo: collection,shardkey                                               | \*   |
+| do_structures    | 结构迁移任务中需同步的结构                 | mysql/pg: database,table,constraint,sequence,comment,index；mongo: collection,index,shardkey                                               | \*   |
 | ignore_cmds      | 需忽略的命令，适用于 redis 增量任务        | flushall,flushdb                                                                                                                     | -    |
 | where_conditions | 全量同步时，对源端 select sql 添加过滤条件 | json:[{"db":"db_1","tb":"tb_1","condition":"f_0 > 1"},{"db":"db_2","tb":"tb_2","condition":"f_0 > 1 AND f_1 < 9"}]                   | -    |
 
@@ -258,7 +258,7 @@ Checker 处理/输出失败只记录日志，不让主 CDC 写入链路失败。
 - do_dcls 取值：create_user、alter_user、create_role、drop_user、drop_role、grant、revoke、
   set_role 中的一个或多个。
 - do_structures 用于选择结构对象类型。MySQL/PostgreSQL 常用取值包括 **database**、**table**、
-  **constraint**、**sequence**、**comment**、**index**。MongoDB 支持 **collection**、**shardkey**。MongoDB 不使用独立的 **database** 结构类型，database 会在创建
+  **constraint**、**sequence**、**comment**、**index**。MongoDB 支持 **collection**、**index**、**shardkey**。使用 `index` 同步二级索引。MongoDB 不使用独立的 **database** 结构类型，database 会在创建
   collection 时由 MongoDB 隐式创建。**shardkey** 用于同步源端 sharded collection 的分片定义，
   只有目标端通过 `mongos` 连接时才会真正执行。
 

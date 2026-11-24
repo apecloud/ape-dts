@@ -253,14 +253,14 @@ impl MongoSinker {
         if self.require_shard_key_filter && !missing_keys.is_empty() {
             anyhow::bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is missing shard key field(s): {:?}",
-                shard_collection.ns,
+                shard_collection.get_ns(),
                 missing_keys
             );
         }
         if filter.is_empty() {
             anyhow::bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is empty",
-                shard_collection.ns
+                shard_collection.get_ns()
             );
         }
         Ok(filter)
@@ -349,7 +349,7 @@ impl MongoSinker {
         if self.require_shard_key_filter && !missing_keys.is_empty() {
             anyhow::bail!(
                 "mongo target collection [{}] is sharded, but row filter is missing shard key field(s): {:?}",
-                shard_collection.ns,
+                shard_collection.get_ns(),
                 missing_keys
             );
         }
@@ -357,7 +357,7 @@ impl MongoSinker {
         if filter.is_empty() {
             anyhow::bail!(
                 "mongo target collection [{}] is sharded, but row filter is empty",
-                shard_collection.ns
+                shard_collection.get_ns()
             );
         }
         Ok(filter)
@@ -471,14 +471,14 @@ impl MongoSinker {
         if self.require_shard_key_filter && !missing_keys.is_empty() {
             anyhow::bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is missing shard key field(s): {:?}",
-                shard_collection.ns,
+                shard_collection.get_ns(),
                 missing_keys
             );
         }
         if filter.is_empty() {
             anyhow::bail!(
                 "mongo target collection [{}] is sharded, but raw row filter is empty",
-                shard_collection.ns
+                shard_collection.get_ns()
             );
         }
         Ok(filter)

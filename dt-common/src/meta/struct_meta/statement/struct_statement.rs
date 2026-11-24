@@ -30,8 +30,14 @@ pub enum StructKeyType {
     Schema,
     #[strum(serialize = "table")]
     Table,
+    #[strum(serialize = "collection")]
+    Collection,
+    #[strum(serialize = "shardkey")]
+    ShardKey,
     #[strum(serialize = "index")]
     Index,
+    #[strum(serialize = "index")]
+    MongoIndex,
     #[strum(serialize = "constraint")]
     Constraint,
     #[strum(serialize = "sequence")]
@@ -111,26 +117,30 @@ impl StructKey {
         self.key_type.is_table_scoped()
     }
 
+    pub fn is_collection(&self) -> bool {
+        self.key_type == StructKeyType::Collection
+    }
+
+    pub fn is_shard_key(&self) -> bool {
+        self.key_type == StructKeyType::ShardKey
+    }
+
     pub fn is_sequence(&self) -> bool {
         self.key_type == StructKeyType::Sequence
     }
 
     pub fn parent_table_key(&self) -> Option<Self> {
-        if !matches!(
-            self.key_type,
+        let parent = match self.key_type {
+            StructKeyType::MongoIndex | StructKeyType::ShardKey => StructKeyType::Collection,
             StructKeyType::Index
-                | StructKeyType::Constraint
-                | StructKeyType::SequenceOwner
-                | StructKeyType::ColumnComment
-                | StructKeyType::TableComment
-        ) {
-            return None;
-        }
+            | StructKeyType::Constraint
+            | StructKeyType::SequenceOwner
+            | StructKeyType::ColumnComment
+            | StructKeyType::TableComment => StructKeyType::Table,
+            _ => return None,
+        };
 
-        Some(Self::new(
-            StructKeyType::Table,
-            [self.schema(), self.table()],
-        ))
+        Some(Self::new(parent, [self.schema(), self.table()]))
     }
 }
 
@@ -164,7 +174,10 @@ impl StructKeyType {
         match self {
             Self::Database | Self::Schema => Some(0),
             Self::Table
+            | Self::Collection
+            | Self::ShardKey
             | Self::Index
+            | Self::MongoIndex
             | Self::Constraint
             | Self::Sequence
             | Self::SequenceOwner
@@ -183,7 +196,10 @@ impl StructKeyType {
     pub fn table_index(self) -> Option<usize> {
         match self {
             Self::Table
+            | Self::Collection
+            | Self::ShardKey
             | Self::Index
+            | Self::MongoIndex
             | Self::Constraint
             | Self::Sequence
             | Self::SequenceOwner
@@ -200,7 +216,10 @@ impl StructKeyType {
         matches!(
             self,
             Self::Table
+                | Self::Collection
+                | Self::ShardKey
                 | Self::Index
+                | Self::MongoIndex
                 | Self::Constraint
                 | Self::SequenceOwner
                 | Self::ColumnComment
@@ -233,8 +252,8 @@ impl StructStatement {
             Self::MysqlCreateDatabase(s) => s.to_sqls(filter),
             Self::PgCreateSchema(s) => s.to_sqls(filter),
             Self::MysqlCreateTable(s) => s.to_sqls(filter),
-            Self::MongoCreateCollection(_) => Ok(vec![]),
-            Self::MongoShardKey(_) => Ok(vec![]),
+            Self::MongoCreateCollection(s) => s.to_sqls(filter),
+            Self::MongoShardKey(s) => s.to_sqls(filter),
             Self::PgCreateTable(s) => s.to_sqls(filter),
             Self::PgCreateRbac(s) => s.to_sqls(filter),
             Self::PgCreateUdf(s) => s.to_sqls(filter),
@@ -272,5 +291,10 @@ mod tests {
             Some(StructKey::new(StructKeyType::Table, ["a.b", "t.1"]))
         );
         assert!(table.parent_table_key().is_none());
+        let collection = StructKey::new(StructKeyType::Collection, ["a.b", "t.1"]);
+        let mongo_index = StructKey::new(StructKeyType::MongoIndex, ["a.b", "t.1", "idx"]);
+        assert_eq!(mongo_index.parent_table_key(), Some(collection.clone()));
+        let shard_key = StructKey::new(StructKeyType::ShardKey, ["a.b", "t.1"]);
+        assert_eq!(shard_key.parent_table_key(), Some(collection));
     }
 }

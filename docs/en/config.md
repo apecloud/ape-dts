@@ -167,7 +167,7 @@ Notes:
   Standalone snapshot applies sampling during extraction. Inline snapshot/CDC writes every
   row/change and applies deterministic key-hash sampling before target fetch.
 - Standalone snapshot check supports MySQL, PostgreSQL, and MongoDB targets. Standalone struct check
-  supports MySQL and PostgreSQL.
+  supports MySQL, PostgreSQL, and MongoDB.
 - Inline snapshot check supports MySQL, PostgreSQL, and MongoDB write targets.
 - `recheck_count` and `recheck_interval_secs` are not used by inline CDC reconciliation.
 - When either retry-buffer limit is reached, the checker does not drop the result; newly found
@@ -258,7 +258,7 @@ without failing the main CDC write path. Snapshot and structure checks do not us
 | do_events        | events to be synced                                                  | insert,update,delete                                                                                                                 | \*      |
 | do_ddls          | ddls to be synced, for mysql cdc tasks                               | create_database,drop_database,alter_database,create_table,drop_table,truncate_table,rename_table,alter_table,create_index,drop_index | -       |
 | do_dcls          | DCL statements to be synced, for supported structure tasks           | create_user,grant                                                                                                                    | -       |
-| do_structures    | structures to be migrated in structure migration tasks               | mysql/pg: database,table,constraint,sequence,comment,index; mongo: collection,shardkey                                               | \*      |
+| do_structures    | structures to be migrated in structure migration tasks               | mysql/pg: database,table,constraint,sequence,comment,index; mongo: collection,index,shardkey                                               | \*      |
 | ignore_cmds      | commands to be filtered, for redis cdc tasks                         | flushall,flushdb                                                                                                                     | -       |
 | where_conditions | where conditions for the source SELECT SQL during snapshot migration | json:[{"db":"db_1","tb":"tb_1","condition":"f_0 > 1"},{"db":"db_2","tb":"tb_2","condition":"f_0 > 1 AND f_1 < 9"}]                   | -       |
 
@@ -273,7 +273,7 @@ without failing the main CDC write path. Snapshot and structure checks do not us
   **drop_user**, **drop_role**, **grant**, **revoke**, and **set_role**.
 - `do_structures` takes structure object types. For MySQL/PostgreSQL, common values include
   **database**, **table**, **constraint**, **sequence**, **comment**, and **index**. For MongoDB,
-  supported values are **collection**, **shardkey**. MongoDB does not use a separate
+  supported values are **collection**, **index**, and **shardkey**. Use `index` to include secondary indexes. MongoDB does not use a separate
   **database** structure type; databases are created implicitly by creating collections. **shardkey**
   copies source sharding definitions for sharded collections and runs only when the target is
   connected through `mongos`.

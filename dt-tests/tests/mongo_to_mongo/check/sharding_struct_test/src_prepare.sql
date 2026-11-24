@@ -1,0 +1,11 @@
+use mongo_struct_check_sharding;
+db.dropDatabase();
+admin.runCommand({"enableSharding":"mongo_struct_check_sharding"});
+db.createCollection("orders");
+db.orders.createIndex({"a":1,"b":1}, {"name":"ab"});
+db.orders.createIndex({"b":1,"a":1}, {"name":"ba"});
+admin.runCommand({"shardCollection":"mongo_struct_check_sharding.orders","key":{"a":1,"b":1}});
+db.createCollection("events");
+db.events.createIndex({"region":"hashed"}, {"name":"region_hashed"});
+admin.runCommand({"shardCollection":"mongo_struct_check_sharding.events","key":{"region":"hashed"}});
+db.createCollection("local");

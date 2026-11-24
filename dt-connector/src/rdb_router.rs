@@ -336,11 +336,11 @@ impl RdbRouterInner {
             }
 
             StructStatement::MongoShardKey(s) => {
-                let ns = s.shard_collection.ns.clone();
-                if let Some((schema, tb)) = ns.split_once('.') {
-                    let (dst_schema, dst_tb) = self.get_tb_map(schema, tb);
-                    s.route(schema, tb, dst_schema, dst_tb)
-                }
+                let (dst_schema, dst_tb) = self.get_tb_map(
+                    &s.shard_collection.database_name,
+                    &s.shard_collection.collection_name,
+                );
+                s.route(dst_schema.to_owned(), dst_tb.to_owned())
             }
 
             StructStatement::PgCreateTable(s) => {

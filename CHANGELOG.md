@@ -11,12 +11,24 @@ Versions follow the project-specific numbering scheme described in the 2.0.27 re
 
 Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible `<super_major_version>.<major_version>.<minor_version>` numbering: `2.0.27` for a minor update, `2.1.xx` for substantial new features, and `3.0.xx` for major architectural changes.
 
+### Breaking Changes
+
+#### MongoDB
+
+- [[637]](https://github.com/apecloud/ape-dts/pull/637) - honor `do_structures` when copying secondary indexes.
+  - **Before** — `do_structures=collection` copied collections and their secondary indexes.
+  - **After** — `do_structures=collection` copies collections and skips secondary indexes. Use `do_structures=collection,index` to copy both, or keep the default `*` to copy all structure types.
+
 ### Added
 
 #### MySQL
 
 - [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - upgrade `mysql-binlog-connector-rust` to 0.3.5 for MySQL 8.4 binlog status queries, tagged GTID events/resume, and newer heartbeat events
 - [[5fde911e]](https://github.com/apecloud/ape-dts/commit/5fde911e004ffdd34e215a0c53a28039e9f02547) - support empty-password binlog connections with `mysql_native_password` and `caching_sha2_password`
+
+#### MongoDB
+
+- [[638]](https://github.com/apecloud/ape-dts/pull/638) - support standalone structure checks for collections, secondary indexes, and shard keys
 
 ### Changed
 
@@ -44,6 +56,10 @@ Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible
 - [[619]](https://github.com/apecloud/ape-dts/pull/619) - use `ON CONFLICT DO NOTHING` for derived inserts on unkeyed expression-index tables with `sinker.replace=true`; conflicting rows are not updated
 - [[619]](https://github.com/apecloud/ape-dts/pull/619) - preserve empty strings instead of decoding them as `NULL` in CDC
 - [[627]](https://github.com/apecloud/ape-dts/pull/627) - fix unkeyed UPDATE/DELETE matching on `json` and `xml` columns using text comparison with `C` collation
+
+#### MongoDB
+
+- [[639]](https://github.com/apecloud/ape-dts/pull/639) - fix snapshot resume when a saved `_id` value begins with a dollar sign
 
 #### Redis
 

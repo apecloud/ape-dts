@@ -7,6 +7,7 @@ use std::{
 use anyhow::{bail, ensure, Context};
 use async_mutex::Mutex;
 use chrono::Local;
+use mongodb::Client;
 use sqlx::{MySql, Pool, Postgres};
 use tokio::time::sleep;
 
@@ -29,6 +30,7 @@ use crate::{
         to_json_line, CheckSummaryLog, CheckTableSummaryLog, StructCheckKey, StructCheckLog,
     },
     meta_fetcher::{
+        mongo::mongo_struct_fetcher::MongoStructFetcher,
         mysql::mysql_struct_fetcher::MysqlStructFetcher, pg::pg_struct_fetcher::PgStructFetcher,
     },
     rdb_router::RdbRouter,
@@ -38,6 +40,7 @@ pub struct StructCheckerHandle {
     db_type: DbType,
     conn_pool_mysql: Option<Pool<MySql>>,
     conn_pool_pg: Option<Pool<Postgres>>,
+    mongo_client: Option<Client>,
     filter: RdbFilter,
     router: Option<RdbRouter>,
     output_revise_sql: bool,
@@ -122,6 +125,7 @@ impl StructCheckerHandle {
             db_type,
             conn_pool_mysql,
             conn_pool_pg,
+            mongo_client: None,
             filter,
             router,
             output_revise_sql,
@@ -134,6 +138,11 @@ impl StructCheckerHandle {
             schemas: HashSet::new(),
             start_time: Local::now().to_rfc3339(),
         }
+    }
+
+    pub fn with_mongo_client(mut self, client: Client) -> Self {
+        self.mongo_client = Some(client);
+        self
     }
 
     async fn add_src_sqls(&mut self, struct_data: StructData) -> anyhow::Result<()> {
@@ -263,7 +272,55 @@ impl StructCheckerHandle {
                     }
                 }
             }
+            DbType::Mongo => return self.build_mongo_dst_map().await,
             _ => bail!("struct check not supported for db_type: {}", self.db_type),
+        }
+        Ok(dst_map)
+    }
+
+    async fn build_mongo_dst_map(&self) -> anyhow::Result<BTreeMap<StructKey, String>> {
+        let mongo_client = self
+            .mongo_client
+            .as_ref()
+            .context("mongo checker client not found")?
+            .clone();
+        let fetcher = MongoStructFetcher {
+            mongo_client,
+            dbs: HashSet::new(),
+            filter: self.filter.clone(),
+        };
+
+        let compare_shard_keys = !self.filter.filter_structure(&StructureType::ShardKey);
+        let mut selected_collections: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let mut namespaces = HashSet::new();
+        for key in self.src_sql_map.keys() {
+            if key.is_collection() {
+                selected_collections
+                    .entry(key.schema())
+                    .or_default()
+                    .push(key.table().to_string());
+            }
+            if compare_shard_keys && (key.is_collection() || key.is_shard_key()) {
+                namespaces.insert(format!("{}.{}", key.schema(), key.table()));
+            }
+        }
+        let compare_indexes = !self.filter.filter_structure(&StructureType::Index);
+        let mut dst_map = BTreeMap::new();
+        for (db, names) in selected_collections {
+            for batch in names.chunks(1000) {
+                for stmt in fetcher
+                    .get_collections(db, compare_indexes, Some(batch))
+                    .await?
+                {
+                    dst_map.extend(stmt.to_sqls(&self.filter)?);
+                }
+            }
+        }
+        if !namespaces.is_empty() {
+            let namespaces: Vec<_> = namespaces.into_iter().collect();
+            for stmt in fetcher.get_shard_key_statements(Some(&namespaces)).await? {
+                dst_map.extend(stmt.to_sqls(&self.filter)?);
+            }
         }
         Ok(dst_map)
     }

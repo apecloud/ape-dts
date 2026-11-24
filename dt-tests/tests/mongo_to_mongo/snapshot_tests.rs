@@ -186,6 +186,7 @@ mod test {
         dst_expected_counts.insert(("test_db_1", "finish_tb_in_log_1"), 0);
         dst_expected_counts.insert(("test_db_1", "resume_tb_in_log_1"), 1);
         dst_expected_counts.insert(("test_db_1", "resume_string_tb_1"), 1);
+        dst_expected_counts.insert(("test_db_1", "resume_dollar_string_tb_1"), 2);
         dst_expected_counts.insert(("test_db_1", "resume_int32_tb_1"), 1);
         dst_expected_counts.insert(("test_db_1", "resume_int64_in_log_tb_1"), 1);
         dst_expected_counts.insert(("test_db_1", "resume_datetime_in_log_tb_1"), 1);

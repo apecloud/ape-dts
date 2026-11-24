@@ -56,11 +56,12 @@ log_dir=./logs
 
 | Config        | Description                                                                                                   | Example                   | Default             |
 | :------------ | :------------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------ |
-| do_structures | one or multiple in [collection,shardkey]. `shardkey` is only meaningful when the source collection is sharded | collection,index,shardkey | \*, which means all |
+| do_structures | one or multiple in [collection,index,shardkey]. `shardkey` is only meaningful when the source collection is sharded | collection,index,shardkey | \*, which means all |
 
 Mongo struct migration currently supports databases implicitly through collection creation. It does
 not use a separate Mongo `database` structure type. `collection` creates Mongo collections and
-copies collection options. `shardkey` copies
+copies collection options. Use `collection,index` to include secondary indexes, or `*` to
+select all structure types. `shardkey` copies
 the source sharding definition; when the target is a sharded cluster, DTS runs `enableSharding`
 before `shardCollection` if needed. When the target is not `mongos`, shard key statements are
 ignored and collection migration can still run.
