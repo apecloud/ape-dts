@@ -11,6 +11,14 @@ Versions follow the project-specific numbering scheme described in the 2.0.27 re
 
 Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible `<super_major_version>.<major_version>.<minor_version>` numbering: `2.0.27` for a minor update, `2.1.xx` for substantial new features, and `3.0.xx` for major architectural changes.
 
+### Breaking Changes
+
+#### MongoDB
+
+- [[637]](https://github.com/apecloud/ape-dts/pull/637) - honor `do_structures` when copying secondary indexes.
+  - **Before** — `do_structures=collection` copied collections and their secondary indexes.
+  - **After** — `do_structures=collection` copies collections and skips secondary indexes. Use `do_structures=collection,index` to copy both, or keep the default `*` to copy all structure types.
+
 ### Added
 
 #### MySQL
@@ -51,7 +59,6 @@ Maintenance release based on `release-2.0.26`. Versions now use Cargo-compatible
 
 #### MongoDB
 
-- [[637]](https://github.com/apecloud/ape-dts/pull/637) - honor `do_structures` when copying secondary indexes. Include `index` with `collection` to copy secondary indexes, or keep the default `*` to copy all structure types.
 - [[639]](https://github.com/apecloud/ape-dts/pull/639) - fix snapshot resume when a saved `_id` value begins with a dollar sign
 
 #### Redis
