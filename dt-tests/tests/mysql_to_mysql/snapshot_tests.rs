@@ -7,7 +7,8 @@ mod test {
     use serial_test::serial;
 
     use crate::test_runner::{
-        test_base::TestBase, test_cases::rdb_order_key_test::run_order_key_test,
+        rdb_test_runner::RdbTestRunner, test_base::TestBase,
+        test_cases::rdb_order_key_test::run_order_key_test,
     };
 
     #[tokio::test]
@@ -196,17 +197,15 @@ mod test {
         TestBase::run_snapshot_test("mysql_to_mysql/snapshot/tb_parallel_test").await;
     }
 
-    // #[tokio::test]
-    // #[serial]
-    // async fn snapshot_deadlock_test() {
-    //     // Unpredictable write orders for unique indices on non-ordering columns (relative to the ORDER BY clause) are
-    //     // prone to causing deadlocks in the destination table.
-    //     let runner = RdbTestRunner::new("mysql_to_mysql/snapshot/deadlock_test")
-    //         .await
-    //         .unwrap();
-    //     runner.run_snapshot_test(false).await.unwrap();
-    //     runner.close().await.unwrap();
-    // }
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_deadlock_test() {
+        let runner = RdbTestRunner::new("mysql_to_mysql/snapshot/deadlock_test")
+            .await
+            .unwrap();
+        runner.run_snapshot_test(false).await.unwrap();
+        runner.close().await.unwrap();
+    }
 
     #[tokio::test]
     #[serial]
