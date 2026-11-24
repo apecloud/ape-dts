@@ -14,3 +14,7 @@ db.upsert_accounts.insertMany([
   { "_id": "upsert_1", "tenant_id": "tenant_u", "account_id": 1, "status": "old", "balance": 1 },
   { "_id": "upsert_2", "tenant_id": "tenant_u", "account_id": 2, "status": "old", "balance": 2 }
 ]);
+
+db.createCollection("conflicting_duplicate_ids");
+db.conflicting_duplicate_ids.createIndex({ "bucket": 1 });
+admin.runCommand({ "shardCollection": "mongo_snapshot_sharding_db.conflicting_duplicate_ids", "key": { "bucket": 1 } });

@@ -2,10 +2,13 @@
 mod test {
     use std::collections::HashMap;
 
-    use mongodb::bson::{doc, raw::RawDocumentBuf};
+    use futures::TryStreamExt;
+    use mongodb::bson::{doc, raw::RawDocumentBuf, Document};
     use serial_test::serial;
 
-    use crate::test_runner::mongo_test_runner::MongoTestRunner;
+    use crate::test_config_util::TestConfigUtil;
+    use crate::test_runner::base_test_runner::BaseTestRunner;
+    use crate::test_runner::mongo_test_runner::{MongoTestRunner, DST, SRC};
     use crate::test_runner::test_base::TestBase;
 
     #[tokio::test]
@@ -110,7 +113,22 @@ mod test {
         let runner = MongoTestRunner::new("mongo_to_mongo/snapshot/sharding_test")
             .await
             .unwrap();
-        runner.run_snapshot_test(true).await.unwrap();
+        runner.execute_prepare_sqls().await.unwrap();
+        run_zone_struct(&runner).await;
+        runner.execute_test_sqls().await.unwrap();
+        runner.base.start_task().await.unwrap();
+
+        for collection in ["accounts", "events_hashed", "upsert_accounts"] {
+            assert_eq!(
+                runner
+                    .fetch_data("mongo_snapshot_sharding_db", collection, SRC)
+                    .await,
+                runner
+                    .fetch_data("mongo_snapshot_sharding_db", collection, DST)
+                    .await,
+                "{collection}"
+            );
+        }
         runner
             .assert_dst_shard_collection(
                 "mongo_snapshot_sharding_db.accounts",
@@ -132,6 +150,137 @@ mod test {
                 false,
             )
             .await;
+
+        let target = runner.dst_mongo_client();
+        let ns = "mongo_snapshot_sharding_db.duplicate_ids";
+        let tags = target.database("config").collection::<Document>("tags");
+        let initial_tags: Vec<Document> = tags
+            .find(doc! { "ns": ns })
+            .sort(doc! { "min": 1 })
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let collection = target
+            .database("mongo_snapshot_sharding_db")
+            .collection::<Document>("duplicate_ids");
+        assert_eq!(
+            collection
+                .count_documents(doc! { "_id": 42 })
+                .await
+                .unwrap(),
+            2
+        );
+        for tenant in ["A", "B"] {
+            assert_eq!(
+                collection
+                    .find_one(doc! { "_id": 42, "tenant": tenant })
+                    .await
+                    .unwrap(),
+                Some(doc! { "_id": 42, "tenant": tenant, "bucket": 1 })
+            );
+        }
+
+        assert_eq!(initial_tags.len(), 2);
+        let stats: Vec<Document> = collection
+            .aggregate([doc! { "$collStats": { "count": {} } }])
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let counts: HashMap<_, _> = stats
+            .iter()
+            .map(|stat| {
+                let count = stat
+                    .get_i64("count")
+                    .or_else(|_| stat.get_i32("count").map(i64::from))
+                    .unwrap();
+                (stat.get_str("shard").unwrap(), count)
+            })
+            .collect();
+        assert_eq!(
+            counts,
+            HashMap::from([("target-shard-rs", 1), ("target-shard2-rs", 1)])
+        );
+
+        run_zone_struct(&runner).await;
+        let repeated_tags: Vec<Document> = tags
+            .find(doc! { "ns": ns })
+            .sort(doc! { "min": 1 })
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(initial_tags, repeated_tags);
+    }
+
+    async fn run_zone_struct(runner: &MongoTestRunner) {
+        BaseTestRunner::start_task_with_config_file(&runner.base.struct_task_config_file)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_sharding_conflicting_destination_test() {
+        let runner = MongoTestRunner::new("mongo_to_mongo/snapshot/sharding_test")
+            .await
+            .unwrap();
+        let config_file = &runner.base.task_config_file;
+        TestConfigUtil::update_task_config_2(
+            config_file,
+            config_file,
+            &[
+                ("filter", "do_tbs", "mongo_snapshot_sharding_db.duplicate_ids"),
+                ("router", "tb_map", "mongo_snapshot_sharding_db.duplicate_ids:mongo_snapshot_sharding_db.conflicting_duplicate_ids"),
+            ],
+        );
+
+        let error = runner.run_snapshot_test(false).await.unwrap_err();
+        assert!(format!("{error:#}").contains("E11000"), "{error:#}");
+        let collection = runner
+            .dst_mongo_client()
+            .database("mongo_snapshot_sharding_db")
+            .collection::<Document>("conflicting_duplicate_ids");
+        assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 1);
+        assert_eq!(
+            collection.find_one(doc! {}).await.unwrap().unwrap(),
+            doc! { "_id": 42, "tenant": "A", "bucket": 1 }
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_sharding_resume_log_test() {
+        let runner = MongoTestRunner::new("mongo_to_mongo/snapshot/sharding_resume_log_test")
+            .await
+            .unwrap();
+        // The fixture pre-shards this target to isolate checkpoint behavior from Struct.
+        runner.run_snapshot_test(false).await.unwrap();
+        let collection = runner
+            .dst_mongo_client()
+            .database("mongo_snapshot_resume_dst")
+            .collection::<Document>("duplicate_ids");
+        assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 3);
+        for expected in [
+            doc! { "_id": 42, "tenant": "A", "region": "east", "checkpoint_marker": true },
+            doc! { "_id": 42, "tenant": "A", "region": "west" },
+            doc! { "_id": 43, "tenant": "B", "region": "west" },
+        ] {
+            assert_eq!(
+                collection
+                    .find_one(expected.clone())
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                Some(&expected),
+                "missing expected snapshot document: {expected}"
+            );
+        }
     }
 
     #[tokio::test]
