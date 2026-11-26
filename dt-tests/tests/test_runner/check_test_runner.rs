@@ -500,24 +500,13 @@ impl CheckTestRunner {
             .unwrap_or(0);
         let delay_secs = std::cmp::max(1, retry_interval_secs / 2);
 
-        let pool_mysql = self.base.dst_conn_pool_mysql.clone();
-        let pool_pg = self.base.dst_conn_pool_pg.clone();
-        let sqls = self.base.base.src_test_sqls.clone();
-        tokio::spawn(async move {
+        let repair_target = async {
             tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
-            if let Some(pool) = pool_mysql {
-                for sql in &sqls {
-                    sqlx::query(sql).execute(&pool).await.unwrap();
-                }
-            }
-            if let Some(pool) = pool_pg {
-                for sql in &sqls {
-                    sqlx::query(sql).execute(&pool).await.unwrap();
-                }
-            }
-        });
-
-        self.base.base.start_task().await?;
+            self.base
+                .execute_dst_sqls(&self.base.base.src_test_sqls)
+                .await
+        };
+        tokio::try_join!(self.base.base.start_task(), repair_target)?;
         CheckUtil::validate_check_log(&self.expect_check_log_dir, &self.dst_check_log_dir)?;
         self.base.execute_clean_sqls().await?;
         Ok(())

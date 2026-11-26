@@ -1,0 +1,1 @@
+CREATE NONCLUSTERED INDEX [ix_val] ON [ape_dts].[dbo].[check_struct_revise] ([val] ASC)

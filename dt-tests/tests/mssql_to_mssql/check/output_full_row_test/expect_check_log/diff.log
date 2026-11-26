@@ -1,0 +1,1 @@
+{"db":"ape_dts","schema":"dbo","tb":"check_full_row","id_col_values":{"id":"2"},"diff_col_values":{"val":{"src":"20","dst":"99"}},"src_row":{"id":2,"val":20},"dst_row":{"id":2,"val":99}}

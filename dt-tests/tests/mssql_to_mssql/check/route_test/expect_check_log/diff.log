@@ -1,0 +1,1 @@
+{"db":"ape_dts","schema":"dbo","tb":"check_route_src","target_schema":"dbo","target_tb":"check_route_dst","id_col_values":{"id":"2"},"diff_col_values":{"val":{"src":"20","dst":"99"}}}
