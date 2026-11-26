@@ -1,1 +1,4 @@
 {"db":"ape_dts","schema":"dbo","tb":"snapshot_check","id_col_values":{"id":"2","tenant":"2"}}
+{"db":"ape_dts","schema":"dbo","tb":"sc_data_no_pk_composite_uk","id_col_values":{"code":"11","tenant":"2"}}
+{"db":"ape_dts","schema":"dbo","tb":"sc_data_no_pk_multi_uk","id_col_values":{"seq":"20"}}
+{"db":"ape_dts","schema":"dbo","tb":"sc_data_no_pk_no_uk","id_col_values":{"category":"1","label":"second"}}
