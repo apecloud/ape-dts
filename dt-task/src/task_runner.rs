@@ -52,7 +52,7 @@ use dt_connector::{
     checker::check_log::{to_json_line, CheckSummaryLog},
     checker::{
         Checker, CheckerHandle, CheckerStateStore, DataCheckerHandle, DirectCheckerHandle,
-        MongoChecker, MysqlChecker, PgChecker, StructCheckerHandle,
+        MongoChecker, MssqlChecker, MysqlChecker, PgChecker, StructCheckerHandle,
     },
     data_marker::DataMarker,
     extractor::resumer::{recorder::Recorder, recovery::Recovery},
@@ -887,7 +887,9 @@ impl TaskRunner {
         let standalone_snapshot_check = self
             .task_type
             .is_some_and(|task_type| task_type.is_standalone_snapshot_check());
-        let checker_sample_rate = if standalone_snapshot_check {
+        let checker_sample_rate = if standalone_snapshot_check
+            && !matches!(extractor_config, ExtractorConfig::MssqlSnapshot { .. })
+        {
             None
         } else {
             cfg.sample_percent
@@ -1099,6 +1101,29 @@ impl TaskRunner {
                         "MysqlChecker",
                     ))))
                 }
+            }
+            DbType::Mssql => {
+                let pool = MssqlConnectionPool::from_config(
+                    &checker_url,
+                    &checker_auth,
+                    checker_target.app_name.as_deref(),
+                    max_connections,
+                    checker_target.connection_timeout_secs,
+                )
+                .await?;
+                let checker = MssqlChecker::new(pool).await?;
+                let ctx = build_check_context(
+                    ExtractorUtil::get_extractor_meta_manager(&self.config).await?,
+                    self.config.build_router()?,
+                    None,
+                    false,
+                );
+                Ok(Some(CheckerHandle::Direct(DirectCheckerHandle::data(
+                    checker,
+                    checker_task_id,
+                    ctx,
+                    "MssqlChecker",
+                ))))
             }
             DbType::Pg => {
                 let router = self.config.build_router()?;

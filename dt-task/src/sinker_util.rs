@@ -223,7 +223,7 @@ impl SinkerUtil {
                 };
                 let meta_manager = MssqlMetaManager::new(conn_pool.clone()).await?;
 
-                for _ in 0..parallel_size {
+                for index in 0..parallel_size {
                     let sinker = MssqlSinker::new(
                         conn_pool.clone(),
                         meta_manager.clone(),
@@ -232,7 +232,13 @@ impl SinkerUtil {
                         replace,
                         BaseSinker::new(monitor.clone(), monitor_interval),
                     );
-                    Self::push_sinker(&mut sub_sinkers, sinker, &sinker_worker_metrics);
+                    Self::push_checkable_sinker(
+                        &mut sub_sinkers,
+                        sinker,
+                        &checker,
+                        index + 1 == parallel_size,
+                        &sinker_worker_metrics,
+                    );
                 }
             }
 

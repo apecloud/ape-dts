@@ -64,6 +64,72 @@ impl<'a> MssqlTableSqlBuilder<'a> {
         Ok(query)
     }
 
+    /// Tiberius uses two of the 2100 RPC parameters for sp_executesql itself.
+    pub fn max_lookup_rows(&self) -> anyhow::Result<usize> {
+        let mut parameters = 0;
+        for col in &self.tb_meta.basic.id_cols {
+            parameters += self.tb_meta.get_col_type(col)?.bind_parameter_count();
+        }
+        anyhow::ensure!(
+            (1..=2098).contains(&parameters),
+            "MSSQL lookup requires 1 to 2098 key parameters per row, got {parameters}"
+        );
+        Ok(2098 / parameters)
+    }
+
+    pub fn get_lookup_query<'r>(
+        &self,
+        rows: &[&'r RowData],
+    ) -> anyhow::Result<MssqlTableQueryInfo<'r>> {
+        let cols = &self.tb_meta.basic.id_cols;
+        anyhow::ensure!(
+            !rows.is_empty() && rows.len() <= self.max_lookup_rows()?,
+            "invalid MSSQL lookup batch size"
+        );
+        let mut binds = Vec::with_capacity(rows.len() * cols.len());
+        let mut predicates = Vec::with_capacity(rows.len());
+        let mut parameter_index = 1;
+        for row in rows {
+            let after = row.require_after()?;
+            let mut terms = Vec::with_capacity(cols.len());
+            for col in cols {
+                let value = after
+                    .get(col)
+                    .with_context(|| format!("missing MSSQL lookup column {col}"))?;
+                binds.push(value);
+                let column = self.escape(col);
+                let param = self.get_placeholder(parameter_index, col)?;
+                let ty = self.tb_meta.get_col_type(col)?;
+                let predicate = match ty {
+                    MssqlColType::Text | MssqlColType::NText | MssqlColType::Xml => format!(
+                        "CONVERT(nvarchar(max), {column}) = CONVERT(nvarchar(max), {param})"
+                    ),
+                    MssqlColType::Image
+                    | MssqlColType::AssemblyUdt
+                    | MssqlColType::Geometry
+                    | MssqlColType::Geography => format!(
+                        "CONVERT(varbinary(max), {column}) = CONVERT(varbinary(max), {param})"
+                    ),
+                    _ => format!("{column} = {param}"),
+                };
+                terms.push(predicate);
+                parameter_index += ty.bind_parameter_count();
+            }
+            predicates.push(format!("({})", terms.join(" AND ")));
+        }
+        let sql = format!(
+            "SELECT {} FROM {} WHERE {}",
+            self.build_extract_cols_str()?,
+            self.table_name(),
+            predicates.join(" OR ")
+        );
+        Ok(MssqlTableQueryInfo {
+            sql,
+            cols: cols.clone(),
+            binds,
+        })
+    }
+
     pub fn get_insert_query<'r>(
         &self,
         row_data: &'r RowData,
@@ -383,6 +449,28 @@ mod tests {
                 ("name".to_string(), ColValue::String("n1".to_string())),
             ])),
         )
+    }
+
+    #[test]
+    fn lookup_binds_composite_keys_in_row_order() {
+        let mut meta = build_tb_meta();
+        meta.basic.db = "sales".into();
+        meta.basic.id_cols.push("code".into());
+        let builder = MssqlTableSqlBuilder::new(&meta, None);
+        assert_eq!(builder.max_lookup_rows().unwrap(), 1049);
+        let row = build_insert_row();
+        let mut other = build_insert_row();
+        other
+            .after
+            .as_mut()
+            .unwrap()
+            .insert("code".into(), ColValue::String("other".into()));
+        let query = builder.get_lookup_query(&[&row, &other]).unwrap();
+        assert_eq!(query.sql, "SELECT [id],[code],[name] FROM [sales].[dbo].[t1] WHERE ([id] = @P1 AND [code] = @P2) OR ([id] = @P3 AND [code] = @P4)");
+        assert_eq!(query.binds.len(), 4);
+        assert_eq!(query.binds[3].to_option_string().as_deref(), Some("other"));
+        other.after.as_mut().unwrap().remove("code");
+        assert!(builder.get_lookup_query(&[&other]).is_err());
     }
 
     #[derive(Clone, Copy)]

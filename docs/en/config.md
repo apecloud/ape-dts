@@ -83,7 +83,7 @@ The driver-specific limits for `verify_ca` are described above.
 | MySQL      | `disable`, `require`                             | Yes    | Yes      | Yes                              | Yes            |
 | MySQL      | `verify_ca`, `verify_full`                       | Yes    | Yes      | No (binlog driver limitation)    | Yes            |
 | PostgreSQL | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes            |
-| MSSQL      | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | No                               | Structure only |
+| MSSQL      | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | No                               | Snapshot, structure |
 | Redis      | `disable`, `require`, `verify_ca`, `verify_full` | No     | Yes      | Yes (including snapshot-and-CDC) | No             |
 | MongoDB    | `disable`, `require`, `verify_ca`, `verify_full` | Yes    | Yes      | Yes                              | Yes            |
 
@@ -214,11 +214,12 @@ Notes:
 
 - Checker tasks support only `[pipeline].pipeline_type=basic`.
 - `sample_percent` accepts `1..=100` and applies only to snapshot checks and inline CDC checks.
-  Standalone snapshot applies sampling during extraction. Inline snapshot/CDC writes every
+  Standalone snapshot applies sampling during extraction for MySQL, PostgreSQL and MongoDB sources. MSSQL sources use key-hash sampling before target fetch. Inline snapshot/CDC writes every
   row/change and applies deterministic key-hash sampling before target fetch.
-- Standalone snapshot check supports MySQL, PostgreSQL, and MongoDB targets. Standalone struct check
-  supports MySQL, PostgreSQL, and MongoDB.
-- Inline snapshot check supports MySQL, PostgreSQL and MongoDB write targets.
+- Standalone snapshot check supports MySQL, PostgreSQL, MSSQL, and MongoDB targets. Standalone struct check
+  supports MySQL, PostgreSQL, MSSQL, and MongoDB.
+- Inline snapshot check supports MySQL, PostgreSQL, MSSQL, and MongoDB write targets.
+- MSSQL snapshot checks support difference logs. Leave `output_revise_sql=false`.
 - `recheck_count` and `recheck_interval_secs` are not used by inline CDC reconciliation.
 - When either retry-buffer limit is reached, the checker does not drop the result; newly found
   inconsistencies skip retry and are finalized immediately.

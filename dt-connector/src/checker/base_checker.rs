@@ -21,6 +21,7 @@ use dt_common::{
         col_value::ColValue,
         ddl_meta::ddl_data::DdlData,
         dt_data::{DtData, DtItem},
+        mssql::mssql_tb_meta::MssqlTbMeta,
         mysql::mysql_tb_meta::MysqlTbMeta,
         pg::pg_tb_meta::PgTbMeta,
         position::Position,
@@ -73,6 +74,7 @@ pub(super) fn is_summary_consistent(summary: &CheckSummaryLog, init_failed: bool
 
 #[derive(Debug, Clone)]
 pub enum CheckerTbMeta {
+    Mssql(MssqlTbMeta),
     Mysql(MysqlTbMeta),
     Pg(PgTbMeta),
     Mongo(RdbTbMeta),
@@ -81,6 +83,7 @@ pub enum CheckerTbMeta {
 impl CheckerTbMeta {
     pub fn basic(&self) -> &RdbTbMeta {
         match self {
+            CheckerTbMeta::Mssql(m) => &m.basic,
             CheckerTbMeta::Mysql(m) => &m.basic,
             CheckerTbMeta::Pg(m) => &m.basic,
             CheckerTbMeta::Mongo(m) => m,
@@ -192,6 +195,9 @@ impl CheckerTbMeta {
             }};
         }
         match self {
+            CheckerTbMeta::Mssql(_) => {
+                anyhow::bail!("MSSQL snapshot check does not support revise SQL")
+            }
             CheckerTbMeta::Mysql(meta) => build_query!(meta, new_for_mysql),
             CheckerTbMeta::Pg(meta) => build_query!(meta, new_for_pg),
             CheckerTbMeta::Mongo(_) => unreachable!("Mongo handled before build_rdb_query"),

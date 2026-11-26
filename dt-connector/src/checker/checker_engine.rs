@@ -355,7 +355,9 @@ impl<C: Checker> DataChecker<C> {
 
         let mut diff_col_values = HashMap::new();
         for (col, src_val) in src {
-            if src_val.is_unchanged_toast() {
+            if src_val.is_unchanged_toast()
+                || matches!(tb_meta, CheckerTbMeta::Mssql(meta) if meta.is_server_generated(col))
+            {
                 continue;
             }
             let maybe_diff = match dst.get(col) {

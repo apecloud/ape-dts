@@ -176,6 +176,14 @@ impl TaskConfig {
                 )
             };
 
+            if sinker_basic.db_type == DbType::Mssql
+                && extractor_basic.extract_type == ExtractType::Snapshot
+                && checker_cfg.output.output_revise_sql
+            {
+                bail!(DtError::invalid_config(
+                    "MSSQL snapshot check does not support output_revise_sql"
+                ));
+            }
             if checker_cfg.sample_percent.is_some()
                 && !matches!(
                     task_type,
@@ -267,7 +275,10 @@ impl TaskConfig {
     }
 
     fn write_sink_supports_inline_checker(target_db_type: &DbType) -> bool {
-        matches!(target_db_type, DbType::Mysql | DbType::Pg | DbType::Mongo)
+        matches!(
+            target_db_type,
+            DbType::Mysql | DbType::Pg | DbType::Mongo | DbType::Mssql
+        )
     }
 
     fn task_kind_from_extract_type(extract_type: &ExtractType) -> Option<TaskKind> {
@@ -304,7 +315,7 @@ impl TaskConfig {
                 (
                     TaskKind::Snapshot,
                     SinkType::Check,
-                    DbType::Mysql | DbType::Pg | DbType::Mongo,
+                    DbType::Mysql | DbType::Pg | DbType::Mongo | DbType::Mssql,
                 ) => Some(CheckMode::Standalone),
                 (TaskKind::Snapshot, SinkType::Write, db_type)
                     if Self::write_sink_supports_inline_checker(db_type) =>
@@ -2288,19 +2299,24 @@ parallel_size=2
     }
 
     #[test]
-    fn mssql_struct_task_modes() {
+    fn mssql_task_modes() {
         for (extract_type, sink_type, expected) in [
-            (
-                "struct",
-                "struct",
-                Some(TaskType::new(TaskKind::Struct, None)),
-            ),
+            ("struct", "struct", TaskType::new(TaskKind::Struct, None)),
             (
                 "struct",
                 "check",
-                Some(TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone))),
+                TaskType::new(TaskKind::Struct, Some(CheckMode::Standalone)),
             ),
-            ("snapshot", "check", None),
+            (
+                "snapshot",
+                "check",
+                TaskType::new(TaskKind::Snapshot, Some(CheckMode::Standalone)),
+            ),
+            (
+                "snapshot",
+                "write",
+                TaskType::new(TaskKind::Snapshot, Some(CheckMode::Inline)),
+            ),
         ] {
             let input = format!(
                 r#"[extractor]
@@ -2322,25 +2338,22 @@ ssl_mode=disable
 conflict_policy=ignore
 "#
             );
-            let result = load_task_config(&input);
-            let Some(expected) = expected else {
-                assert!(result
-                    .err()
-                    .expect("snapshot check must be rejected")
-                    .to_string()
-                    .contains("checker is not supported"));
-                continue;
+            let input = if sink_type == "write" {
+                format!("{input}\n[checker]\nbatch_size=2\n")
+            } else {
+                input
             };
-            let config =
-                result.unwrap_or_else(|error| panic!("{extract_type}/{sink_type}: {error}"));
+            let config = load_task_config(&input).unwrap();
             assert_eq!(config.task_type(), Some(expected), "{sink_type}");
-            assert!(matches!(
-                config.extractor,
-                ExtractorConfig::MssqlStruct {
-                    db_batch_size: 11,
-                    ..
-                }
-            ));
+            if extract_type == "struct" {
+                assert!(matches!(
+                    config.extractor,
+                    ExtractorConfig::MssqlStruct {
+                        db_batch_size: 11,
+                        ..
+                    }
+                ));
+            }
             if sink_type == "struct" {
                 assert!(matches!(
                     config.sinker,

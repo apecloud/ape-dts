@@ -79,7 +79,7 @@ URL、ADO.NET、JDBC 中的加密和证书信任选项。
 | MySQL      | `disable`、`require`                             | 支持   | 支持     | 支持                        | 支持       |
 | MySQL      | `verify_ca`、`verify_full`                       | 支持   | 支持     | 不支持（binlog 驱动限制）   | 支持       |
 | PostgreSQL | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持       |
-| MSSQL      | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 不支持                      | 仅结构校验 |
+| MSSQL      | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 不支持                      | 全量、结构校验 |
 | Redis      | `disable`、`require`、`verify_ca`、`verify_full` | 不支持 | 支持     | 支持（含 snapshot-and-CDC） | 不支持     |
 | MongoDB    | `disable`、`require`、`verify_ca`、`verify_full` | 支持   | 支持     | 支持                        | 支持       |
 
@@ -201,11 +201,12 @@ snapshot-and-CDC，包括集群只加密场景；MongoDB TLS 测试覆盖 `requi
 
 - checker 仅支持 `[pipeline].pipeline_type=basic`。
 - `sample_percent` 有效范围为 `1..=100`，只适用于 snapshot check 和 inline CDC check。
-  Standalone snapshot 在抽取阶段采样；inline snapshot/CDC 会完整写入，再在 fetch 目标数据前按
+  Standalone snapshot 对 MySQL、PostgreSQL、MongoDB 源端在抽取阶段采样，对 MSSQL 源端在目标回查前按 key hash 采样；inline snapshot/CDC 会完整写入，再在 fetch 目标数据前按
   key hash 确定性采样。
-- Standalone snapshot check 支持 MySQL、PostgreSQL、MongoDB；standalone struct check
-  支持 MySQL、PostgreSQL、MongoDB。
-- Inline snapshot check 支持 MySQL、PostgreSQL、MongoDB 写入目标。
+- Standalone snapshot check 支持 MySQL、PostgreSQL、MSSQL、MongoDB；standalone struct check
+  支持 MySQL、PostgreSQL、MSSQL、MongoDB。
+- Inline snapshot check 支持 MySQL、PostgreSQL、MSSQL、MongoDB 写入目标。
+- MSSQL snapshot 校验支持差异日志，需使用 `output_revise_sql=false`。
 - inline CDC reconciliation 不使用 `recheck_count` 和 `recheck_interval_secs`。
 - Retry buffer 达到行数或内存上限时，不会丢弃检查结果；新发现的不一致会跳过重试并立即输出。
 
