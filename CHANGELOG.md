@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### SQL Server
 
+- support standalone and inline snapshot row checks for SQL Server targets
+
 - support structure migration and standalone structure checks, including tables, indexes, constraints, sequences, and comments ([#577](https://github.com/apecloud/ape-dts/pull/577))
 
 #### General and Platform

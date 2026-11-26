@@ -1,0 +1,1 @@
+{"db":"ape_dts","schema":"dbo","tb":"check_struct_revise","key":"index.ape_dts.dbo.check_struct_revise.ix_val","src_sql":"CREATE NONCLUSTERED INDEX [ix_val] ON [ape_dts].[dbo].[check_struct_revise] ([val] ASC)"}

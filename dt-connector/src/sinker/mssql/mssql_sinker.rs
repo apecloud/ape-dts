@@ -22,7 +22,10 @@ use dt_common::{
     utils::limit_queue::LimitedQueue,
 };
 
-use crate::{sinker::base_sinker::BaseSinker, Sinker};
+use crate::{
+    sinker::{base_sinker::BaseSinker, checkable_sinker::CheckableSink},
+    Sinker,
+};
 
 #[derive(Clone)]
 pub struct MssqlSinker {
@@ -188,8 +191,12 @@ impl MssqlSinker {
 }
 
 #[async_trait]
-impl Sinker for MssqlSinker {
-    async fn sink_dml(&mut self, data: Vec<RowData>, _batch: bool) -> anyhow::Result<()> {
+impl CheckableSink for MssqlSinker {
+    async fn sink_dml_borrowed(
+        &mut self,
+        data: &mut [RowData],
+        _batch: bool,
+    ) -> anyhow::Result<()> {
         let Some(first) = data.first() else {
             return Ok(());
         };
@@ -226,7 +233,7 @@ impl Sinker for MssqlSinker {
                 // - 1,000 rows in an INSERT ... VALUES table value constructor.
                 //   https://learn.microsoft.com/en-us/sql/t-sql/queries/table-value-constructor-transact-sql
                 let batch_size = cmp::min(self.batch_size, data.len() - start);
-                self.batch_insert(&data, start, batch_size, &tb_meta, &mut session)
+                self.batch_insert(data, start, batch_size, &tb_meta, &mut session)
                     .await?;
                 start += batch_size;
             }
@@ -243,6 +250,13 @@ impl Sinker for MssqlSinker {
                 ))),
             },
         }
+    }
+}
+
+#[async_trait]
+impl Sinker for MssqlSinker {
+    async fn sink_dml(&mut self, mut data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
+        self.sink_dml_borrowed(&mut data, batch).await
     }
 
     async fn sink_ddl(&mut self, _data: Vec<DdlData>, _batch: bool) -> anyhow::Result<()> {

@@ -1,0 +1,1 @@
+{"start_time":"","end_time":"","is_consistent":true,"checked_count":1,"miss_count":0,"diff_count":0,"skip_count":0,"tables":[{"db":"ape_dts","schema":"dbo","tb":"check_struct_recover","checked_count":1,"miss_count":0,"diff_count":0,"skip_count":0}]}

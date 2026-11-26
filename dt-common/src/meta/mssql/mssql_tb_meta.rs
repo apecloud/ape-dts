@@ -27,12 +27,7 @@ impl MssqlTbMeta {
     }
 
     pub fn is_writable_col(&self, col: &str) -> bool {
-        !self.computed_cols.contains(col)
-            && self
-                .generated_always_type_map
-                .get(col)
-                .is_none_or(|generated_always_type| *generated_always_type == 0)
-            && !self.rowversion_cols.contains(col)
+        !self.computed_cols.contains(col) && !self.is_server_generated(col)
     }
 
     pub fn non_comparable_cols(&self) -> HashSet<String> {
@@ -44,6 +39,14 @@ impl MssqlTbMeta {
                 .map(|(col, _)| col.clone()),
         );
         cols
+    }
+
+    pub fn is_server_generated(&self, col: &str) -> bool {
+        self.rowversion_cols.contains(col)
+            || self
+                .generated_always_type_map
+                .get(col)
+                .is_some_and(|value| *value != 0)
     }
 
     pub fn get_col_type(&self, col: &str) -> anyhow::Result<&MssqlColType> {
