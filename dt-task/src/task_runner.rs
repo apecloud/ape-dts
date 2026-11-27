@@ -804,7 +804,7 @@ impl TaskRunner {
             if checker.is_async() {
                 bail!("standalone check must not use async checker runtime");
             }
-            Ok(Box::new(CheckerPipeline::new(pipeline, checker)) as Box<dyn Pipeline + Send>)
+            Ok(Box::new(CheckerPipeline::new(pipeline, checker).await) as Box<dyn Pipeline + Send>)
         } else {
             Ok(Box::new(pipeline) as Box<dyn Pipeline + Send>)
         }
@@ -1059,6 +1059,41 @@ impl TaskRunner {
             };
 
         match checker_db_type {
+            DbType::Redis => {
+                let source_config = &self.config.extractor_basic;
+                let source = dt_connector::checker::redis_checker::RedisCheckEndpoint::new(
+                    &source_config.url,
+                    &source_config.connection_auth,
+                    self.config.extractor.is_cluster(),
+                )
+                .await?;
+                let target = dt_connector::checker::redis_checker::RedisCheckEndpoint::new(
+                    &checker_url,
+                    &checker_auth,
+                    checker_target.is_cluster,
+                )
+                .await?;
+                let router = self.config.build_router()?;
+                let SinkerConfig::Redis {
+                    ttl_tolerance_ms, ..
+                } = &self.config.sinker
+                else {
+                    bail!(DtError::invalid_config(
+                        "Redis checker requires a Redis sinker configuration"
+                    ));
+                };
+                let checker = dt_connector::checker::redis_checker::RedisChecker::new(
+                    source,
+                    target,
+                    self.config.build_filter()?,
+                    router,
+                    cfg,
+                    *ttl_tolerance_ms,
+                    build_check_context(None, None, None, false),
+                )
+                .await?;
+                Ok(Some(CheckerHandle::Direct(checker.into())))
+            }
             DbType::Mysql => {
                 let router = self.config.build_router()?;
                 let extractor_meta_manager =

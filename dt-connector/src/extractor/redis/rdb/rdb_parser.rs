@@ -31,6 +31,7 @@ pub struct RdbParser<'a> {
     pub repl_stream_db_id: i64,
     pub now_db_id: i64,
     pub expire_ms: i64,
+    pub expire_at_ms: Option<i64>,
     pub idle: i64,
     pub freq: i64,
 
@@ -158,6 +159,7 @@ impl RdbParser<'_> {
 
             K_FLAG_EXPIRE_MS => {
                 let mut expire_ms = self.reader.read_u64().await? as i64;
+                self.expire_at_ms = Some(expire_ms);
                 expire_ms -= chrono::Utc::now().timestamp_millis();
                 if expire_ms < 0 {
                     expire_ms = 1
@@ -167,6 +169,7 @@ impl RdbParser<'_> {
 
             K_FLAG_EXPIRE => {
                 let mut expire_ms = self.reader.read_u32().await? as i64 * 1000;
+                self.expire_at_ms = Some(expire_ms);
                 expire_ms -= chrono::Utc::now().timestamp_millis();
                 if expire_ms < 0 {
                     expire_ms = 1
@@ -201,6 +204,7 @@ impl RdbParser<'_> {
                 entry.value = value;
                 entry.value_type_byte = type_byte;
                 entry.expire_ms = self.expire_ms;
+                entry.expire_at_ms = self.expire_at_ms.take();
                 // reset expire_ms
                 self.expire_ms = 0;
                 return Ok(Some(entry));

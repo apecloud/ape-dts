@@ -119,4 +119,10 @@ mod test {
     async fn snapshot_from_cluster_test() {
         TestBase::run_redis_snapshot_test("redis_to_redis/snapshot/7_0/from_cluster_test").await;
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn snapshot_ttl_test() {
+        TestBase::run_redis_snapshot_test("redis_to_redis/snapshot/7_0/ttl_test").await;
+    }
 }

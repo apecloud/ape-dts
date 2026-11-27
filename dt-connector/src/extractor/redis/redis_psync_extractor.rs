@@ -239,6 +239,7 @@ impl RedisPsyncExtractor {
             repl_stream_db_id: 0,
             now_db_id: self.now_db_id,
             expire_ms: 0,
+            expire_at_ms: None,
             idle: 0,
             freq: 0,
             is_end: false,

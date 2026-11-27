@@ -14,6 +14,7 @@ pub struct RedisEntry {
     pub timestamp_ms: u64,
 
     pub expire_ms: i64,
+    pub expire_at_ms: Option<i64>,
     pub key: RedisString,
     pub value: RedisObject,
     pub value_type_byte: u8,
@@ -34,6 +35,7 @@ impl RedisEntry {
             timestamp_ms: 0,
 
             expire_ms: 0,
+            expire_at_ms: None,
             key: RedisString::new(),
             value: RedisObject::Unknown,
             raw_bytes: Vec::new(),

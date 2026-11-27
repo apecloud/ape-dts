@@ -2,7 +2,7 @@
 
 After data migration, you may want to compare the source and target data row by row and column by column. If the data volume is too large, you can perform a sampled check. Please ensure that the tables to be checked have primary keys/unique keys.
 
-Supports comparison for MySQL, PostgreSQL, and MongoDB.
+Supports comparison for MySQL, PostgreSQL, MongoDB, and [standalone Redis checks](../tutorial/redis_to_redis.md#check-data-after-migration). Redis checks compare both key sets, values, and key expiration; they do not require primary keys.
 
 Snapshot and inline CDC checks support sampling via `[checker].sample_percent`.
 For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_percent` is applied during extraction
@@ -12,6 +12,8 @@ available, extraction reads the full source stream. This sampling is source-side
 key-hash based or random. Inline snapshot check and inline CDC check write all rows/changes first,
 then apply deterministic checker-side key-hash sampling before target fetch. Rows/changes with the
 same key are sampled consistently.
+Redis snapshot checks read the complete source RDB and sample comparisons using a stable DB/key hash;
+forward comparisons and the target reverse scan use the same sampling rule.
 
 Data check is documented in three flows:
 
@@ -22,9 +24,11 @@ Data check is documented in three flows:
 - Use `extract_type=snapshot`.
 - Configure the target in `[sinker]` and set `[sinker].sink_type=check`.
 - Connection, authentication, TLS, and database-specific target options use the normal `[sinker]` fields.
-- Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
-- Use `parallel_type=rdb_merge` for MySQL/PostgreSQL checker targets, and `parallel_type=mongo`
-  for MongoDB checker targets.
+- Standalone snapshot checker targets support MySQL, PostgreSQL, MongoDB, and Redis.
+- Retries and `sample_percent` are supported; `output_full_row` and `output_revise_sql` are rejected.
+  Source module entries are skipped with a warning and counted in `summary.log.skip_count`; other supported types continue to be checked.
+- Use `parallel_type=rdb_merge` for MySQL/PostgreSQL checker targets, `parallel_type=mongo`
+  for MongoDB checker targets and `parallel_type=redis` for Redis checker targets.
 - This flow is data-only. It does not run structure check automatically; run standalone structure
   check explicitly when structure verification is required.
 
@@ -186,7 +190,14 @@ When the source and target types are different (such as Int32 vs Int64, or None 
 If either target name differs, both fields are included.
 
 ```json
-{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"orders","id_col_values":{"id":"8"},"diff_col_values":{"status":{"src":"paid","dst":"pending"}}}
+{
+  "schema": "test_db_1",
+  "tb": "orders",
+  "target_schema": "dst_db",
+  "target_tb": "orders",
+  "id_col_values": { "id": "8" },
+  "diff_col_values": { "status": { "src": "paid", "dst": "pending" } }
+}
 ```
 
 ## Missing Log (miss.log)
@@ -271,8 +282,8 @@ Example:
   "tb": "one_pk_no_uk",
   "target_schema": "target_db",
   "target_tb": "target_tb",
-  "id_col_values": {"f_0": "4"},
-  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}}
+  "id_col_values": { "f_0": "4" },
+  "diff_col_values": { "f_1": { "src": "2", "dst": "1" } }
 }
 ```
 
@@ -288,7 +299,7 @@ Missing record log example:
 {
   "schema": "test_db_1",
   "tb": "test_table",
-  "id_col_values": {"id": "3"}
+  "id_col_values": { "id": "3" }
 }
 ```
 
@@ -312,7 +323,34 @@ destination object is not explicitly different. If either target name differs, b
 included.
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"checked_count":30,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"clean_table","checked_count":20,"miss_count":0,"diff_count":0,"skip_count":0},{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
+{
+  "start_time": "2023-09-01T12:00:00+08:00",
+  "end_time": "2023-09-01T12:00:01+08:00",
+  "is_consistent": false,
+  "checked_count": 30,
+  "miss_count": 1,
+  "diff_count": 2,
+  "skip_count": 1,
+  "sql_count": 3,
+  "tables": [
+    {
+      "schema": "test_db_1",
+      "tb": "clean_table",
+      "checked_count": 20,
+      "miss_count": 0,
+      "diff_count": 0,
+      "skip_count": 0
+    },
+    {
+      "schema": "test_db_1",
+      "tb": "test_table",
+      "checked_count": 10,
+      "miss_count": 1,
+      "diff_count": 2,
+      "skip_count": 1
+    }
+  ]
+}
 ```
 
 # Reverse Check
@@ -346,6 +384,7 @@ See [config.md](../config.md) for the full `[checker]` configuration list and ta
 ## Retry Mechanism
 
 When `recheck_count > 0`, the checker automatically retries on inconsistency:
+
 - No logs are written during retry attempts to reduce noise
 - Detailed miss/diff logs are only written on the final check
 - Useful when target data synchronization is not yet complete
@@ -363,10 +402,10 @@ current check result.
 > retry queue. Even if `recheck_count` and `recheck_interval_secs` are configured, they are forcibly
 > ignored (set to 0) in CDC mode, and a warning is logged.
 
-
 ## Integration Test References
 
 Refer to `task_config.ini` of each type of integration test:
+
 - dt-tests/tests/mysql_to_mysql/check
 - dt-tests/tests/pg_to_pg/check
 - dt-tests/tests/mongo_to_mongo/check

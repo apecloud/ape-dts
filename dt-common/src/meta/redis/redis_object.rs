@@ -208,6 +208,7 @@ pub struct RedisCmd {
     pub group: String,
     pub keys: Vec<String>,
     pub key_indexes: Vec<usize>,
+    pub restore_expire_at_ms: Option<i64>,
 }
 
 impl RedisCmd {

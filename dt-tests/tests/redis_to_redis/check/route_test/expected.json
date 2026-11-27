@@ -1,0 +1,13 @@
+{
+  "checked_count": 1,
+  "miss": [],
+  "diff": {
+    "0:hex:726f75746564": [
+      "value"
+    ],
+    "0:hex:6578747261": [
+      "existence"
+    ]
+  },
+  "target_db": "3"
+}

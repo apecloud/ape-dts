@@ -102,6 +102,11 @@ extractor, parallelizer, pipeline, and sinker when changing data flow.
   [dt-tests/README.md](dt-tests/README.md) and the closest existing suite. Reuse
   its runner, helpers, fixture layout, SQL loading strategy, and isolation rules;
   do not build a parallel integration harness or ad hoc database setup.
+- During development, run only affected `dt-tests` cases or suites by default.
+  Running the complete `dt-tests` regression suite requires explicit user
+  authorization because it consumes substantial local development resources.
+  This includes `--suite all` and equivalent full-suite Cargo/nextest runs;
+  a general request to implement or test a change is not sufficient authorization.
 - Existing `dt-tests` integration cases are correctness baselines, not inputs to
   adjust until an implementation passes. Adding new cases and their test
   registrations is allowed and preferred for new coverage. Change an existing
