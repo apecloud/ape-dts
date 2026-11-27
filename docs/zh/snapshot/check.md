@@ -25,12 +25,10 @@ Redis snapshot check 保持源端 RDB 的完整读取，在比较前按 DB/key �
 - 在 `[sinker]` 中配置目标并设置 `[sinker].sink_type=check`。
 - 连接、认证、TLS 及数据库专属目标参数均使用普通 `[sinker]` 字段。
 - Standalone snapshot checker target 支持 MySQL、PostgreSQL、MongoDB 和 Redis。
-- Redis 消费源端 RDB entry，并反向扫描目标检查多出的 key，详见
-  [Redis 数据校验](../../en/tutorial/redis_to_redis.md#check-data-after-migration)。
-  支持差异重试和 `sample_percent`；不支持 `output_full_row`、`output_revise_sql`，开启时会拒绝配置。
+- 支持差异重试和 `sample_percent`；不支持 `output_full_row`、`output_revise_sql`，开启时会拒绝配置。
   源端 module entry 会记录告警并跳过，计入 `summary.log.skip_count`，不影响其他支持类型继续校验。
 - MySQL/PostgreSQL checker target 使用 `parallel_type=rdb_merge`；MongoDB checker target
-  使用 `parallel_type=mongo`。
+  使用 `parallel_type=mongo` ; Redis checker target 使用 `parallel_type=redis`。
 - 该形态只做数据校验，不会自动执行结构校验；需要结构校验时请显式运行 standalone
   structure check。
 
@@ -187,7 +185,14 @@ payload 与 `sql.log` 中的纯 SQL 语句一致。
 两个字段都会同时输出。
 
 ```json
-{"schema":"test_db_1","tb":"orders","target_schema":"dst_db","target_tb":"orders","id_col_values":{"id":"8"},"diff_col_values":{"status":{"src":"paid","dst":"pending"}}}
+{
+  "schema": "test_db_1",
+  "tb": "orders",
+  "target_schema": "dst_db",
+  "target_tb": "orders",
+  "id_col_values": { "id": "8" },
+  "diff_col_values": { "status": { "src": "paid", "dst": "pending" } }
+}
 ```
 
 ## 缺失日志（miss.log）
@@ -272,8 +277,8 @@ Lines，不输出 SQL 字段。
   "tb": "one_pk_no_uk",
   "target_schema": "target_db",
   "target_tb": "target_tb",
-  "id_col_values": {"f_0": "4"},
-  "diff_col_values": {"f_1": {"src": "2", "dst": "1"}}
+  "id_col_values": { "f_0": "4" },
+  "diff_col_values": { "f_1": { "src": "2", "dst": "1" } }
 }
 ```
 
@@ -289,7 +294,7 @@ UPDATE `target_db`.`target_tb` SET `f_1`='2' WHERE `f_0` = 4;
 {
   "schema": "test_db_1",
   "tb": "test_table",
-  "id_col_values": {"id": "3"}
+  "id_col_values": { "id": "3" }
 }
 ```
 
@@ -311,7 +316,34 @@ INSERT INTO `test_db_1`.`test_table`(`id`,`name`,`age`,`email`) VALUES(3,'Charli
 不输出 `target_schema`/`target_tb`；只要任一目标名称发生变化，两个字段都会同时输出。
 
 ```json
-{"start_time":"2023-09-01T12:00:00+08:00","end_time":"2023-09-01T12:00:01+08:00","is_consistent":false,"checked_count":30,"miss_count":1,"diff_count":2,"skip_count":1,"sql_count":3,"tables":[{"schema":"test_db_1","tb":"clean_table","checked_count":20,"miss_count":0,"diff_count":0,"skip_count":0},{"schema":"test_db_1","tb":"test_table","checked_count":10,"miss_count":1,"diff_count":2,"skip_count":1}]}
+{
+  "start_time": "2023-09-01T12:00:00+08:00",
+  "end_time": "2023-09-01T12:00:01+08:00",
+  "is_consistent": false,
+  "checked_count": 30,
+  "miss_count": 1,
+  "diff_count": 2,
+  "skip_count": 1,
+  "sql_count": 3,
+  "tables": [
+    {
+      "schema": "test_db_1",
+      "tb": "clean_table",
+      "checked_count": 20,
+      "miss_count": 0,
+      "diff_count": 0,
+      "skip_count": 0
+    },
+    {
+      "schema": "test_db_1",
+      "tb": "test_table",
+      "checked_count": 10,
+      "miss_count": 1,
+      "diff_count": 2,
+      "skip_count": 1
+    }
+  ]
+}
 ```
 
 # 反向校验
@@ -344,6 +376,7 @@ batch_size=200
 ## 重试机制
 
 当 `recheck_count > 0` 时，checker 会在检测到不一致时自动重试：
+
 - 重试期间不记录日志，避免噪音
 - 仅在最后一次检查时记录详细的 miss/diff 日志
 - 适用于目标端数据尚未完全同步的场景
@@ -356,10 +389,10 @@ batch_size=200
 > 事件可能会移除已正确写入的数据，导致重试队列中出现误报。即使配置了 `recheck_count`
 > 和 `recheck_interval_secs`，CDC 模式下也会被强制忽略（设为 0），并输出警告日志。
 
-
 ## 集成测试参考
 
 参考各类型集成测试的 `task_config.ini`：
+
 - dt-tests/tests/mysql_to_mysql/check
 - dt-tests/tests/pg_to_pg/check
 - dt-tests/tests/mongo_to_mongo/check

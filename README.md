@@ -28,12 +28,12 @@ deployments.
 
 Currently supported mature task types:
 
-|                          | mysql -> mysql | pg -> pg | mongo -> mongo | redis -> redis | mysql -> kafka | pg -> kafka | mysql -> starrocks | mysql -> clickhouse | mysql -> tidb | pg -> starrocks | pg -> clickhouse | mysql -> doris | pg -> doris |
-| :----------------------- | :------------- | :------- | :------------- | :------------- | :------------- | :---------- | :----------------- | :------------------ | :------------ | :-------------- | :--------------- | :------------- | :---------- |
-| Snapshot                 | &#10004;       | &#10004; | &#10004;       | &#10004;       | &#10004;       | &#10004;    | &#10004;           | &#10004;            | &#10004;      | &#10004;        | &#10004;         | &#10004;       | &#10004;    |
-| CDC                      | &#10004;       | &#10004; | &#10004;       | &#10004;       | &#10004;       | &#10004;    | &#10004;           | &#10004;            | &#10004;      | &#10004;        | &#10004;         | &#10004;       | &#10004;    |
-| Data check/revise/review | &#10004;       | &#10004; | &#10004;       | &#10004; (check only) |                |             |                    |                     | &#10004;      |                 |                  |                |             |
-| Structure migration      | &#10004;       | &#10004; | &#10004;       |                |                |             | &#10004;           | &#10004;            | &#10004;      | &#10004;        | &#10004;         | &#10004;       | &#10004;    |
+|                     | mysql -> mysql | pg -> pg | mongo -> mongo | redis -> redis | mysql -> kafka | pg -> kafka | mysql -> starrocks | mysql -> clickhouse | mysql -> tidb | pg -> starrocks | pg -> clickhouse | mysql -> doris | pg -> doris |
+| :------------------ | :------------- | :------- | :------------- | :------------- | :------------- | :---------- | :----------------- | :------------------ | :------------ | :-------------- | :--------------- | :------------- | :---------- |
+| Structure migration | ✔              | ✔        | ✔              |                |                |             | ✔                  | ✔                   | ✔             | ✔               | ✔                | ✔              | ✔           |
+| Snapshot            | ✔              | ✔        | ✔              | ✔              | ✔              | ✔           | ✔                  | ✔                   | ✔             | ✔               | ✔                | ✔              | ✔           |
+| CDC                 | ✔              | ✔        | ✔              | ✔              | ✔              | ✔           | ✔                  | ✔                   | ✔             | ✔               | ✔                | ✔              | ✔           |
+| Data check          | ✔              | ✔        | ✔              | ✔              |                |             |                    |                     | ✔             |                 |                  |                |             |
 
 # Quick starts
 
@@ -151,7 +151,6 @@ Refer to [test docs](./dt-tests/README.md) for details.
 - dt-task: create extractors + sinkers + pipelines + parallelizers according to configurations
 - dt-common: common utils, basic data structures, metadata management
 - dt-tests: integration tests
-
 - related sub module: [mysql binlog connector in rust](https://github.com/apecloud/mysql-binlog-connector-rust)
 
 ## Crate features
@@ -162,7 +161,6 @@ The dt-main crate provides several optional components which can be enabled via 
   See the [task metrics reference](./docs/en/monitor/task_metrics.md) for metric
   names, units, and semantics.
   After enabling this feature, you can customize the metrics service with the following configuration:
-
   ```
   [metrics]
   # http service host
@@ -193,4 +191,4 @@ If you have any questions, you can reach out to us through:
 - ApeDTS GitHub [Discussions](https://github.com/apecloud/ape-dts/discussions)
 - ApeDTS Wechat Account with note **ape-dts**:
 
-  <img src=".\docs\img\wechat-assistant.png" alt="wechat" width="100" height="100" style="margin-top:10px">
+  ![wechat](.\docs\img\wechat-assistant.png)
