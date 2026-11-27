@@ -158,7 +158,11 @@ snapshot-and-CDC，包括集群只加密场景；MongoDB TLS 测试覆盖 `requi
 | app_name                       | 连接应用名，当前用于 MongoDB                                                                                      | APE_DTS                  | APE_DTS                                                     |
 | is_direct_connection           | MongoDB driver 的 `directConnection` 选项                                                                         | true                     | 不设置（使用 driver 默认行为）                              |
 | is_cluster                     | Redis 是否使用集群模式                                                                                            | true                     | 不设置或空（根据实际连接的 Redis 节点自动判断）             |
+| ttl_tolerance_ms               | 仅用于 Redis 独立 snapshot check：到期时间比较允许的误差（毫秒）                                                | 1000                     | 10000                                                       |
 | mongo_require_shard_key_filter | MongoDB update/delete/upsert filter 缺少完整目标 shard key 时是否提前失败                                         | true                     | true                                                        |
+
+`[sinker].ttl_tolerance_ms` 只影响 Redis 校验，不影响迁移写入时的 TTL 设置。
+Redis 全量数据、双向 key 集合和 TTL 校验说明见 [Redis 数据校验](../en/tutorial/redis_to_redis.md#check-data-after-migration)。
 
 ## Redis 目标端集群模式
 
@@ -194,20 +198,22 @@ snapshot-and-CDC，包括集群只加密场景；MongoDB TLS 测试覆盖 `requi
 | sample_percent          | snapshot/CDC 校验的百分比抽样 | 25    | 空（校验全部行/变更） |
 | recheck_count           | 临时不一致的重试次数          | 4     | 0                     |
 | recheck_interval_secs   | 重试间隔（秒）                | 5     | 0                     |
-| recheck_queue_size      | 待重试行数上限                | 10000 | 10000                 |
-| recheck_queue_memory_mb | 待重试数据内存上限（MiB）     | 256   | 256                   |
+| recheck_queue_size      | 待重试行数上限；Redis 差异外排每批记录数上限| 10000 | 10000                 |
+| recheck_queue_memory_mb | 待重试数据内存上限；Redis 差异外排每批内存上限（MiB）| 256   | 256                   |
 
 说明：
 
 - checker 仅支持 `[pipeline].pipeline_type=basic`。
 - `sample_percent` 有效范围为 `1..=100`，只适用于 snapshot check 和 inline CDC check。
-  Standalone snapshot 在抽取阶段采样；inline snapshot/CDC 会完整写入，再在 fetch 目标数据前按
-  key hash 确定性采样。
-- Standalone snapshot check 支持 MySQL、PostgreSQL、MongoDB；standalone struct check
+  Standalone snapshot 在抽取阶段采样；Redis 会完整读取 RDB，在比较时按 DB/key hash 确定性采样。
+  inline snapshot/CDC 会完整写入，再在 fetch 目标数据前按 key hash 确定性采样。
+- Standalone snapshot check 支持 MySQL、PostgreSQL、MongoDB、Redis；standalone struct check
   支持 MySQL、PostgreSQL、MongoDB。
 - Inline snapshot check 支持 MySQL、PostgreSQL、MongoDB 写入目标。
 - inline CDC reconciliation 不使用 `recheck_count` 和 `recheck_interval_secs`。
-- Retry buffer 达到行数或内存上限时，不会丢弃检查结果；新发现的不一致会跳过重试并立即输出。
+- MySQL/PostgreSQL/MongoDB 行数据校验的 retry buffer 达到行数或内存上限时，不会丢弃结果；
+  新发现的不一致会跳过重试并立即输出。Redis 使用这两个配置限制差异外排的每批记录数和内存，
+  重试保留当前输入 batch。详见 [Redis 结果处理](../en/tutorial/redis_to_redis.md#results-and-resource-limits)。
 
 ## Standalone 目标示例
 

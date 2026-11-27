@@ -25,6 +25,8 @@ use super::{
 };
 use crate::{test_config_util::TestConfigUtil, test_runner::redis_test_util::RedisTestUtil};
 
+const TTL_ASSERT_TOLERANCE_MS: u64 = 500;
+
 pub struct RedisTestRunner {
     pub base: BaseTestRunner,
     src_conn: RedisClusterConnection,
@@ -129,6 +131,18 @@ impl RedisTestRunner {
             filter,
             router,
         })
+    }
+
+    pub fn execute_target_test_sqls(&mut self) {
+        self.redis_util
+            .execute_cmds_in_cluster(&mut self.dst_conn, &self.base.dst_test_sqls);
+    }
+
+    pub fn default_connections(&mut self) -> (&mut redis::Connection, &mut redis::Connection) {
+        (
+            self.src_conn.get_default_conn(),
+            self.dst_conn.get_default_conn(),
+        )
     }
 
     pub async fn run_snapshot_test(&mut self) -> anyhow::Result<()> {
@@ -317,40 +331,57 @@ impl RedisTestRunner {
         self.compare_topk_entries(db, &topk_keys);
         self.compare_tsdb_entries(db, &tsdb_keys);
         self.compare_graph_entries(db, &graph_keys);
-        self.check_expire(&keys);
+        let mut ttl_keys = keys;
+        for conn in self.dst_conn.get_all_node_conns() {
+            ttl_keys.extend(self.redis_util.list_keys(conn, "*"));
+        }
+        ttl_keys.sort();
+        ttl_keys.dedup();
+        let marker_prefix = format!("{data_marker_key}{{");
+        ttl_keys.retain(|key| {
+            key != &data_marker_key
+                && (data_marker_key.is_empty() || !key.starts_with(&marker_prefix))
+        });
+        self.check_expire(db, &ttl_keys);
         Ok(())
     }
 
-    fn check_expire(&mut self, keys: &Vec<String>) {
+    fn check_expire(&mut self, db: &str, keys: &[String]) {
+        let filtered = self.filter.filter(rid!(db)).unwrap();
         for key in keys {
             let cmd = format!("PTTL {}", self.redis_util.escape_key(key));
+            let started = std::time::Instant::now();
             let src_result = self
                 .redis_util
                 .execute_cmd_in_one_cluster_node(&mut self.src_conn, &cmd);
             let dst_result = self
                 .redis_util
                 .execute_cmd_in_one_cluster_node(&mut self.dst_conn, &cmd);
-
+            let elapsed_ms = started.elapsed().as_millis() as u64;
             let get_expire = |result: Value| -> i64 {
                 match result {
                     Value::Int(expire) => expire,
-                    _ => {
-                        // should never happen
-                        -1000
-                    }
+                    other => panic!("unexpected PTTL result for {key}: {other:?}"),
                 }
             };
-
             let src_expire = get_expire(src_result);
             let dst_expire = get_expire(dst_result);
-            assert_ne!(src_expire, -1000);
-            assert_ne!(dst_expire, -1000);
-            if src_expire > 0 {
-                println!("src key: {} expire in {}", key, src_expire);
-                println!("dst key: {} expire in {}", key, dst_expire);
-                assert!(dst_expire > 0)
+            if filtered {
+                assert_eq!(
+                    dst_expire, -2,
+                    "filtered key must be absent: db={db}, key={key}"
+                );
+            } else if src_expire >= 0 && dst_expire >= 0 {
+                assert!(
+                    src_expire.abs_diff(dst_expire)
+                        <= TTL_ASSERT_TOLERANCE_MS.saturating_add(elapsed_ms),
+                    "TTL differs: db={db}, key={key}, source={src_expire}, target={dst_expire}"
+                );
             } else {
-                assert!(dst_expire < 0)
+                assert_eq!(
+                    src_expire, dst_expire,
+                    "expiration states differ: db={db}, key={key}"
+                );
             }
         }
     }

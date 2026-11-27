@@ -151,9 +151,26 @@ impl TaskConfig {
         let filter = FilterConfig::from_ini(&loader.ini)?;
         let router = RouterConfig::from_ini(&loader.ini)?;
         let parallelizer = Self::load_parallelizer_config(loader, &sinker_basic, &pipeline)?;
+        if matches!(sinker_basic.sink_type, SinkType::Check)
+            && (sinker_basic.db_type == DbType::Redis || extractor_basic.db_type == DbType::Redis)
+            && (sinker_basic.db_type != DbType::Redis
+                || extractor_basic.db_type != DbType::Redis
+                || !matches!(extractor_basic.extract_type, ExtractType::Snapshot))
+        {
+            bail!(DtError::invalid_config(
+                "Redis check requires a standalone Redis-to-Redis snapshot task"
+            ));
+        }
         let checker =
             Self::load_checker_config(loader, &extractor_basic.extract_type, &sinker_basic)?;
         if let Some(checker_cfg) = checker.as_ref() {
+            if sinker_basic.db_type == DbType::Redis
+                && (checker_cfg.output.output_full_row || checker_cfg.output.output_revise_sql)
+            {
+                bail!(DtError::invalid_config(
+                    "Redis check does not support output_full_row or output_revise_sql"
+                ));
+            }
             let task_type = if matches!(extractor_basic.extract_type, ExtractType::CheckLog)
                 && matches!(sinker_basic.sink_type, SinkType::Check)
                 && matches!(
@@ -304,7 +321,7 @@ impl TaskConfig {
                 (
                     TaskKind::Snapshot,
                     SinkType::Check,
-                    DbType::Mysql | DbType::Pg | DbType::Mongo,
+                    DbType::Mysql | DbType::Pg | DbType::Mongo | DbType::Redis,
                 ) => Some(CheckMode::Standalone),
                 (TaskKind::Snapshot, SinkType::Write, db_type)
                     if Self::write_sink_supports_inline_checker(db_type) =>
@@ -902,12 +919,17 @@ impl TaskConfig {
             },
 
             DbType::Redis => match sink_type {
-                SinkType::Write => SinkerConfig::Redis {
+                SinkType::Write | SinkType::Check => SinkerConfig::Redis {
                     url,
                     connection_auth,
                     batch_size,
                     method: loader.get_optional(SINKER, "method")?,
                     is_cluster,
+                    ttl_tolerance_ms: loader.get_with_default(
+                        SINKER,
+                        "ttl_tolerance_ms",
+                        super::sinker_config::DEFAULT_REDIS_TTL_TOLERANCE_MS,
+                    )?,
                 },
 
                 SinkType::Statistic => SinkerConfig::RedisStatistic {
@@ -1545,6 +1567,45 @@ is_enabled=true
 parallel_type={parallel_type}
 "#
         )
+    }
+
+    #[test]
+    fn redis_standalone_check_config_preserves_other_modes() {
+        let ini = "[extractor]\ndb_type=redis\nextract_type=snapshot\nurl=redis://127.0.0.1:6380\n[sinker]\ndb_type=redis\nsink_type=check\nurl=redis://127.0.0.1:6390\nttl_tolerance_ms=250\n[checker]\n[parallelizer]\nparallel_type=redis\n";
+        let config = load_task_config(ini).unwrap();
+        assert!(config.task_type().unwrap().is_standalone_snapshot_check());
+        assert!(matches!(
+            config.sinker,
+            SinkerConfig::Redis {
+                ttl_tolerance_ms: 250,
+                ..
+            }
+        ));
+        assert!(matches!(
+            load_task_config(&ini.replace("ttl_tolerance_ms=250\n", ""))
+                .unwrap()
+                .sinker,
+            SinkerConfig::Redis {
+                ttl_tolerance_ms: 10000,
+                ..
+            }
+        ));
+        for (from, to) in [
+            ("extract_type=snapshot", "extract_type=cdc"),
+            ("ttl_tolerance_ms=250", "ttl_tolerance_ms=-1"),
+            (
+                "[checker]",
+                "[checker_output]\noutput_full_row=true\n[checker]",
+            ),
+            (
+                "[checker]",
+                "[checker_output]\noutput_revise_sql=true\n[checker]",
+            ),
+        ] {
+            assert!(load_task_config(&ini.replace(from, to)).is_err(), "{to}");
+        }
+        let inline = ini.replace("sink_type=check", "sink_type=write");
+        assert!(load_task_config(&inline).is_err());
     }
 
     fn load_task_config(contents: &str) -> Result<TaskConfig> {

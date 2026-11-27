@@ -425,6 +425,7 @@ trait DirectDataChecker: Send {
 enum DirectChecker {
     Data(Box<dyn DirectDataChecker>),
     Struct(StructCheckerHandle),
+    Redis(Box<super::redis_checker::RedisChecker>),
 }
 
 struct DirectCheckerState {
@@ -586,6 +587,16 @@ impl DataCheckerHandle {
     }
 }
 
+impl From<super::redis_checker::RedisChecker> for DirectCheckerHandle {
+    fn from(checker: super::redis_checker::RedisChecker) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(DirectCheckerState {
+                checker: Some(DirectChecker::Redis(Box::new(checker))),
+            })),
+        }
+    }
+}
+
 impl DirectCheckerHandle {
     pub fn data<C: Checker>(checker: C, task_id: String, ctx: CheckContext, name: &str) -> Self {
         let checker = DataChecker::new(checker, task_id, ctx, None, name);
@@ -593,6 +604,27 @@ impl DirectCheckerHandle {
             state: Arc::new(Mutex::new(DirectCheckerState {
                 checker: Some(DirectChecker::Data(Box::new(checker))),
             })),
+        }
+    }
+
+    pub async fn check_raw(&self, data: Vec<DtItem>) -> Result<()> {
+        let mut state = self.state.lock().await;
+        match state.checker.as_mut() {
+            Some(DirectChecker::Redis(checker)) => checker.check_raw(data).await,
+            _ => anyhow::bail!("raw checking requires a Redis checker"),
+        }
+    }
+
+    async fn is_raw(&self) -> bool {
+        let state = self.state.lock().await;
+        matches!(state.checker.as_ref(), Some(DirectChecker::Redis(_)))
+    }
+
+    async fn sink_ids(&self) -> Vec<String> {
+        let state = self.state.lock().await;
+        match state.checker.as_ref() {
+            Some(DirectChecker::Redis(checker)) => checker.sink_ids(),
+            _ => vec![String::new()],
         }
     }
 
@@ -609,6 +641,7 @@ impl DirectCheckerHandle {
         match state.checker.as_mut() {
             Some(DirectChecker::Data(checker)) => checker.check_batch(data, batch).await,
             Some(DirectChecker::Struct(_)) => Ok(()),
+            Some(DirectChecker::Redis(_)) => anyhow::bail!("Redis checker received DML rows"),
             None => Ok(()),
         }
     }
@@ -617,7 +650,7 @@ impl DirectCheckerHandle {
         let mut state = self.state.lock().await;
         match state.checker.as_mut() {
             Some(DirectChecker::Struct(checker)) => checker.check_struct(data).await,
-            Some(DirectChecker::Data(_)) | None => Ok(()),
+            Some(DirectChecker::Data(_)) | Some(DirectChecker::Redis(_)) | None => Ok(()),
         }
     }
 
@@ -625,7 +658,7 @@ impl DirectCheckerHandle {
         let mut state = self.state.lock().await;
         match state.checker.as_mut() {
             Some(DirectChecker::Data(checker)) => checker.refresh_meta(&data).await,
-            Some(DirectChecker::Struct(_)) | None => Ok(()),
+            Some(DirectChecker::Struct(_)) | Some(DirectChecker::Redis(_)) | None => Ok(()),
         }
     }
 
@@ -633,7 +666,7 @@ impl DirectCheckerHandle {
         let mut state = self.state.lock().await;
         match state.checker.as_mut() {
             Some(DirectChecker::Data(checker)) => checker.handle_control_item(item).await,
-            Some(DirectChecker::Struct(_)) | None => Ok(()),
+            Some(DirectChecker::Struct(_)) | Some(DirectChecker::Redis(_)) | None => Ok(()),
         }
     }
 
@@ -645,6 +678,7 @@ impl DirectCheckerHandle {
         match checker {
             DirectChecker::Data(checker) => checker.close().await?,
             DirectChecker::Struct(checker) => checker.close().await?,
+            DirectChecker::Redis(checker) => checker.close().await?,
         }
         state.checker = None;
         Ok(())
@@ -654,6 +688,27 @@ impl DirectCheckerHandle {
 impl CheckerHandle {
     pub fn is_async(&self) -> bool {
         matches!(self, Self::Async(_))
+    }
+
+    pub async fn is_raw(&self) -> bool {
+        match self {
+            Self::Direct(handle) => handle.is_raw().await,
+            Self::Async(_) => false,
+        }
+    }
+
+    pub async fn sink_ids(&self) -> Vec<String> {
+        match self {
+            Self::Direct(handle) => handle.sink_ids().await,
+            Self::Async(_) => vec![String::new()],
+        }
+    }
+
+    pub async fn check_raw(&self, data: Vec<DtItem>) -> Result<()> {
+        match self {
+            Self::Direct(handle) => handle.check_raw(data).await,
+            Self::Async(_) => anyhow::bail!("raw checking is only supported in standalone mode"),
+        }
     }
 
     pub async fn check_dml(&self, data: Vec<RowData>, batch: bool) -> Result<()> {

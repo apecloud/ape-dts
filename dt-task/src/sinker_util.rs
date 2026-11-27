@@ -402,6 +402,7 @@ impl SinkerUtil {
                 batch_size,
                 method,
                 is_cluster,
+                ..
             } => {
                 // redis sinker may need meta data from RDB extractor
                 let meta_manager = ExtractorUtil::get_extractor_meta_manager(config).await?;

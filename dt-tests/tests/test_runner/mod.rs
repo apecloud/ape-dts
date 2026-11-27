@@ -23,3 +23,5 @@ pub mod redis_test_runner;
 pub mod redis_test_util;
 pub mod test_base;
 pub mod test_cases;
+
+pub mod redis_check_test_runner;

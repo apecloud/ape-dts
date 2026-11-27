@@ -2,7 +2,7 @@
 
 After data migration, you may want to compare the source and target data row by row and column by column. If the data volume is too large, you can perform a sampled check. Please ensure that the tables to be checked have primary keys/unique keys.
 
-Supports comparison for MySQL, PostgreSQL, and MongoDB.
+Supports comparison for MySQL, PostgreSQL, MongoDB, and [standalone Redis checks](../tutorial/redis_to_redis.md#check-data-after-migration). Redis checks compare both key sets, values, and key expiration; they do not require primary keys.
 
 Snapshot and inline CDC checks support sampling via `[checker].sample_percent`.
 For standalone MySQL/PostgreSQL/MongoDB snapshot check, `sample_percent` is applied during extraction
@@ -12,6 +12,8 @@ available, extraction reads the full source stream. This sampling is source-side
 key-hash based or random. Inline snapshot check and inline CDC check write all rows/changes first,
 then apply deterministic checker-side key-hash sampling before target fetch. Rows/changes with the
 same key are sampled consistently.
+Redis snapshot checks read the complete source RDB and sample comparisons using a stable DB/key hash;
+forward comparisons and the target reverse scan use the same sampling rule.
 
 Data check is documented in three flows:
 
@@ -22,7 +24,10 @@ Data check is documented in three flows:
 - Use `extract_type=snapshot`.
 - Configure the target in `[sinker]` and set `[sinker].sink_type=check`.
 - Connection, authentication, TLS, and database-specific target options use the normal `[sinker]` fields.
-- Standalone snapshot checker targets support MySQL, PostgreSQL, and MongoDB.
+- Standalone snapshot checker targets support MySQL, PostgreSQL, MongoDB, and Redis.
+- Redis compares source RDB entries and scans the target for extra keys; see [Redis check](../tutorial/redis_to_redis.md#check-data-after-migration) for its comparison and result semantics.
+  Retries and `sample_percent` are supported; `output_full_row` and `output_revise_sql` are rejected.
+  Source module entries are skipped with a warning and counted in `summary.log.skip_count`; other supported types continue to be checked.
 - Use `parallel_type=rdb_merge` for MySQL/PostgreSQL checker targets, and `parallel_type=mongo`
   for MongoDB checker targets.
 - This flow is data-only. It does not run structure check automatically; run standalone structure

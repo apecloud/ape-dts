@@ -93,10 +93,10 @@ impl RedisSinker {
         let mut cmds = Vec::new();
         for dt_item in data.iter_mut().skip(start_index).take(batch_size) {
             data_size += dt_item.dt_data.get_data_size();
-            cmds.extend_from_slice(&self.rewrite_entry(&mut dt_item.dt_data)?);
+            cmds.extend(self.rewrite_entry(&mut dt_item.dt_data)?);
         }
 
-        self.batch_sink(&cmds).await?;
+        self.batch_sink(&mut cmds).await?;
 
         self.base_sinker
             .update_batch_monitor(cmds.len() as u64, data_size)
@@ -109,8 +109,8 @@ impl RedisSinker {
         for dt_item in data.iter_mut() {
             data_size += dt_item.dt_data.get_data_size();
             let cmds = self.rewrite_entry(&mut dt_item.dt_data)?;
-            for cmd in cmds {
-                self.batch_sink(&[cmd]).await?;
+            for mut cmd in cmds {
+                self.batch_sink(std::slice::from_mut(&mut cmd)).await?;
             }
         }
 
@@ -159,7 +159,8 @@ impl RedisSinker {
                         RedisObject::Module(_) => {
                             // TODO: support rewrite some 8.0+ major module2 types, such as: JSON, Bloom, CountMinSketch, TDigest, TopK, TimeSeries
                             let cmd = EntryRewriter::rewrite_as_restore(entry, self.version)?;
-                            Ok(vec![cmd])
+                            cmds.push(cmd);
+                            return Ok(cmds);
                         }
                         _ => bail!(DtError::RedisResultError(
                             "Redis object rewrite is not implemented".to_string()
@@ -197,7 +198,7 @@ impl RedisSinker {
                 cmds.push(cmd);
             }
         }
-        self.batch_sink(&cmds).await?;
+        self.batch_sink(&mut cmds).await?;
 
         self.base_sinker
             .update_batch_monitor_for(&task_id, cmds.len() as u64, data_size)
@@ -211,8 +212,8 @@ impl RedisSinker {
 
         for row_data in data.iter() {
             data_size += row_data.get_data_size();
-            if let Some(cmd) = self.dml_to_redis_cmd(row_data).await? {
-                self.batch_sink(&[cmd]).await?
+            if let Some(mut cmd) = self.dml_to_redis_cmd(row_data).await? {
+                self.batch_sink(std::slice::from_mut(&mut cmd)).await?
             }
         }
 
@@ -287,7 +288,7 @@ impl RedisSinker {
 }
 
 impl RedisSinker {
-    async fn batch_sink(&mut self, cmds: &[RedisCmd]) -> anyhow::Result<()> {
+    async fn batch_sink(&mut self, cmds: &mut [RedisCmd]) -> anyhow::Result<()> {
         if cmds.is_empty() {
             return Ok(());
         }
@@ -304,8 +305,18 @@ impl RedisSinker {
             is_tx = true;
         }
 
-        for cmd in cmds.iter() {
+        let mut active_indices = Vec::with_capacity(cmds.len());
+        for (index, cmd) in cmds.iter_mut().enumerate() {
+            if cmd.restore_expire_at_ms.is_some()
+                && !EntryRewriter::prepare_restore_ttl(cmd, chrono::Utc::now().timestamp_millis())?
+            {
+                continue;
+            }
             packed_cmds.extend_from_slice(&CmdEncoder::encode(cmd));
+            active_indices.push(index);
+        }
+        if active_indices.is_empty() {
+            return Ok(());
         }
 
         if is_tx {
@@ -314,7 +325,7 @@ impl RedisSinker {
             tx_wrapper_cmds.push(exec_cmd);
         }
 
-        let count = if is_tx { cmds.len() + 3 } else { cmds.len() };
+        let count = active_indices.len() + if is_tx { 3 } else { 0 };
         let mut rts = LimitedQueue::new(1);
         let start_time = Instant::now();
         let result = self.conn.req_packed_commands(&packed_cmds, 0, count);
@@ -337,10 +348,10 @@ impl RedisSinker {
                             0 => &tx_wrapper_cmds[0],
                             1 => &tx_wrapper_cmds[1],
                             n if n == values.len() - 1 => &tx_wrapper_cmds[2],
-                            n => &cmds[n - 2],
+                            n => &cmds[active_indices[n - 2]],
                         }
                     } else {
-                        &cmds[i]
+                        &cmds[active_indices[i]]
                     };
 
                     match v {

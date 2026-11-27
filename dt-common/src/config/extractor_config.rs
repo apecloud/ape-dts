@@ -224,3 +224,14 @@ pub struct BasicExtractorConfig {
     pub app_name: Option<String>,
     pub is_direct_connection: Option<bool>,
 }
+
+impl ExtractorConfig {
+    pub fn is_cluster(&self) -> Option<bool> {
+        match self {
+            Self::RedisSnapshot { is_cluster, .. }
+            | Self::RedisCdc { is_cluster, .. }
+            | Self::RedisSnapshotAndCdc { is_cluster, .. } => *is_cluster,
+            _ => None,
+        }
+    }
+}

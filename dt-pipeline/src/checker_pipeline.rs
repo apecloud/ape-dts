@@ -14,14 +14,23 @@ pub struct CheckerPipeline {
 }
 
 impl CheckerPipeline {
-    pub fn new(mut inner: BasePipeline, checker: CheckerHandle) -> Self {
+    pub async fn new(mut inner: BasePipeline, checker: CheckerHandle) -> Self {
         let metrics = inner.monitor.sinker_worker_metrics();
-        let check_sinker = CheckerSinker { checker };
-        let sinker_with_wrap =
-            BusyTrackingSinker::new(Box::new(check_sinker), metrics.register_worker());
-        inner.sinkers = vec![std::sync::Arc::new(async_mutex::Mutex::new(
-            Box::new(sinker_with_wrap) as Box<dyn Sinker + Send>,
-        ))];
+        let raw = checker.is_raw().await;
+        let mut sinkers = Vec::new();
+        for id in checker.sink_ids().await {
+            let check_sinker = CheckerSinker {
+                checker: checker.clone(),
+                raw,
+                id,
+            };
+            let wrapped =
+                BusyTrackingSinker::new(Box::new(check_sinker), metrics.register_worker());
+            sinkers.push(std::sync::Arc::new(async_mutex::Mutex::new(
+                Box::new(wrapped) as Box<dyn Sinker + Send>,
+            )));
+        }
+        inner.sinkers = sinkers;
         Self { inner }
     }
 }
@@ -39,10 +48,23 @@ impl Pipeline for CheckerPipeline {
 
 struct CheckerSinker {
     checker: CheckerHandle,
+    raw: bool,
+    id: String,
 }
 
 #[async_trait]
 impl Sinker for CheckerSinker {
+    fn get_id(&self) -> String {
+        self.id.clone()
+    }
+    async fn sink_raw(
+        &mut self,
+        data: Vec<dt_common::meta::dt_data::DtItem>,
+        _batch: bool,
+    ) -> anyhow::Result<()> {
+        self.checker.check_raw(data).await
+    }
+
     async fn sink_dml(&mut self, data: Vec<RowData>, batch: bool) -> anyhow::Result<()> {
         if let Err(err) = self.checker.check_dml(data, batch).await {
             log_warn!("standalone checker check_dml failed: {}", err);
@@ -62,6 +84,9 @@ impl Sinker for CheckerSinker {
     }
 
     async fn close_with_position(&mut self, position: Option<&Position>) -> anyhow::Result<()> {
+        if self.raw {
+            return self.checker.close_with_position(position).await;
+        }
         if let Err(err) = self.checker.close_with_position(position).await {
             log_warn!("standalone checker close failed: {}", err);
         }

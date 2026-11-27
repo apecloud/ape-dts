@@ -2,7 +2,8 @@
 
 数据迁移完成后，需要对源数据和目标数据进行逐行逐列比对。如果数据量过大，可以进行抽样校验。请确保需要校验的表具有主键/唯一键。
 
-支持对 MySQL、PostgreSQL、MongoDB 进行比对。
+支持对 MySQL、PostgreSQL、MongoDB 进行比对，以及 [Redis 独立 snapshot 校验](../../en/tutorial/redis_to_redis.md#check-data-after-migration)。
+Redis 比较双向 key 集合、value 和 key 过期时间，不要求主键。
 
 全量校验和 inline CDC check 支持通过 `[checker].sample_percent` 进行抽样。
 Standalone MySQL/PostgreSQL/MongoDB snapshot check 会在抽取阶段、进入后续 checker 前应用
@@ -11,6 +12,8 @@ Standalone MySQL/PostgreSQL/MongoDB snapshot check 会在抽取阶段、进入�
 stream。该抽样是源端 Top-N limit，不是 key hash 抽样，也不是随机抽样。Inline snapshot check
 和 inline CDC check 会先完整写入行/变更，然后在 checker 目标端 fetch 前进行确定性的 key hash
 抽样；相同 key 的行/变更会保持一致的抽样结果。
+Redis snapshot check 保持源端 RDB 的完整读取，在比较前按 DB/key 的稳定 hash 采样；
+前向比较和目标反向扫描使用相同的采样规则。
 
 数据校验当前按三种形态进行文档说明：
 
@@ -21,7 +24,11 @@ stream。该抽样是源端 Top-N limit，不是 key hash 抽样，也不是随�
 - 使用 `extract_type=snapshot`。
 - 在 `[sinker]` 中配置目标并设置 `[sinker].sink_type=check`。
 - 连接、认证、TLS 及数据库专属目标参数均使用普通 `[sinker]` 字段。
-- Standalone snapshot checker target 支持 MySQL、PostgreSQL 和 MongoDB。
+- Standalone snapshot checker target 支持 MySQL、PostgreSQL、MongoDB 和 Redis。
+- Redis 消费源端 RDB entry，并反向扫描目标检查多出的 key，详见
+  [Redis 数据校验](../../en/tutorial/redis_to_redis.md#check-data-after-migration)。
+  支持差异重试和 `sample_percent`；不支持 `output_full_row`、`output_revise_sql`，开启时会拒绝配置。
+  源端 module entry 会记录告警并跳过，计入 `summary.log.skip_count`，不影响其他支持类型继续校验。
 - MySQL/PostgreSQL checker target 使用 `parallel_type=rdb_merge`；MongoDB checker target
   使用 `parallel_type=mongo`。
 - 该形态只做数据校验，不会自动执行结构校验；需要结构校验时请显式运行 standalone

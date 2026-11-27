@@ -168,6 +168,9 @@ MSSQL does not support TLS client certificates.
 | is_cluster                     | Redis Cluster mode                                                                                                             | true                     | not set or empty (detect from the connected Redis node)                 |
 | mongo_require_shard_key_filter | fail fast when a MongoDB update/delete/upsert filter cannot contain the complete target shard key                              | true                     | true                                                                    |
 
+For standalone Redis snapshot checks, `[sinker].ttl_tolerance_ms` sets the expiration-deadline
+tolerance in milliseconds (default `10000`). It is Redis-specific and does not belong to `[checker]`.
+
 ## Redis target cluster mode
 
 - `[sinker].url` can point to any reachable node in the target cluster. DTS discovers all target master nodes through `CLUSTER NODES` and routes Redis commands to the owning node by key slot.
@@ -207,21 +210,24 @@ Common row/structure comparison settings. The section is used in these modes:
 | sample_percent          | percentage sampled for snapshot/CDC checks      | 25      | empty (check every row/change) |
 | recheck_count           | number of retries for a temporary inconsistency | 4       | 0                              |
 | recheck_interval_secs   | interval between retries, in seconds            | 5       | 0                              |
-| recheck_queue_size      | maximum pending rows in the retry buffer        | 10000   | 10000                          |
-| recheck_queue_memory_mb | retry-buffer memory limit in MiB                | 256     | 256                            |
+| recheck_queue_size      | retry-buffer row limit; Redis result-sort run record limit        | 10000   | 10000                          |
+| recheck_queue_memory_mb | retry-buffer memory limit; Redis result-sort run limit, in MiB                | 256     | 256                            |
 
 Notes:
 
 - Checker tasks support only `[pipeline].pipeline_type=basic`.
 - `sample_percent` accepts `1..=100` and applies only to snapshot checks and inline CDC checks.
-  Standalone snapshot applies sampling during extraction. Inline snapshot/CDC writes every
+  Standalone snapshot applies sampling during extraction; Redis consumes RDB entries and samples
+  comparisons with a stable database/key hash. Inline snapshot/CDC writes every
   row/change and applies deterministic key-hash sampling before target fetch.
-- Standalone snapshot check supports MySQL, PostgreSQL, and MongoDB targets. Standalone struct check
+- Standalone snapshot check supports MySQL, PostgreSQL, MongoDB, and Redis targets. See [Redis data check](./tutorial/redis_to_redis.md#check-data-after-migration) for bidirectional key, value, and TTL checks. Standalone struct check
   supports MySQL, PostgreSQL, and MongoDB.
 - Inline snapshot check supports MySQL, PostgreSQL and MongoDB write targets.
 - `recheck_count` and `recheck_interval_secs` are not used by inline CDC reconciliation.
-- When either retry-buffer limit is reached, the checker does not drop the result; newly found
-  inconsistencies skip retry and are finalized immediately.
+- For MySQL/PostgreSQL/MongoDB row checks, when either retry-buffer limit is reached, the checker
+  does not drop the result; newly found inconsistencies skip retry and are finalized immediately.
+  Redis uses these limits for result-sort runs; retries retain the current input batch. See
+  [Redis result handling](./tutorial/redis_to_redis.md#results-and-resource-limits).
 
 ## Standalone target example
 

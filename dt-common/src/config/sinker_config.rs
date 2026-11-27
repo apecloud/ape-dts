@@ -6,6 +6,8 @@ use crate::config::{
     task_config::APE_DTS,
 };
 
+pub const DEFAULT_REDIS_TTL_TOLERANCE_MS: u64 = 10000;
+
 #[derive(Clone, Debug)]
 pub enum SinkerConfig {
     Dummy,
@@ -86,6 +88,7 @@ pub enum SinkerConfig {
         batch_size: usize,
         method: String,
         is_cluster: Option<bool>,
+        ttl_tolerance_ms: u64,
     },
 
     RedisStatistic {

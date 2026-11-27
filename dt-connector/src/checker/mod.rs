@@ -4,6 +4,7 @@ pub mod log_reader;
 pub mod mongo_checker;
 pub mod mysql_checker;
 pub mod pg_checker;
+pub mod redis_checker;
 pub mod state_store;
 pub mod struct_checker;
 

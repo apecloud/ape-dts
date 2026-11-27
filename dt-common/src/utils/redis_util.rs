@@ -252,7 +252,7 @@ impl RedisUtil {
         res
     }
 
-    fn parse_cluster_nodes(nodes_str: &str) -> anyhow::Result<Vec<ClusterNode>> {
+    pub fn parse_cluster_nodes(nodes_str: &str) -> anyhow::Result<Vec<ClusterNode>> {
         let mut all_slots_count = 0;
         let mut parsed_nodes = Vec::new();
         let all_slot_hash_tag_map = Self::get_slot_hash_tag_map();

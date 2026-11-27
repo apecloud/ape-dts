@@ -1,5 +1,6 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use dt_common::error::DtError;
+use dt_common::log_info;
 use dt_common::meta::redis::{
     redis_entry::RedisEntry,
     redis_object::{
@@ -349,12 +350,38 @@ impl EntryRewriter {
         let mut cmd = RedisCmd::new();
         cmd.add_str_arg("restore");
         cmd.add_redis_arg(&entry.key);
-        cmd.add_str_arg(&entry.expire_ms.to_string());
+        cmd.add_str_arg("0");
+        cmd.restore_expire_at_ms = entry.expire_at_ms;
         cmd.add_arg(value);
         if version >= 3.0 {
             cmd.add_str_arg("replace");
         }
         Ok(cmd)
+    }
+
+    /// Resolve only RDB RESTORE deadlines; incrementally replicated commands stay unchanged.
+    pub fn prepare_restore_ttl(cmd: &mut RedisCmd, now_ms: i64) -> anyhow::Result<bool> {
+        let Some(deadline) = cmd.restore_expire_at_ms else {
+            return Ok(true);
+        };
+        let remaining = deadline.saturating_sub(now_ms);
+        if remaining <= 0 {
+            let key = cmd
+                .args
+                .get(1)
+                .context("Redis RESTORE command has no key")?;
+            log_info!(
+                "skip expired Redis RESTORE: key_hex={}, expire_at_ms={}, now_ms={}",
+                hex::encode(key),
+                deadline,
+                now_ms
+            );
+            return Ok(false);
+        }
+        *cmd.args
+            .get_mut(2)
+            .context("Redis RESTORE command has no TTL")? = remaining.to_string().into_bytes();
+        Ok(true)
     }
 
     pub fn rewrite_expire(entry: &RedisEntry) -> anyhow::Result<Option<RedisCmd>> {
